@@ -1,14 +1,31 @@
 {
   "status": "pass",
-  "file": "docs/llvm-gpu-sanitizer-research.md",
-  "bytes": 105211,
-  "lines": 1501,
-  "chapters": 22,
-  "unique_references": 28,
-  "tables": 39,
-  "fence_balance": "pass",
-  "citation_targets": "pass",
-  "estimate_arithmetic": "pass",
+  "document": "docs/llvm-gpu-sanitizer-research.md",
+  "version": "1.1",
+  "checked_on": "2026-10-20",
+  "bytes": 189699,
+  "lines": 2346,
+  "sha256": "d373c9a6d4bb0dce6476f416b0a4dc7e76ea7606799306c249d8b7ac897e72a7",
+  "chapters": 23,
+  "scenarios": 28,
+  "unique_references": 30,
+  "tables": 45,
+  "fenced_blocks": 40,
+  "checks": {
+    "chapter_sequence": "pass",
+    "subsection_numbering": "pass",
+    "fence_balance": "pass",
+    "table_column_consistency": "pass",
+    "reference_ids_and_citation_targets": "pass",
+    "explicit_anchor_uniqueness_and_internal_targets": "pass",
+    "scenario_examples_repairs_and_reports": "pass",
+    "all_scenarios_mapped_to_validation_matrix": "pass",
+    "budget_chapter_16": "byte-identical to verified version 1.0",
+    "editorial_notes_and_transient_paths_absent": "pass",
+    "async_lifecycle_phase_and_graph_semantics": "independently reviewed"
+  },
+  "prior_document_sha256": "90037ee21a7e54a3b9eb636c6ca57bde8286c9d22be160f45c5d3899828c18fe",
+  "estimate_arithmetic": "unchanged from previously verified version 1.0; chapter 16 preservation checked",
   "route_totals_core_test_combined": {
     "A": [
       [
@@ -95,5 +112,239 @@
       ]
     ]
   },
-  "sha256": "90037ee21a7e54a3b9eb636c6ca57bde8286c9d22be160f45c5d3899828c18fe"
+  "validation_matrix_case_ids": [
+    "S01",
+    "S02",
+    "S03",
+    "S04",
+    "S05",
+    "S06",
+    "S07",
+    "S08",
+    "S09",
+    "S10",
+    "S11",
+    "S12",
+    "S13",
+    "S14",
+    "S15",
+    "S16",
+    "S17",
+    "S18",
+    "S19",
+    "S20",
+    "S21",
+    "S22",
+    "S23",
+    "S24",
+    "S25",
+    "S26",
+    "S27",
+    "S28"
+  ],
+  "scenario_checks": [
+    {
+      "id": "S01",
+      "title": "Global 对象头部与尾部越界",
+      "example_code": "present",
+      "repair_or_valid_counterexample": "present",
+      "diagnostic_expectation": "present"
+    },
+    {
+      "id": "S02",
+      "title": "访问首地址合法，宽访问的末端越界",
+      "example_code": "present",
+      "repair_or_valid_counterexample": "present",
+      "diagnostic_expectation": "present"
+    },
+    {
+      "id": "S03",
+      "title": "范围正确但违背指令对齐约束",
+      "example_code": "present",
+      "repair_or_valid_counterexample": "present",
+      "diagnostic_expectation": "present"
+    },
+    {
+      "id": "S04",
+      "title": "从对象 A 越界，恰好落入仍存活的对象 B",
+      "example_code": "present",
+      "repair_or_valid_counterexample": "present",
+      "diagnostic_expectation": "present"
+    },
+    {
+      "id": "S05",
+      "title": "内存池子分配、granule 孔洞与 tensor view 边界",
+      "example_code": "present",
+      "repair_or_valid_counterexample": "present",
+      "diagnostic_expectation": "present"
+    },
+    {
+      "id": "S06",
+      "title": "静态／动态 shared 越界与 block 身份",
+      "example_code": "present",
+      "repair_or_valid_counterexample": "present",
+      "diagnostic_expectation": "present"
+    },
+    {
+      "id": "S07",
+      "title": "Private／stack 越界与返回后使用指针",
+      "example_code": "present",
+      "repair_or_valid_counterexample": "present",
+      "diagnostic_expectation": "present"
+    },
+    {
+      "id": "S08",
+      "title": "Free 已生效、地址尚未复用的 UAF",
+      "example_code": "present",
+      "repair_or_valid_counterexample": "present",
+      "diagnostic_expectation": "present"
+    },
+    {
+      "id": "S09",
+      "title": "同一 GPUVA 被新对象复用后的旧指针",
+      "example_code": "present",
+      "repair_or_valid_counterexample": "present",
+      "diagnostic_expectation": "present"
+    },
+    {
+      "id": "S10",
+      "title": "Invalid free——内部指针与错误所有权",
+      "example_code": "present",
+      "repair_or_valid_counterexample": "present",
+      "diagnostic_expectation": "present"
+    },
+    {
+      "id": "S11",
+      "title": "同一分配实例被释放两次",
+      "example_code": "present",
+      "repair_or_valid_counterexample": "present",
+      "diagnostic_expectation": "present"
+    },
+    {
+      "id": "S12",
+      "title": "在约定检查点仍未释放的显存对象",
+      "example_code": "present",
+      "repair_or_valid_counterexample": "present",
+      "diagnostic_expectation": "present"
+    },
+    {
+      "id": "S13",
+      "title": "未初始化读取、部分字节写入与copy传播",
+      "example_code": "present",
+      "repair_or_valid_counterexample": "present",
+      "diagnostic_expectation": "present"
+    },
+    {
+      "id": "S14",
+      "title": "shared RAW、WAR与WAW竞争",
+      "example_code": "present",
+      "repair_or_valid_counterexample": "present",
+      "diagnostic_expectation": "present"
+    },
+    {
+      "id": "S15",
+      "title": "global同block、跨block竞争与合法atomic",
+      "example_code": "present",
+      "repair_or_valid_counterexample": "present",
+      "diagnostic_expectation": "present"
+    },
+    {
+      "id": "S16",
+      "title": "跨kernel／queue竞争与event正确反例",
+      "example_code": "present",
+      "repair_or_valid_counterexample": "present",
+      "diagnostic_expectation": "present"
+    },
+    {
+      "id": "S17",
+      "title": "block barrier缺失live参与者与phase错配",
+      "example_code": "present",
+      "repair_or_valid_counterexample": "present",
+      "diagnostic_expectation": "present"
+    },
+    {
+      "id": "S18",
+      "title": "warp／subgroup无效mask",
+      "example_code": "present",
+      "repair_or_valid_counterexample": "present",
+      "diagnostic_expectation": "present"
+    },
+    {
+      "id": "S19",
+      "title": "async copy缺wait、等待了错误批次或phase",
+      "example_code": "present",
+      "repair_or_valid_counterexample": "present",
+      "diagnostic_expectation": "present"
+    },
+    {
+      "id": "S20",
+      "title": "async free跨queue缺依赖与释放生效边界",
+      "example_code": "present",
+      "repair_or_valid_counterexample": "present",
+      "diagnostic_expectation": "present"
+    },
+    {
+      "id": "S21",
+      "title": "原子指令访问越界——原子性不保证地址有效",
+      "example_code": "present",
+      "repair_or_valid_counterexample": "present",
+      "diagnostic_expectation": "present"
+    },
+    {
+      "id": "S22",
+      "title": "尾部 mask／EVL——被屏蔽的非法地址不得产生误报",
+      "example_code": "present",
+      "repair_or_valid_counterexample": "present",
+      "diagnostic_expectation": "present"
+    },
+    {
+      "id": "S23",
+      "title": "只读对象与 image／surface——检查权限、坐标及寻址模式",
+      "example_code": "present",
+      "repair_or_valid_counterexample": "present",
+      "diagnostic_expectation": "present"
+    },
+    {
+      "id": "S24",
+      "title": "CPU/GPU共享、peer／IPC别名的身份与同步",
+      "example_code": "present",
+      "repair_or_valid_counterexample": "present",
+      "diagnostic_expectation": "present"
+    },
+    {
+      "id": "S25",
+      "title": "atomic pointer 的值与身份不一致——合法程序也可能被错误插桩误报",
+      "example_code": "present",
+      "repair_or_valid_counterexample": "present",
+      "diagnostic_expectation": "present"
+    },
+    {
+      "id": "S26",
+      "title": "未插桩库与 JIT——没有观测到访问不能当作检查通过",
+      "example_code": "present",
+      "repair_or_valid_counterexample": "present",
+      "diagnostic_expectation": "present"
+    },
+    {
+      "id": "S27",
+      "title": "graph replay捕获已释放对象与执行ID／allocation epoch",
+      "example_code": "present",
+      "repair_or_valid_counterexample": "present",
+      "diagnostic_expectation": "present"
+    },
+    {
+      "id": "S28",
+      "title": "日志满、metadata 不足与错误终止——检查器必须说明检查是否完成",
+      "example_code": "present",
+      "repair_or_valid_counterexample": "present",
+      "diagnostic_expectation": "present"
+    }
+  ],
+  "not_performed": [
+    "No compilation or execution of illustrative scenario code",
+    "No user GPU, cmodel, compiler or driver implementation tests",
+    "No paper benchmark reproduction",
+    "No comprehensive browser rendering or live-link availability test"
+  ],
+  "interpretation": "Document consistency and design review only; not a claim of sanitizer implementation correctness."
 }
