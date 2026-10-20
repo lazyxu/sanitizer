@@ -1,12 +1,12 @@
 # 自研 LLVM GPU 后端 Sanitizer 技术调研与实施方案
 
-**版本：1.1 · 资料核验日期：2026-10-20 · 文档语言：中文**
+**版本：1.2 · 资料核验日期：2026-10-20 · 文档语言：中文**
 
 **用途：技术立项、编译器／驱动／架构联合评审、研发任务拆分与预算讨论。**
 
-**1.1 版修订：** 详细展开[项目背景](#background)与[建设目标](#goals)，新增[第18章的28个检测场景](#detection-scenarios)，将每例与组件职责、合法对照及验收矩阵对应，并细化异步释放的生效边界。既有六路线及代码量预算保持原口径。
+**1.2 版修订：** 按[编译器、KMD、UMD](#component-contracts)重整支持契约与预算，逐路线说明[功能级cmodel和QEMU全系统平台](#model-platforms)能否检测、需要哪些修改及证据边界；保留详细背景、目标与28个实例，并增加[逐场景平台/KMD对应表](#scenario-platforms)。
 
-本文回答：在已有自研 GPU、LLVM 后端、用户态驱动（UMD）和 cmodel 的前提下，怎样建设可用于真机调试的 sanitizer；不同路线能检测什么、需要修改哪些组件、投入多少、如何验证，以及什么情况下值得进一步投入二进制插桩或硬件支持。
+本文回答：在自研 GPU、LLVM 后端、KMD（Kernel-Mode Driver，内核态驱动）、UMD（User-Mode Driver，用户态驱动）及验证环境的边界下，怎样建设可用于真机调试的 sanitizer；不同路线能检测什么、需要修改哪些组件、投入多少、如何验证，以及什么情况下值得进一步投入二进制插桩或硬件支持。
 
 资料采用有针对性的技术调研与批判性比较，优先官方文档、原始论文及作者公开材料。本文不是声称穷尽全部文献的系统综述。正文中的方括号编号对应末尾可直接访问的参考文献；资料版本、证据范围和检索记录见附录。
 
@@ -36,7 +36,7 @@
 13. 路线 E：编译插桩与运行时补充的混合方案
 14. 路线 F：硬件辅助
 15. Initcheck、Racecheck 与 Synccheck 的独立设计
-16. 组件改动与代码量估算
+16. [组件改动与代码量估算](#component-estimates)
 17. 性能、显存和可观测性设计
 18. [检测场景与实例分析](#detection-scenarios)
 19. [验证基准与验收标准](#validation)
@@ -62,22 +62,21 @@
 5. 当闭源库、已有二进制、JIT 模块构成实际覆盖缺口时，增加 E 的二进制补充。C 的工程成本与已有解码、重编码和 patch 基础设施高度相关。
 6. Racecheck、Initcheck、Synccheck 作为独立检查器迭代；如果软件方案的真实瓶颈足够集中，再评估 F 的硬件辅助。
 
-这一路线适合“编译器、UMD、cmodel 都能修改”的组织条件。它并不要求第一版同时完成四类检查器、全部 CUDA 类功能或完整二进制重写器。
+这一路线要求编译器与UMD可扩展，KMD提供所需映射、完成、故障和终止契约；已有契约充分时可复用，不要求每条路线都新增KMD代码。功能级cmodel用于语义核对，QEMU全系统平台在接入目标GPU模型后用于Guest UMD/KMD系统验证，二者职责分开。第一版不必同时完成四类检查器、全部CUDA类功能或完整二进制重写器。
 
-### 1.2 为什么不能只做一个 LLVM Pass
+### 1.2 三组件交付与两类验证平台
 
-一个 Pass 可以在访存前插入检查，但不能凭空知道分配何时创建、异步释放何时生效、某个裸指针是不是旧对象遗留的指针、导入外部内存对应哪个物理对象，也不能决定错误发生后如何安全终止一个正在等待 barrier 的 kernel。
+一个LLVM Pass可以插入检查，但不能独自提供资源生存期、特权映射、队列完成或可靠终止。本文按以下三项组织生产软件支持与预算，并将功能级cmodel、基于QEMU的全系统虚拟平台（QEMU-based full-system virtual platform）作为独立执行／验证环境逐方案讨论。
 
-因此，交付对象应是一套跨组件协议和工具链：
+| 顶层组件 | 定义与职责 | 本报告的子模块归属 |
+|---|---|---|
+| 编译器 | 前端选项、中端分析、后端访存覆盖、对象来源与模块契约 | Pass/后端/MC；随工具链交付的GPU设备检查库分别列项 |
+| KMD（Kernel-Mode Driver，内核态驱动） | 特权资源、BO/GPUVA映射、提交/完成、fault、context及可用终止/reset | 只承担目标驱动确有的内核接口与状态；硬件/固件前提另列 |
+| UMD（User-Mode Driver，用户态驱动） | 逻辑资源与命令、loader/JIT/patch、元数据调度、API诊断和报告 | SDK/Host runtime、用户态driver、CLI/符号化分层实现并归入同一预算组 |
 
-| 组件 | 必须承担的职责 |
-|---|---|
-| 编译器前端／LLVM 中端／后端 | 识别检查点、保留对象语义、产生检查和覆盖清单、传递必要元数据 |
-| 设备 runtime | 执行检查、访问 shadow／对象表、维护检查器自身元数据、聚合错误 |
-| Host runtime 与 UMD | 拦截并记录资源和命令、按设备执行顺序更新元数据、管理模块和诊断缓冲 |
-| cmodel | 在实际语义访存和同步事件处提供独立观测，验证指令和检查语义 |
-| 调试／报告工具 | 将设备 PC、对象、线程及主机调用栈关联为可操作的报告 |
-| KMD／固件／硬件 | 按需提供终止、故障归因、地址映射和硬件检查支持；并非每条软件路线都必须修改 |
+**归属不等于运行位置。** 设备检查库在GPU执行，不能因其预算归入编译器包就称为编译期检查；CLI和Host SDK也不必嵌入底层UMD库。这样分组用于满足三组件比较口径，不要求搬动用户现有源码目录；团队调整归属时保持总量去重。
+
+**模型与平台分别回答两件事：能否执行目标检查器，以及能否提供独立oracle。** 已有完整ISA模型可能直接执行B/C/D/E的插桩产物；额外增加独立模型检查仍需要模型hook和分析逻辑。普通QEMU不会自动观察GPU内部每条访存，必须区分Q0/Q1设备桩、Q2功能GPU模型与Q3真机直通，定义见第7.7节。[Q01][Q02]
 
 ### 1.3 三项必须坚持的能力区分
 
@@ -104,7 +103,7 @@
 
 ### 2.1 项目背景
 
-**建设动因与问题边界。** 自研 GPU 的调试需要回答：某次访问是否违反对象边界、生命周期或同步约定；违规发生在哪个 kernel、指令和线程；相关资源由谁创建、释放和传入。仅验证 kernel 能编译、执行并给出预期数值，无法同时回答这些问题。**【工程建议】** 应把 sanitizer 建设为贯通编译器、设备 runtime、UMD 和诊断工具的动态检查能力，使应用与基础软件团队可以围绕同一份证据定位问题。
+**建设动因与问题边界。** 自研 GPU 的调试需要回答：某次访问是否违反对象边界、生命周期或同步约定；违规发生在哪个 kernel、指令和线程；相关资源由谁创建、释放和传入。仅验证 kernel 能编译、执行并给出预期数值，无法同时回答这些问题。**【工程建议】** 应把 sanitizer 建设为贯通编译器及设备检查库、KMD、UMD及诊断工具的动态检查能力，使应用与基础软件团队可以围绕同一份证据定位问题。
 
 **【官方事实】** NVIDIA 将内存访问、初始化、竞争和同步检查分为不同工具，且区分能够归因到指令及线程的精确访问错误与归因能力有限的硬件异常。[N02] **【工程建议】** 本项目应沿用这种能力拆分，避免用一个“支持 sanitizer”的标签掩盖不同保证。下述风险属于立项需要验证的场景，不表示用户平台已经存在相应缺陷；实际 ISA、执行模型、故障精度和工作负载仍待确认。
 
@@ -127,7 +126,8 @@
 | GDB／设备调试器 | 在受支持目标上查看断点、变量和线程状态 | 自动遍历所有访问及对象历史；目标支持、watchpoint 资源与停顿影响须实测 |
 | 硬件 fault／崩溃日志 | 捕获硬件可报告的异常及现场 | 合法映射内的对象越界、未初始化读取、生命周期与同步语义 |
 | 页保护／guard page | 拦截触及禁止访问页的操作 | 同页子对象越界、落入其他可访问页的越界；依赖 GPUVA 与权限能力 |
-| 功能级 cmodel | 按已实现 ISA 语义观测访问，构造小规模独立对照 | 未建模行为、全部并发调度、真机资源与时序；不能仅以模型通过替代真机验证 |
+| 功能级 cmodel | 按已实现ISA语义执行检查产物，或增加独立模型检查 | 不自动执行真实KMD，不覆盖所有调度和真机时序 |
+| QEMU全系统虚拟平台 | 接入目标GPU模型后运行Guest应用/UMD/KMD与设备协议 | 只有设备桩时不执行目标kernel；全系统不等于全GPU语义或周期精确模型 |
 
 **CPU ASan 不能只改目标名后直接移植。** **【官方事实】** ASan 本身由编译插桩与 runtime 配合组成；ROCm GPU ASan 还要求相应运行库配合，其文档明确列出设备地址空间覆盖及 shadow 维护的限制。[L01][A01] **【工程建议】** 可复用 LLVM 分析与 shadow／redzone 思路，但必须重新确定设备可访问的元数据布局、shared/private 身份、最终 ISA 覆盖、异步生命周期、设备报告通道和错误终止协议。SIMT 下的锁、分支和退出路径还须单独验证前进性，不能假设 CPU 线程的处理方式自然成立。
 
@@ -137,7 +137,9 @@
 |---|---|
 | 应用／算子开发者 | 选择 checker 和保留行信息的构建方式，运行输入，获得访问位置、对象边界及分配／释放证据，缩小复现并回归修复 |
 | 编译器工程师 | 将最小源码依次对照 IR、MIR／反汇编与覆盖清单，区分源程序违规、错误 lowering 和漏插桩 |
-| UMD／runtime 工程师 | 对照分配、映射、copy、launch、free 事件，核查元数据与设备命令生效顺序 |
+| UMD／runtime 工程师 | 对照逻辑分配、copy、launch、free，核查元数据与设备命令生效顺序 |
+| KMD 工程师 | 核查BO/GPUVA映射、提交完成、fault、abort/reset和上下文清理，区分设备要求与现有接口 |
+| QEMU 平台工程师 | 集成目标GPU模型、Guest驱动与DMA/IRQ，构造系统故障注入，声明实际模型覆盖 |
 | 架构／cmodel 工程师 | 用同一语义用例核对地址空间、mask、原子和同步行为，再用真机验证模型边界与终止能力 |
 | CI／测试工程师 | 批量运行正反例及应用回归，按结构化状态区分错误、未覆盖、超时与工具失败，保留可复现版本和输入 |
 
@@ -168,7 +170,7 @@
 2. **覆盖可核验。** 维护“能力×地址空间×指令族×模块／执行路径”的支持矩阵，关联插桩清单和实际运行记录。未知 opcode、未插桩模块、来源丢失及工具资源不足必须产生明确状态。已覆盖且本次未报错、部分覆盖和工具失败不得合并为 clean。
 3. **语义正确与 SIMT 前进性。** LLVM 明确要求 masked-off 元素不发生内存访问。[L05] 检查器应相应避免无效元素地址查询引入额外 fault，并区分向量元素 mask 与硬件活跃 lane。合法执行应保持目标语言／ISA 可观察语义；不得通过意外全局串行化掩盖竞争。锁、日志满和单 lane 出错路径均须验证无新增死锁；错误后的跳过或终止按实际硬件能力约定，不能直接让其他线程永久等在 barrier。
 4. **可用性与性能可度量。** 提供可复现的编译／运行入口、checker 选择、过滤、符号化及 CI 退出状态。分别测量编译、首次初始化、kernel、端到端时间，以及 shadow、描述符、日志的实际内存、寄存器与 spill 开销。性能门槛须在首轮真机基线后按代表性工作负载确定，不套用 CPU 或论文数字；受控串行模式应单独披露。
-5. **可部署、可演进。** 编译器、设备 runtime、Host runtime／UMD、模块 manifest 和报告格式需有版本及兼容检查。新 ISA、allocator、JIT 或外部模块加入时，补充支持清单与回归，不静默沿用旧保证；公共协议稳定后再按需求增加独立 checker。
+5. **可部署、可演进。** 编译器及设备检查库、KMD、UMD、模块manifest和报告格式需有版本及兼容检查；模型和QEMU接入也记录版本及能力集合。新 ISA、allocator、JIT 或外部模块加入时，补充支持清单与回归，不静默沿用旧保证；公共协议稳定后再按需求增加独立 checker。
 
 **P0／P1／P2 优先级。** 下表用于安排投入，不新增工期或人力承诺；P0／P1／P2 是优先级，公共底座仍记作 P，A～F 是技术路线，第20章的 M0～M6 是里程碑。
 
@@ -184,14 +186,15 @@
 
 ### 2.3 本报告采用的项目假设
 
-用户尚未提供实际仓库、ISA、GPU 虚拟地址布局、编译器版本、执行模型和 cmodel 详细设计。为使方案和预算可讨论，本文采用以下可替换假设：
+用户尚未提供GPU实现仓库、ISA、GPUVA布局、编译器分支、KMD/UMD接口清单，以及功能级cmodel和QEMU目标设备模型的详细设计。为使方案和预算可讨论，本文采用以下可替换假设：
 
 - 已有能编译并执行计算 kernel 的 LLVM GPU 后端，已有基本调试行信息。
-- 已有 Host runtime、UMD，以及能够运行目标 ISA 的功能级 cmodel。
+- 已有可执行kernel的Host runtime/UMD与KMD基本栈，以及能运行目标ISA的功能级cmodel；KMD是否满足sanitizer所需映射/错误处理契约须逐项核查。
+- 不假设已经有完整QEMU GPU设备模型。Q0/Q1/Q2/Q3按第7.7节分别讨论；Q2的设备桥接和Guest集成工作在第16章单独估算。
 - 至少支持全局内存、共享／局部数据存储和线程私有／栈地址语义；具体 address-space 编号以目标定义为准。
 - GPU 支持基本原子操作和可由驱动管理的设备缓冲；不假设具有 CPU 式虚拟内存缺页能力、Top-Byte Ignore、128-bit 原子或可靠线程级恢复。
 - 第一阶段面向开发和 CI 调试，不将 sanitizer 当作恶意 kernel 的隔离边界。
-- 代码量预算针对已有基础设施上的 sanitizer 建设，不包含从零开发 LLVM 后端、UMD、ISA 模拟器或整个 GPU。
+- 代码量预算针对已有基础设施上的 sanitizer 建设，不包含从零开发LLVM后端、完整UMD/KMD、完整GPU ISA模型或整个GPU；QEMU平台基础缺口另列，不能藏进几行插桩预算。
 
 如果这些假设不成立，应调整对应模块预算；不必因此推迟本报告提出的能力分层和接口设计。
 
@@ -243,7 +246,9 @@
 | HiRace 的 FSM 能直接处理任意 GPU 同步 | 其关键压缩依赖层次式、bulk-synchronous 同步模型 | acquire/release、锁和特殊 mask 需额外建模 [P03] |
 | GPUArmor 的 2.3% 是完整端到端开销 | 2026 文稿将其与使用 hardened-NOP 基线的分解实验关联；vanilla 基线下为 8% | 两个数字不可互换 [P04] |
 | 在 allocation table 加 generation 就解决所有 UAF | 地址重用后还必须知道指针的旧身份 | 独立列 D1 与 D2 的能力和预算 |
-| cmodel 能给出真机 sanitizer 的性能结论 | 功能 cmodel 用于语义验证；真机性能需实测，硬件设计需校准的时序模型 | 不把模拟器运行时间当产品 overhead |
+| cmodel 能给出真机 sanitizer 的性能结论 | 功能cmodel用于语义验证；真机性能需实测，硬件设计需校准时序模型 | 不把模拟器运行时间当产品overhead |
+| QEMU全系统模式天然能检测GPU内部访存 | 需要实际执行目标ISA的GPU模型或真机检查器；TCG vCPU插件不是通用GPU插桩器 [Q01][Q02] | 区分Q0/Q1/Q2/Q3并记录检测位置 |
+| 软件方案必须修改KMD，或完全不依赖KMD | 真机需要KMD提供契约；是否新增代码取决于已有能力 [K01][K02] | 逐方案列必需支持和条件增量 |
 
 **官方来源之间也有更新不同步。** NVIDIA 产品总览仍保留 initcheck 仅 global 的概括，而当前用户手册与 release notes 已列出 shared 支持；本报告按后两者的版本信息处理这一冲突。[N01][N02][N05]
 
@@ -547,28 +552,98 @@ whole-wave／quad-wave 执行时，当前硬件 EXEC 可能不等于应用的逻
 
 同时，普通调试 sanitizer 的元数据通常与应用同处设备地址空间。除非另有硬件权限隔离与全面覆盖，不能声称它能防御恶意 kernel 任意破坏 shadow／对象表。
 
+<a id="model-platforms"></a>
+
+### 7.7 功能级cmodel与QEMU全系统平台的支持边界
+
+**【工程结论】功能级 cmodel 侧重 GPU 执行语义和检查器核对；接入目标 GPU 模型的 QEMU 全系统平台，在此基础上增加 Guest OS、KMD、UMD 与设备协议的联调范围。后者是否具备 GPU 检测能力，取决于接入了什么执行器、检查器和元数据接口，不能仅由“运行在 QEMU 中”推出。**
+
+#### 7.7.1 先区分“执行检查代码”与“独立检查”
+
+本文把独立运行的功能级 cmodel 理解为：能够执行已实现的目标 GPU ISA，具有测试入口或 Host 调用适配，但默认不包含完整 Guest OS、KMD 和目标总线设备前端。已有模型若包含这些部分，应按实际能力调整分类。
+
+必须区分以下两件事：
+
+1. **执行插桩产物。** B、C、D、E 的检查逻辑可以表现为普通目标 ISA 指令、设备 runtime 与元数据访存。只要现有 cmodel 已正确实现产物使用的 ISA、地址空间、原子及同步语义，它就可以执行这些检查代码，**不必为了执行软件 sanitizer 而必然给 GPU 执行核心再写一套 checker**。仍须接通 shadow／对象表、启动参数、设备 runtime、Host 生命周期和报告通道；原模型缺少这些服务时，适配层需要修改。
+2. **充当独立 oracle。** 若要求在原始访存生效前核对真正地址、对象身份、有效位、同步关系，或比较插桩报告是否正确，就要在 cmodel 中另加 A 路线的观察与判断。A0、A1、A2 的工作量及保证分别验收；重复执行同一套软件查询函数不构成独立 oracle。
+
+F 的新指令、tag、fault 或 metadata cache 行为若不属于现有 ISA／模型，则必须扩展模型语义。仅给 Host 侧模型进程加 ASan，也不能代替这项工作。
+
+#### 7.7.2 QEMU 平台配置定义
+
+**【官方事实】** QEMU system emulation 提供 CPU、内存和设备的机器模型以运行 Guest OS；TCG 是 CPU 仿真的一种执行方式，KVM 等则是另一类 accelerator。设备由具体设备模型或直通机制提供。[Q01]
+
+**【工程分类】** 为避免把“安装了 QEMU”与“拥有可执行 GPU 模型”混为一谈，本节采用下列配置名。Q0～Q3 仅标识平台组成，与原报告 V0～V3 验证层级无关，也不是检测能力从低到高的统一等级。
+
+| 配置 | 组成与执行位置 | 能否执行目标 GPU kernel | 适用范围与明确边界 |
+|---|---|---|---|
+| Q0：普通 QEMU，无目标 GPU | Guest CPU／OS 和已有通用设备；未接入目标 GPU | 不能 | 可测试通用 Host 软件和安装流程；现有显示设备不因此成为自研计算 GPU |
+| Q1：目标 GPU 协议桩 | 实现目标寄存器、队列、DMA／中断等约定的设备前端；不执行目标 kernel | 不能 | 可测试 KMD 协议、提交、映射、完成和故障处理；合成 completion 或 fault 不算一次 GPU 检测 |
+| Q2：可执行目标 GPU 的全系统模型 | Q1 所需前端与能够解释目标 ISA 的功能 GPU 模型连接；可复用已有 cmodel | 能，在模型已实现的语义内 | 可把 A 或 B／C／D／E 的实际检测与 UMD、KMD 联通；寄存器、GPU MMU、固件、异常及同步是否完整仍逐项声明 |
+| Q3：VFIO 直通真实 GPU | Guest 驱动控制分配给 VM 的真实设备，kernel 在真实 GPU 上执行 | 能，取决于硬件及 Guest 驱动支持 | 可运行已经实现的真机 sanitizer；不自动获得 Q2 的内部模型观测与确定性执行能力 |
+
+KVM 的 Guest CPU 加速方式与 Q1／Q2／Q3 的 GPU 接入方式应分开记录。例如 Q2 可以使用 KVM 运行 Guest CPU，并在软件 cmodel 中运行 GPU；这不表示 KVM 已提供目标 GPU ISA 模型。
+
+#### 7.7.3 官方接口能观察什么
+
+**【官方事实】** TCG 插件提供翻译块、指令执行及访存回调。访存回调注册在被插桩指令上，并在成功的 load／store 之后调用；faulting access 不进入这一成功访存回调。指令执行前回调也不能保证该指令最终完成。[Q02]
+
+**【工程推断】** 对常见的“Guest CPU 经 TCG 执行，GPU 是独立设备模型”配置，TCG 插件观察的是 Guest CPU 的相关指令，不会自动进入 GPU 执行器。因此：
+
+- CPU 向 GPU doorbell 的 MMIO 写入不等于 GPU 内部所有 lane 的访存记录。
+- 设备模型发出的 DMA、模型内部 VRAM／shared／private 操作，不能假定都会经过上述 TCG 指令回调。
+- 不能把“成功访存后的观察”宣传为“错误访存生效前阻止”。需要阻止时，应在 GPU 模型的实际语义操作前或软件检查路径上建立接口。
+- 若 Guest CPU 改用 KVM 执行，也不能继续把 TCG 插件视为该 CPU 执行路径的检查入口；GPU 模型的专用观察接口可独立存在。
+
+**【官方事实】** QEMU Memory API 用 MemoryRegion 描述 RAM、MMIO 等区域，用 AddressSpace 表示 CPU 或设备看到的地址空间；MMIO 可以由回调实现，RAM 可由 Host 内存支持，IOMMU region 可以翻译并转发地址。其接口包含地址空间读写与 RAM 指针访问。[Q03]
+
+**【工程推断】** 这为目标设备 DMA 和地址映射提供基础，但不足以还原 GPU 对象语义。桥接层需要区分 GPUVA、设备 IOVA、Guest physical address 与 Host pointer；在 global、shared、private 等空间中分别保留 context／block／thread／frame 身份。只检查最终 DMA 范围，既不保证看见模型内部的全部访问，也不能知道一个可访问地址原本由哪个对象指针推导而来。若模型直接访问 Host backing memory，应把检查入口放在模型的内存语义入口，而不能只依赖 MMIO 回调。
+
+**【官方事实】** VFIO 提供设备 I/O region、DMA 映射和中断等直接访问基础，并以 IOMMU 隔离框架支持设备分配。[K04] **【工程推断】** Q3 的真实 GPU 内部访存不因此转化为 QEMU 可逐条解释的 GPU 指令。IOMMU 映射成功也不证明 allocation 内的对象边界、suballocation、shared/private 访问或指针时间身份正确。
+
+#### 7.7.4 六路线检测能力总表
+
+下表的“可运行”表示接通该路线所需组件后，能够执行相应动态检测；不表示原始平台已经自带该 sanitizer。所有能力仍受已执行路径、ISA 覆盖与元数据闭合范围限制。
+
+| 路线 | 独立功能级 cmodel | Q0 | Q1 | Q2 | Q3 |
+|---|---|---|---|---|---|
+| A：模型侧检查 | 需加入 A0 地址观察、A1 对象 map 或 A2 来源身份的相应检查 | 无目标 GPU 执行 | 仅协议／DMA检查，不能算 GPU kernel A 检测 | 可复用并集成 A 检查器；另接系统事件 | 直通不提供 A 的内部观测；不能自动运行模型侧检查 |
+| B：LLVM ASan 式 shadow | 可执行插桩代码；接通 shadow 与生命周期；独立 oracle 另加 | 不能检测目标 kernel | 可验元数据准备和报告协议，不能验真实访存判断 | 可执行 B，并联通 Guest 驱动；模型 oracle 可选 | 真机 B 已实现且 Guest 环境支持时可运行 |
+| C：运行时二进制插桩 | 可执行 patch 后合法 ISA；可对原始／patch 代码做差分 | 同上 | 可验 loader／patch／资源描述流程，不能确认 kernel 检查效果 | 可验 patch 加载到实际模型执行的全链路 | 真机 C 与代码加载接口支持时可运行 |
+| D：D1 bounds／D2 时间身份 | 可执行相应检查代码；独立来源／时间身份 oracle 另加 | 同上 | 可验对象表和 ABI 的传输，不能证明指针传播闭合 | 可验 D1／D2 的实际访问及跨组件身份协议 | 真机实现和身份传播边界满足时可运行 |
+| E：编译＋binary 混合 | 可执行组合产物并检查模式交接；覆盖等级仍分别记录 | 同上 | 可验模式选择／拒绝与 manifest；不能验 kernel 行为 | 可联测编译、fallback、加载和检测；缺失身份不能凭全系统补齐 | 真机 E 已实现时可运行；虚拟化不提高 fallback 保证 |
+| F：硬件辅助 | 需增加所选硬件／ISA 语义，验证功能规则 | 不能 | 可注入硬件 fault 验处理流程，不能声称硬件已检出 | 在模型中实现后可验功能及驱动协议；不证明 RTL 与性能 | 仅当真实 GPU 具备所需功能时能验真实硬件路径 |
+
+**A 的分层不能跳过。** A0 的地址合法性／初始化位图不自动包含 A1 对象布局；A1 的地址到对象 map 不自动建立原始指针来源；A2 来源跟踪若未包含时间身份传播，也不能宣称解决地址复用后的 UAF。race／sync 检查还须独立加入参与集合、phase、scope、memory order 和 HB 规则，不能由“能观察所有地址”推出。
+
+#### 7.7.5 Host ASan、Guest KASAN 与 GPU sanitizer 的检查对象
+
+**【工程边界】** 给 QEMU／cmodel 的 Host 进程开启 ASan，检查的是该进程自身的 Host 分配及访问是否合法，可帮助发现模型实现中的 C/C++ 内存错误。若整个 GPU 内存由一个 Host 数组支持，GPU 对象 A 越入同一数组中的 live B，Host 访问仍可能完全合法；要识别 GPU 对象越界，仍需 GPU 对象元数据与相应检查器。
+
+类似地，在 Guest OS 内核启用 KASAN，可以用于 KMD 的内核内存错误测试；它不自动为 GPU kernel 的 lane、对象边界与时间身份插桩。三类工具可以协同使用，报告应注明发现的是 Host 模型错误、Guest KMD 错误，还是目标 GPU 程序错误。
+
 ## 8. 跨组件公共架构与接口
 
-### 8.1 推荐架构
+### 8.1 三组件协作架构
 
 ~~~mermaid
 flowchart TD
-    C["LLVM 分析与插桩"] --> M["模块能力与诊断映射"]
-    M --> U["Host runtime / UMD"]
-    U --> O["对象与生命周期服务"]
-    U --> Q["队列与事件依赖"]
-    O --> D["设备检查 runtime"]
-    Q --> D
-    C --> D
-    O --> S["cmodel 事件检查"]
-    Q --> S
-    D --> R["统一错误协议"]
-    S --> R
-    M --> R
-    R --> T["符号化与 CI 报告"]
+    C["编译器与设备检查库"] --> B["目标代码与manifest"]
+    B --> U["UMD用户态资源和命令"]
+    U --> K["KMD映射提交与故障接口"]
+    K --> G["GPU执行与检查库"]
+    U --> M["对象与生命周期元数据"]
+    M --> G
+    G --> R["诊断缓冲与fault"]
+    R --> K
+    K --> U
+    R --> U
+    U --> T["用户态报告与CI"]
 ~~~
 
-图中共享的是对象／命令语义与报告协议；cmodel 检查逻辑应保留独立实现，避免只用同一段错误代码自证。
+UMD负责应用逻辑对象，KMD负责其所管理的底层资源与执行契约；二者通过规范对象、BO/映射和命令ID关联，不能把每个用户态子分配当作一个新的KMD BO。设备检查可以通过诊断缓冲返回，硬件fault则经过KMD；两类错误通道需要关联和去重。
+
+功能级cmodel可以接受独立夹具输入，也可以作为Q2的GPU执行核心。前一种路径通常不经过真实KMD；后一种路径实际执行Guest KMD并验证设备协议，结构见第8.8节。两条路径共享对象/命令协议时，独立oracle仍应与被测检查逻辑分开。
 
 ### 8.2 对象描述符：示意协议
 
@@ -584,7 +659,7 @@ struct ObjectDesc {
     uint64_t parent_object_id;  // 可选：子分配或view
     uint32_t address_space;
     uint32_t permissions;
-    uint32_t state;            // pending/live/retiring/dead
+    uint32_t state;            // pending/live/free-queued/dead/retired
     uint32_t allocation_site;
 };
 ~~~
@@ -600,7 +675,9 @@ struct ObjectDesc {
 | allocation create／publish | Host runtime／UMD／device allocator | 对象 ID、范围、allocator、queue／event | 对象表、shadow、cmodel |
 | suballocation register／release | 内存池／框架接口 | parent ID、子范围、独立生存期 | bounds、init、报告 |
 | free request／free begin／retire complete | runtime／UMD | 对象身份、命令位置、生效边界、完成证据 | quarantine、时间检查、元数据回收 |
-| map／unmap／import／alias | UMD | 规范对象与映射、权限、device | 地址解析与 peer 检查 |
+| map／unmap／import／alias | UMD逻辑登记＋KMD资源映射契约 | 规范对象、BO/映射身份、权限、device/context | 地址解析与peer检查 |
+| job submit／complete／fault | UMD命令关联＋KMD/设备完成源 | job/queue ID、依赖、完成状态、原始fault信息 | 生命周期、错误归因、资源回收 |
+| abort／reset／context destroy | KMD及设备/固件；UMD消费 | 终止范围、完成/失败状态、受影响任务 | 错误协议、模型与真机对照 |
 | launch／graph node | runtime／UMD | launch ID、module、queue、grid、参数元数据 | runtime、cmodel、报告 |
 | copy／memset submit／complete | runtime／copy engine 接口 | 源目标范围、顺序、定义性 | init、生命周期 |
 | barrier／fence／atomic | 插桩或 cmodel | scope、ordering、参与集合、phase | race／sync 分析 |
@@ -658,6 +735,155 @@ stateDiagram-v2
 
 日志达到打印上限与检查停止是两种不同状态。可以限制详细报告，但必须保留总数、丢失计数和“是否仍在检查”的标志。
 
+<a id="component-contracts"></a>
+
+### 8.7 编译器、KMD、UMD的支持契约
+
+以下分工、接口字段与验收项是【工程建议】；官方资料用于校准职责及语义，不代表用户现有驱动已经具备这些能力。
+
+#### 顶层组件与内部边界
+
+
+本版统一使用三个软件组件归属：**编译器、KMD（Kernel-Mode Driver，内核态驱动）、UMD（User-Mode Driver，用户态驱动）**。这是交付和成本归属约定，不是把原有运行层合并。设备检查库仍在GPU上运行；Host runtime、用户态驱动、loader与CLI之间仍通过明确接口协作。功能cmodel、QEMU、固件及硬件是另列的执行／验证环境或配套组件，不强行放进这三个软件运行层。
+
+| 顶层组件 | 必须区分的子项 | 主要责任与输出 | 不应推导出的能力 |
+|---|---|---|---|
+| 编译器 | 前端／编译驱动 | sanitizer选项、源级对象／作用域信息、offload编译和链接规则、必要的语义标记 | 有源码和调试信息，不代表已经知道全部动态分配和异步释放时刻 |
+| 编译器 | LLVM中端 | 选择检查点，保留实际mask、访问宽度和原子语义；按路线生成shadow检查、bounds或identity传播；输出覆盖声明 | 一个通用load/store Pass不自动覆盖目标intrinsic、后端新生访存及未插桩模块 |
+| 编译器 | 后端／MC／链接 | 目标地址空间和调用约定、实际frame及资源布局、检查器helper链接、原始PC映射；C/E按需复用解码与重编码能力 | 后端能解码指令，不表示运行时patch器已经处理控制流、资源重算与代码生命周期 |
+| 编译器 | 随工具链交付的device检查库 | GPU侧shadow／descriptor查询、pointer metadata协议、allocator钩子、SIMT可前进的错误记录、受支持错误动作 | 设备检查库不归并成Host runtime；常规检查不能假设每次访存都调用KMD |
+| KMD | 特权内存与映射接口 | 接受并验证用户态请求，管理／接通BO、GPUVA映射与权限、必要的驻留／失效契约，返回实际结果 | BO映射范围不能替代框架子分配、tensor view、shared对象或线程私有frame边界 |
+| KMD | 提交、完成与故障接口 | 作业提交结果、依赖和完成证据；按平台能力与固件／硬件协作处理fault、abort、reset及context状态，并回传错误 | 完成fence不等于每条GPU访存轨迹；存在reset不等于存在细粒度dispatch abort或可恢复lane异常 |
+| UMD | Host runtime／API拦截／allocator适配 | 记录应用分配和子分配的语义、生存期、调用点、graph及queue依赖；关联成功／失败结果并去重 | 用户API返回、提交成功和设备完成是不同事件；底层驱动不知道的池内分配须由allocator提供 |
+| UMD | 用户态驱动／loader／JIT／patch管理 | 准备shadow与descriptor等资源，排入正确依赖；管理模块manifest、参数sidecar、代码patch、资源声明与缓存；调用KMD契约 | API拦截本身不能观察kernel内部每次访存；当前GPUVA反查不能恢复历史指针身份 |
+| UMD | 报告、符号化与CLI | 汇合编译器的PC／源码map、device检查记录、对象／队列语义及KMD故障；显示覆盖、资源失败和执行终态 | 空日志、未发生GPU fault、模型测试通过均不能单独等同于检查通过 |
+
+**官方依据及适用边界。** DRM GPUVM文档把GPUVA映射与其backing GEM对象联系起来；GEM本身不理解缓冲内容，设备特定操作仍需驱动接口。[K01] DRM的reset约定由KMD判断和执行复位、上送fence／context错误，UMD检查提交结果并向应用报告。[K02] 据此，本报告把底层映射和故障契约归KMD，把应用对象语义及诊断归用户态；这是对自研架构的设计建议，不要求采用DRM类名或相同ioctl。
+
+#### “必须支持”与“必须新增代码”分开记录
+
+**必须支持**表示路线成立所需的能力或契约；**必须新增代码**表示与现有平台相比尚未满足该契约的差额。B、C、D、E、F在真机或运行guest驱动的完整执行路径上均依赖真实／guest KMD支持，但若现有映射、提交、完成和所选错误终止契约已经充分，KMD新增代码可以为0。接口存在但没有证明其时序、错误回传或终止范围充分，不能直接登记为“已满足”。
+
+路线A的独立功能cmodel夹具可自行供给对象和命令事件，绕过真实KMD。该夹具验证的是模型检查器及模拟契约；若目标包含驱动联调，须另外运行真实／guest KMD路径。模拟一次map成功、fence完成或reset通知，不是对真实KMD实现的验收。
+
+#### 事件的语义生产方、底层真值及消费关系
+
+
+一个逻辑动作可能同时经过API、UMD、KMD及设备执行。应关联这些观察点，而非将每层回调都登记成新动作。下面的“真值来源”按事件类型划分；不存在能替代其他来源的全局“万能分配表”。
+
+| 事件／信息 | 语义生产方 | 可确认结果的来源与边界 | 主要消费方 |
+|---|---|---|---|
+| 应用allocation、池内suballocation、view创建 | 对应Host allocator／框架接口；设备allocator由device检查库接入 | 该allocator的成功结果和对象生命周期；KMD仅补充其backing BO／映射关系，通常看不到未上报的池内切分 | UMD对象服务、编译器device检查库、cmodel独立oracle |
+| BO创建及GPUVA map／unmap／权限变更 | UMD发起请求；KMD实施相应特权操作 | KMD／设备定义的生效与失败结果；异步接口须保留关联完成或依赖证据，不能把请求字段当已生效状态 | UMD映射表、shadow布局、fault归因、模型输入适配 |
+| free请求、应用对象失效、底层资源退休 | allocator定义应用生存期；UMD把相关动作接入命令顺序 | 失效点按API／执行侧协议确定；KMD完成证据可证明相关作业／映射操作退休，却不能自动给出池内对象free的精确开始时刻 | poison／unpoison、D2身份退休、quarantine与元数据回收 |
+| launch／graph节点／提交与完成 | UMD提供应用launch和每次graph执行实例；KMD处理底层提交 | 接受／拒绝取自KMD，硬件执行完成由其回传；应用launch与底层作业可为一对多，必须保留关联 | 生命周期和HB分析、device context、报告 |
+| 每条实际GPU访存及mask、宽度、线程 | B/D的设备插桩、C的patch stub、F实际硬件事件；A的模型语义入口 | 真机事件来自实际执行；模型事件只对其建模执行有效。KMD通常仅观测触发fault等有限异常，不生产常规全访存流 | 地址／bounds／identity检查器、init／race引擎 |
+| barrier／atomic／async copy及可见性 | GPU实际执行事件；UMD补充queue／event／copy命令 | 需要对应scope、order、phase与完成关系；KMD提供相关提交／完成契约，CPU时间戳不能替代HB | race／sync／init引擎与独立模型 |
+| fault、abort、reset及执行终态 | 设备／固件触发，KMD接收、控制并回传；UMD也可请求所支持的终止动作 | 保留实际终止范围、context状态、完成错误与报告可读性；只有硬件或驱动提供时才声明精确fault PC／地址 | UMD错误动作和报告、CI终态、资源回收 |
+| 模块覆盖、原始PC与patch后PC | 编译器生成初始manifest／debug map；UMD loader／patch器补充运行版本 | 以实际加载并执行的代码hash、ISA和ABI版本关联；不能仅靠源文件名 | device记录解析、覆盖报告、cmodel差分 |
+
+dma-fence用于表达异步硬件操作的完成；dma-buf为跨驱动／设备共享提供对象与同步框架。[K03] 因而报告中仍应分别保存“调用成功”“提交接受”“完成成功／错误”。`DMA_BUF_IOCTL_SYNC`的缓存一致性保证不阻止其他设备或进程同时访问，也不能单独作为CPU/GPU无竞争的证据。[K03]
+
+**建议的去重键。** 使用一个逻辑`operation_id`关联高层请求、子调用、提交和完成；分配实例使用不可因VA或句柄复用而重复的`allocation_id/epoch`。`backing_bo_id`、`mapping_id`、`suballocation_id`、`launch_id`和`execution_id`各有独立含义。一次API成功产生一个逻辑分配实例；其底层BO创建回调补充backing关系，不再创建第二个同义分配。一个BO上确实存在多个独立子分配时，应有多个子对象实例，并通过parent关系连接到同一backing。
+
+#### KMD支持缺口与验收证据
+
+
+Linux GPU调度器的`cancel_job`回调针对尚未经`run_job`执行的作业；正在执行作业的超时恢复另有驱动／固件相关流程。[K01] 因此，“存在cancel回调”“能杀掉Host进程”或“有看门狗”均不足以直接验收sanitizer所需的运行中终止能力。
+
+| 待确认契约 | 何时构成缺口 | 需要留下的验收证据 | 影响路线 |
+|---|---|---|---|
+| GPUVA／BO布局与权限 | shadow／descriptor／日志不能按所选方案安全映射；映射失败或异步生效不可查询／排序 | 正常映射、容量不足、冲突及失败路径；访问前初始化完成；unmap／重映射与仍在执行作业的依赖结果 | B～F；A驱动集成 |
+| BO、映射与应用对象关联 | 导入、别名或池内子分配被重复登记／错误合并；句柄复用使不同实例混淆 | 一个BO多映射、重复import、同VA重用、失败分配及独立子分配的对象账本；核对父子和别名关系 | B～F；A输入协议 |
+| 提交与完成状态 | 提交失败记成成功，错误fence被当正常完成，reset后的context仍被当有效 | 接受、拒绝、正常完成和错误完成分别可观测；launch到作业映射可追踪；reset状态沿KMD→UMD→应用一致上送 | 所有实际驱动路径 |
+| 释放／元数据退休顺序 | free按Host返回立即生效，或完成后仍有检查器／报告读取被提前回收 | 受控同queue前置访问、跨queue等待、缺依赖反例、同VA复用；同时检查应用对象失效与元数据可回收边界 | B、D、E及F生命周期 |
+| 运行中停止／恢复 | 检查失败后继续会破坏同步或状态，却没有经过验证的终止策略 | 在访存检查失败、部分lane已到barrier、日志／metadata不足等情形下，验证所宣称dispatch／context／全GPU终止范围、终态、报告保留及资源可回收性；说明无辜context是否受影响 | 依赖该失败策略的B～F |
+| fault归因与覆盖 | 只见device lost却宣称精确内存错误；缺失PC／地址时仍补造字段 | 只读出硬件／KMD实际提供的故障信息，关联代码版本和context；无法归因标记APPLICATION_FAILED或未知，检查器资源失败单列 | B～F故障报告；F尤其关键 |
+| guest／host映射及虚拟设备后端 | guest GPUVA被当host CPUVA／IOVA；仅验证QEMU通知而未验证所部署驱动路径 | 记录地址域及映射世代；从guest提交到后端实际执行的关联；明确guest KMD、host原生KMD或VFIO各自是否参与 | 采用QEMU／虚拟化部署的路线 |
+
+若现有KMD契约全部满足选定路线，记录“**复用现有KMD接口，新增代码为0；所列契约已联测**”。若尚未联测，则记录“**拟复用，待验**”。若功能缺失，列出具体API／固件／硬件依赖和所阻塞的运行模式；对应新增代码和测试按第16.8节条件包估算，不能视为基础预算已经包含。
+
+#### guest／host地址域及无重复身份
+
+
+VFIO文档将设备访问、I/O地址映射及中断等接口分开，并在示例中分别填写Host进程`vaddr`与设备看到的`iova`；IOMMUFD也是管理I/O页表的接口。[K04] 这些接口不提供GPU语言对象边界或指针历史身份。以下是据此形成的跨域接口建议，而非宣称所有GPU使用同一条固定地址转换链。
+
+| 域／身份 | 建议携带的区分信息 | 易混淆的关系 |
+|---|---|---|
+| guest CPU虚拟地址 | VM实例、guest进程／地址空间、GVA | 不等于guest GPUVA；相同整数在不同进程也不能直接合并 |
+| guest GPU虚拟地址 | VM实例、虚拟GPU、GPU context／VMID／PASID（按实际能力）、address space、映射世代 | 由guest GPU地址空间解释；不能拿Host进程指针表直接查询 |
+| guest物理地址／设备IOVA | 地址域类型、IOMMU上下文、translation generation、范围 | 不同部署中可能存在等值或多阶段转换，必须以实际映射记录证明，不默认相等 |
+| Host CPU虚拟地址及Host物理／VRAM位置 | Host进程、backend资源、实际存储域及映射记录 | backing存储可以迁移或重新映射；物理地址变化不应自动产生新的应用分配身份 |
+| 逻辑分配实例 | 规范`allocation_id/epoch`、allocator／owner、parent、原始范围 | 与BO、FD、handle、GPUVA及mapping身份分开；上述数字重用不使旧实例复活 |
+| 导入／alias映射 | 规范backing或分配关联、mapping owner、权限、映射范围和偏移 | import通常增加一个使用／映射关系；不能凭导入回调建立第二个独立拥有权并据此double free或漏报 |
+
+**地址归一化应保留证据。** 只有存在经过验证的映射关系时，才将不同地址域的访问归一到同一规范对象与偏移。若外部导入接口不能提供足够的来源关联，应标记关联未知并降低跨域检测保证。FD、GEM handle、裸GPUVA或当前物理页号均不宜单独充当全局不可复用的allocation identity。
+
+**虚拟化路径按实际部署填写。** 设备透传时，guest厂商KMD与Host VFIO／IOMMU内核路径的职责不同；不能默认Host还运行同一块设备的原生厂商KMD。虚拟GPU后端若调用Host原生GPU，则guest KMD、后端协议及Host KMD均属于实际路径。纯用户态CPU仿真没有guest内核，不能据此声称验过guest KMD。每种路径仍需分别说明哪一个执行引擎真正执行GPU ISA、在哪一层产生访存检查事件。
+
+#### 逐路线表的阅读口径
+
+以下A～F表按原六路线展开职责，D分别列出D1和D2。“新增”指现有平台缺失对应能力时的实现差额；公共底座P和共享device检查库只计一次，第16章保留原始子项与基础区间，并单列本次识别的KMD和QEMU条件追加。功能cmodel／QEMU检测条件由各路线环境表补充，不能把模拟契约通过算作真实KMD验收。
+
+<a id="qemu-integration"></a>
+
+### 8.8 QEMU全系统接入与地址域
+
+#### 8.8.1 Q1／Q2 需要补齐的系统接口
+
+**【工程设计要求】** QEMU 已提供机器框架，不等于目标 GPU 的设备实现已完成。下表是目标设备与 sanitizer 的接入清单；可优先扩展设备模型、cmodel 桥接和测试服务，是否必须修改 QEMU 通用核心取决于所选版本的接口缺口。
+
+| 组件 | Q1 最低支持 | Q2 增加的支持／需要核对的契约 |
+|---|---|---|
+| 设备前端 | 目标总线、寄存器、doorbell、队列、完成、中断、reset；若为 PCIe 则包括所需 BAR／MSI 等语义 | 把真实提交描述符交给 GPU 执行器；完成／fault 必须来自相应执行结果 |
+| GPU 执行核心 | 不执行目标 kernel，应显式标记该状态 | 已有 cmodel 的 dispatch、ISA、mask、原子、barrier、地址空间；缺失语义补齐或明确拒绝 |
+| 内存／GPU MMU 桥接 | 已支持的 DMA 与 Guest 映射、权限、错误返回 | GPUVA 转换、VRAM／system memory、shared/private 身份、目标要求的映射失效语义；不能把 GPU MMU 与平台 IOMMU 合并为一张假定正确的表 |
+| Guest UMD／Host runtime | 对象与队列管理、模块加载、提交／完成流程 | 将真实 alloc／publish／free-effective／reuse、事件依赖、模块能力、启动 sidecar 送入检查路径；device allocator 同步进入协议 |
+| Device runtime／检查元数据 | 可构造元数据和模拟报告 | B 的 shadow，D 的 bounds／pointer metadata，C/E stub 与 ABI，以及执行中的真实报告 |
+| KMD／固件 | 设备探测、映射、提交、中断、错误与资源回收 | 与执行器保持 context／dispatch／fault 身份一致；是否运行真实固件需单列，固件桩不能当作固件代码覆盖 |
+| 诊断和错误控制 | 合成错误注入、报告读取、溢出／超时处理 | GPU PC 与源映射、出错地址／宽度／lane／对象、错误发生前后状态、停止范围及失败原因 |
+| 快照与重放 | 保存协议桩的状态 | 若要重放，须包括 GPU 执行状态、队列、映射、检查元数据、相关定时器及外部模型状态 |
+
+若设备前端忠实实现生产硬件 ABI，Guest KMD 可争取使用原有路径；若用专门测试 ioctl 或替代固件，应将其记为测试适配，并把未覆盖的生产路径列出。不能把“做 QEMU 平台”一律理解为“生产 KMD 必须重写”，也不能假定现有 KMD 无适配就能工作。
+
+建议 GPU 语义事件至少携带 dispatch／context、GPU PC、地址空间、实际地址、宽度、读写／atomic、lane／byte mask；shared/private 另含其作用域身份。对象 map、原对象 ID、时间身份及同步关系根据 A1／A2／D1／D2 和 race checker 的声明追加。只记录最终地址并不能事后补出全部字段。
+
+#### 8.8.2 KMD 端到端能验什么
+
+“端到端”应列出实际到达的终点：Q1 可以到达协议桩完成／注入异常，Q2 可以到达模型执行并产生报告，Q3 可以到达真实 GPU 执行。三者均有价值，但证据不同。
+
+| 验证对象 | Q1 可提供的证据 | Q2／Q3 能进一步提供的证据 | 不能据此证明 |
+|---|---|---|---|
+| 探测与提交 | probe、ioctl、handle、队列描述符、doorbell、中断的协议正反例 | GPU 实际执行结果与 completion 对应 | Q1 返回 success 不证明 kernel 已执行 |
+| 地址与生命周期 | 已建模的 DMA map/unmap、权限、失败清理与提交顺序 | 实际 GPU 访问发生时的映射、poison／身份状态 | 页映射有效不等于对象／view 访问正确；Host free 调用时刻不等于设备 free 生效 |
+| 异常与终止 | 注入 fault 后的上下文定位、错误码、唤醒、reset／cleanup | Q2 中真实检查触发异常；Q3 中硬件或软件 checker 实际触发 | 注入异常只验证接收处理，不能验证检测器判定；模型终止不证明硅实现精准终止 |
+| 工具资源失败 | shadow 分配失败、报告缓冲满、ABI 不兼容、未支持模块／指令的可见性 | 实际检查流量下的溢出与恢复 | 没有报告不等于没有错误；unsupported 和丢失事件不能计作通过 |
+| 多 context／队列 | context 归属、隔离、事件依赖、释放与回收的协议测试 | GPU 执行与驱动状态交互的特定合法调度 | 一次调度通过不证明所有 race、cache／TLB 一致性或弱内存行为均正确 |
+
+功能模型还不能给出真机 sanitizer slowdown、occupancy、带宽或硬件面积结论。Q3 可以产生真实设备上的测量，但应报告 VM、驱动、直通和宿主配置，并与所需的原生执行基线分开。
+
+#### 8.8.3 icount 与 record/replay 的实际作用
+
+**【官方事实】** icount 以执行指令数量关联虚拟时间，不是 cycle-accurate 模拟；QEMU 文档明确其与 multi-threaded TCG 不兼容。[Q04] record/replay 依赖 icount，以日志和同步机制控制非确定性事件；设备中影响 Guest 状态的行为须满足确定性要求，相关异步回调须接入重放机制，保存／恢复的设备状态须完整。[Q05]
+
+**【工程推断与验收要求】** Q2 中的 GPU 外部进程、内部工作线程、随机调度、宿主时钟及异步完成，均须纳入确定性设计或记录协议；给启动命令加一个 icount 选项不能自动完成这些工作。可先采用受控 GPU 调度、固定种子和明确的跨队列事件序列，再验证重复执行所得状态、事件和报告一致。
+
+重放适合复现“这一次”驱动与设备交互、回溯报告来源；它不会自动生成 GPU HB，也不会枚举所有合法执行。不要把 Host vCPU 指令计数当作 GPU cycle，不要把模型内一次确定顺序当作 GPU race-free 证明，也不要默认 Q3 的真实设备内部状态可被通用 QEMU 日志完整重放。
+
+#### 8.8.4 实用用例与各自提供的证据
+
+以下用例是针对平台与驱动差异的工程验收设计。每例均设置错误实例与合法对照，并记录 Qx、ISA／工具版本和实际参与的 checker。
+
+| 用例 | 最低平台与错误／合法对照 | 验收证据及边界 |
+|---|---|---|
+| Q-U1：KMD 提交与异常回收 | Q1：非法 DMA 描述符／映射失败／注入 fault，对照合法提交 | 验 probe、队列推进、context 归属、唤醒与资源清理；必须标记未执行目标 GPU kernel |
+| Q-U2：异步释放与 poison 顺序 | Q2：受控顺序中 free-effective 后 kernel 访问旧地址，对照最后一次使用完成后再释放 | B 在其 poison 窗口报告，A0 可独立核对；记录 enqueue 与 effective，不把 Host 调用顺序当设备顺序 |
+| Q-U3：从 A 越入 live B | cmodel／Q2：A、B 同时存活，来源为 A 的访问落入 B；对照携带 B 身份访问同地址 | D1／A2 检原对象来源；地址合法性检查及 Host ASan 无报告均不能作为该例通过证据 |
+| Q-U4：同 GPUVA 复用 UAF | cmodel／Q2：保存 A 的指针身份，释放并由 B 复用地址，再 reload；对照更新为 B 的身份 | D2 检预期旧身份与当前身份不符；覆盖 spill／reload、拷贝及受支持 atomic 发布；unknown 路径单列 |
+| Q-U5：C/E patch 语义与资源 | cmodel 差分＋Q2 Guest loader：谓词、lane mask、宽访存、分支与 barrier；设置合法与错误版本 | 合法输出及同步一致，错误定位回原 PC；核对实际代码 hash 与资源描述；Q1 只能验加载协议 |
+| Q-U6：race 重现与 HB | cmodel／Q2：冲突访存，对照正确 scope／order／barrier 的同步；用受控调度或已接入 replay 复现 | 分别验执行可重现和 GPU HB 判断；Host TCG trace、icount 或单次串行顺序不能替代 GPU HB |
+| Q-U7：F 触发与 fault 处理 | Q1 注入 fault，Q2 由新增 tag／bounds 语义实际触发，Q3 在有相应硬件后重复；对照合法 tag／bounds | Q1 验接收处理，Q2 验模型规则触发，Q3 验真实设备路径；三种证据分别记录，不能互换 |
+
 ## 9. 路线 A：cmodel 检测
 
 ### 9.1 原理和适用目标
@@ -672,16 +898,15 @@ stateDiagram-v2
 
 **A0 不能自动获得 A1/A2 的保证。** 实际地址同样无法区分从 A 越入 B，也无法独立识别地址复用后的旧裸指针。
 
-### 9.2 各组件改动
+### 9.2 编译器、KMD、UMD支持与修改
 
-| 组件 | 修改内容 | 交付物 |
-|---|---|---|
-| 编译器 | 输出对象、frame、PC／源代码 map；可选语义标记 | 与机器码匹配的 sidecar |
-| Device runtime | A0 可近乎不改；需要时输出 device allocator 事件 | 与公共协议一致的事件 |
-| Host runtime／UMD | 将 alloc、free、copy、launch、事件依赖重放给模型 | 统一对象／命令输入 |
-| cmodel | 访存 tap、对齐／权限／有效性判断、shadow、barrier 状态、停止策略 | 可重复的模型检查器 |
-| 报告工具 | 合并模型 PC、对象和 Host site；稳定错误格式 | 与真机共享的诊断和 CI 出口 |
-| KMD／固件 | 通常无新增要求 | 如模型执行依赖真机资源则单独评估 |
+**cmodel。** 
+
+| 路线 | 组件 | 必须支持的契约／交付物 | 是否必须新改代码及判断条件 |
+|---|---|---|---|
+| A：cmodel | 编译器 | 生成模型能执行的目标代码；A1需要与代码一致的对象／frame map，A2按采用的身份模型提供必要语义；设备allocator事件可由device库钩子供给 | A0可复用现有产物而不改编译器；A1/A2缺少对应语义或map时新增。不能因无编译改动就声称具备A2 |
+| A：cmodel | KMD | 独立模型夹具不要求经过KMD；若联调真实／guest驱动，则须提供模型接入所使用的BO、map、submit、completion及错误契约 | 独立夹具可为0且不验KMD；完整驱动路径按实际缺口改，不能把“模型可运行”作为KMD支持证据 |
+| A：cmodel | UMD | 为模型供给allocation、子分配、copy、launch、queue／event与free语义；报告和CLI关联模型结果 | 纯夹具可自行构造输入；要重放真实应用则新增／复用UMD事件适配、去重及结果接口。输入层不可把CPU返回时间当设备生效点 |
 
 ### 9.3 代价与局限
 
@@ -693,7 +918,17 @@ stateDiagram-v2
 
 验证 scalar/vector 越界、mask、alignment、同地址不同 block、alloc/free 顺序和日志截断；为每种误报设计合法反例。A1/A2 另做身份传播及调度测试，不与 A0 的完成度合并。
 
-预算见第 16 章：公共底座 P＋A 的核心实现约 18–38 kLOC，手写测试约 16–33 kLOC；窄范围 A0 探索原型可远小于此完整内测范围。
+预算见第16章：含一次cmodel的P＋A基础研发参考包，核心实现约 18–38 kLOC，手写测试约 16–33 kLOC；窄范围 A0 探索原型可远小于此完整内测范围。
+
+<a id="route-a-platforms"></a>
+
+### 9.5 功能级cmodel与QEMU的检测能力及改动
+
+| 问题 | 功能级 cmodel | QEMU 全系统平台 |
+|---|---|---|
+| 能检测什么 | A0：已实现空间的实际范围、对齐、有效性／初始化；A1：追加对象布局；A2：在传播闭合范围追加来源判断；具体 checker 分别启用 | Q2 可获得同等模型检查能力，并关联 Guest UMD／KMD 的实际执行；Q0/Q1 无 kernel 检测，Q3 不自动提供模型观测 |
+| 必须修改什么 | 修改模型的实际访存、寄存器／内存身份及所需同步入口；A1/A2 不能只加最终地址日志 | 增加目标设备前端、cmodel 桥接、Guest 生命周期与诊断协议；是否改 QEMU 核心按接口缺口判断 |
+| 其他组件支持 | A0 可不要求应用重编译；A1 需 compiler map；A2 需明确来源输入和传播；runtime／UMD 提供对象与异步事件 | KMD 提供映射、完成、fault/context 信息；若现有硬件 ABI 足够可复用驱动，缺失信息通过明确接口补齐 |
 
 ## 10. 路线 B：LLVM ASan 式影子内存
 
@@ -724,15 +959,15 @@ stateDiagram-v2
 
 第一版可选择“独立 GPU pass＋复用 LLVM 通用工具”来减少对上游大型 ASan pass 的侵入；若目标与现有上游支持高度相似，也可以扩展原有实现。两者应以改动可维护性和地址空间语义为准。
 
-### 10.4 其他组件改动
+### 10.4 编译器、KMD、UMD支持与修改
 
-| 组件 | 必做 | 容易低估的部分 |
-|---|---|---|
-| Device runtime | shadow 查询、任意长度检查、错误聚合、空间分类 | SIMD 前进性、helper 寄存器成本 |
-| Host runtime／UMD | 分配／释放 poison、shadow 内存、参数 context、JIT 链接 | pool 子分配、异步命令时序、外部内存 |
-| cmodel | 独立区间 oracle、shadow 建立和生效顺序核对 | 检查器本身访存与应用访存区分 |
-| Tooling | alloc/free stack、PC 符号化、覆盖 manifest、忽略规则 | 部分检查和资源不足不能当通过 |
-| KMD／固件 | 若已有安全终止／映射接口可复用 | 缺乏 dispatch abort 时是明确前置工作 |
+**shadow。** 
+
+| 路线 | 组件 | 必须支持的契约／交付物 | 是否必须新改代码及判断条件 |
+|---|---|---|---|
+| B：shadow | 编译器 | 前／中／后端建立声明范围内的检查覆盖；device库执行shadow查询、mask和完整范围检查、错误记录与所选失败策略 | sanitizer从零建设时需要新增插桩与device库；已有实现可移植。后端新增访存和目标intrinsic须各自覆盖或标缺口 |
+| B：shadow | KMD | 按所选布局提供shadow／日志BO和GPUVA映射、权限及使用寿命；保证相关提交／完成；支持所选错误策略要求的fault／abort／reset路径 | 既有契约充分可0新增。缺少所需VA布局、映射生效依赖、错误完成或可靠终止时按需改；不以GPU可缺页作为所有B实现的硬前提 |
+| B：shadow | UMD | 维护真实分配／子分配事件，分配和初始化shadow，将poison／unpoison排入正确依赖；传入context，链接模块并报告覆盖 | 必须有这条集成路径；可复用P，缺失的shadow资源管理及异步生命周期适配需新增。KMD不会替UMD自动poison每个池内对象 |
 
 ### 10.5 能力边界与退出条件
 
@@ -740,7 +975,17 @@ stateDiagram-v2
 
 只有在实际 shadow 布局、典型内存占用和真机 slowdown 均可接受时，才把 B 扩展成默认 CI 模式。
 
-预算：P＋B 核心约 27–53 kLOC，测试约 23–44 kLOC。这里是具备多空间和异常路径处理的内测版本，不是插入几个 load/store helper 的演示程序。
+预算：在已有KMD契约可复用、含一次cmodel且不含QEMU追加时，P＋B核心约 27–53 kLOC，测试约 23–44 kLOC。这里是具备多空间和异常路径处理的内测版本，不是插入几个 load/store helper 的演示程序。
+
+<a id="route-b-platforms"></a>
+
+### 10.6 功能级cmodel与QEMU的检测能力及改动
+
+| 问题 | 功能级 cmodel | QEMU 全系统平台 |
+|---|---|---|
+| 能检测什么 | 运行 B 插桩产物与 device runtime，可在 B 声明的地址空间和 poison 窗口内报告错误 | Q2 可运行相同检查码并联通 Guest 驱动；Q3 依赖已实现真机 B；Q1 只能测试准备／报告协议 |
+| GPU 执行核心是否要改 | 若已支持产物全部 ISA／空间／同步，执行核心可不改；缺失语义才补实现。要做独立区间／有效性 oracle 时另改模型 | Q2 复用该核心，但需接通 Guest 内的 shadow 分配、映射、poison 命令、生效顺序及启动 ABI；TCG 插件不替代这些工作 |
+| 其他组件支持 | compiler pass、device helper、UMD 生命周期及 shadow 服务、报告通道 | 复用KMD现有映射、完成和所选错误策略所需的终止／回传契约，仅在相应契约不足时补接口；精确故障信息按硬件与驱动实际能力声明；区分应用与检查器自身访存 |
 
 ## 11. 路线 C：运行时二进制插桩
 
@@ -750,16 +995,15 @@ UMD 在模块加载或 JIT 产物生成后取得目标代码，解析指令与�
 
 它能覆盖无法重编译的模块，但“API 拦截”本身不能看到 kernel 内每次访存。也需要区分中间表示重写与最终机器码重写：例如 BARRACUDA 的 binary-level 路径依赖从 fat binary 提取 PTX，不能据此认为其能够处理所有纯机器码。[P02]
 
-### 11.2 改动分解
+### 11.2 编译器、KMD、UMD支持与修改
 
-| 组件 | 修改内容 |
-|---|---|
-| 编译器／MC 层 | 可复用解码／编码、指令语义表；生成原 PC 到新 PC 的 map；不强制应用重编译 |
-| 设备 runtime | 高效 patch stub、寄存器保存恢复、metadata lookup、报告 |
-| UMD／loader | 模块镜像复制、CFG／branch relocation、资源重算、patch cache、JIT 与卸载生命周期 |
-| cmodel | 原指令与插桩版本差分执行；覆盖合法编码、谓词、寄存器依赖、异常路径 |
-| Tooling | 还原原始 PC、代码版本、未支持指令和 patch 失败原因 |
-| KMD／固件 | 遵循现有可执行代码加载／调试接口；缺失时需要正规新增接口 |
+**binary。** 
+
+| 路线 | 组件 | 必须支持的契约／交付物 | 是否必须新改代码及判断条件 |
+|---|---|---|---|
+| C：binary | 编译器 | 不要求应用重编译；可复用MC解码／编码和ISA描述；按本章归属提供device检查库／patch helper及其调用约定 | 前中端不必新增；MC已有能力可0新增，缺失部分按实际补齐。patch引擎在UMD列，避免MC或stub重复计费 |
+| C：binary | KMD | 接受经过许可的可执行代码资源、更新后的资源声明与正常提交；提供代码／数据映射寿命、完成及所选失败路径 | 现有正式加载／执行接口充分可0新增；仅在代码加载／权限／调试或终止接口缺失时新增正规契约，不默认要求KMD实现二进制重写 |
+| C：binary | UMD | loader／JIT取得目标代码，完成控制流重定位、资源重算、patch cache和卸载生命周期；保留原PC、覆盖与失败原因 | 需要二进制重写与管理能力；可复用已有框架。API wrapper本身不构成C；每个实际opcode及资源副作用必须处于支持集合 |
 
 ### 11.3 必须单独预算的工程风险
 
@@ -774,7 +1018,17 @@ UMD 在模块加载或 JIT 产物生成后取得目标代码，解析指令与�
 
 如果全部核心应用都能重编译，而项目尚无成熟的机器码重编码／调试 patch 设施，C 的基础建设通常会挤占最急需的对象与生命周期工作。可以先把模块未覆盖作为可见缺口，等实际闭源覆盖需求出现再补。
 
-预算：在**已有成熟指令解码、编码和基础 patch 能力**时，P＋C 核心约 34–67 kLOC，测试约 30–58 kLOC。若这些前提不存在，还需追加第 16 章列出的基础设施投入。
+预算：在**已有成熟解码/编码/patch及可复用KMD契约**时，含一次cmodel、未计QEMU追加的P＋C核心约 34–67 kLOC，测试约 30–58 kLOC。若这些前提不存在，还需追加第 16 章列出的基础设施投入。
+
+<a id="route-c-platforms"></a>
+
+### 11.5 功能级cmodel与QEMU的检测能力及改动
+
+| 问题 | 功能级 cmodel | QEMU 全系统平台 |
+|---|---|---|
+| 能检测什么 | 执行已正确重写的代码并报告所选检查错误；可对合法程序做原始／patch 后语义差分 | Q2 可覆盖 Guest 模块加载、patch、资源声明到实际执行；Q3 运行真机 C；Q1 不验证 GPU 指令重写后的真实语义 |
+| GPU 执行核心是否要改 | 产物只用现有完整支持的 ISA 时可不改；独立核对访存、mask、barrier 或异常时加观察接口 | 增加 loader／设备模型集成，保证提交的是实际 patch 代码及匹配的资源描述；QEMU 的 CPU TCG 不是目标 GPU binary rewriter |
+| 其他组件支持 | 目标解码／编码、CFG 与 relocation、stub ABI、寄存器保存、资源重算、原／新 PC map | UMD／JIT／patch cache／模块生命周期必须走实际路径；KMD／固件提供所需的正式代码加载、执行权限及错误处理契约，调试或专用patch接口仅在实现实际依赖时要求；未知编码明确拒绝或降级 |
 
 ## 12. 路线 D：对象边界与时间身份传播
 
@@ -828,11 +1082,18 @@ D1 可以先带来明显的覆盖提升。D2 会改变更多组件契约，不�
 
 若只能控制部分参与者，不能声称 D2 在该边界保持精确时间身份。使用 seqlock 或锁也不自动解决未受控 writer、ABA 或 GPU 前进性问题。
 
-### 12.5 UMD／runtime／cmodel 改动
+### 12.5 编译器、KMD、UMD支持与修改
 
-UMD 负责对象 ID／epoch、kernel 参数 sidecar、模块能力协商、外部对象注册及回收顺序。设备 runtime 提供热描述符、pointer shadow、tag 检查、unknown provenance 路径和错误聚合。
+**对象bounds与时间身份。** D1和D2分行列出，不将身份传播合并成普通bounds支持。
 
-cmodel 应在指针流经寄存器、frame、内存槽与原子发布时独立跟踪身份，用最小反例核对 D2。若只让模型再次调用同一身份查询函数，将无法发现实现共有的错误。
+| 路线 | 组件 | 必须支持的契约／交付物 | 是否必须新改代码及判断条件 |
+|---|---|---|---|
+| D1：bounds | 编译器 | 保留可恢复的原对象bounds，传播到检查点；前端／IR／后端与device描述符查询配套，来源丢失显式降级 | 通常需新增对象分析与传播；只查询当前地址所属分配不能算D1闭合。子对象／view边界需额外输入 |
+| D1：bounds | KMD | 为描述符及日志提供普通BO／GPUVA资源和一致的提交、完成、回收、错误接口；返回backing／映射结果供关联 | 既有契约充分可0新增；KMD无需替代编译器传播源级对象。只有实际布局或错误接口不足才改 |
+| D1：bounds | UMD | 登记应用对象与合法子范围，建立kernel参数sidecar和外部资源关联，按依赖发布／回收描述符 | 需具备bounds对象服务；P已有事件可复用。未知provenance不能在launch时只按当前VA反查后冒充原对象 |
+| D2：identity | 编译器 | 在声明支持集合内闭合指针身份传播，覆盖call／return、spill／reload、pointer load/store、copy、atomic和ABI；device库保证值与身份匹配 | 必须有完整身份协议；不能以对象表增设generation字段代替。已有D1只复用共有部分，D2独有传播／原子发布仍需实现 |
+| D2：identity | KMD | 提供元数据存储、映射、完成与安全退休等底层契约；跨context／导入所需的backing关系须可关联 | 现有契约充分可0新增；KMD不负责自动恢复旧裸指针身份。只有所需共享／隔离／退休接口确有缺口时新增 |
+| D2：identity | UMD | allocator创建不可混淆的分配实例；参数、graph捕获和受控Host边界保留原身份；按设备依赖退休旧描述符和pointer metadata | 需要身份与生命周期集成；设备内部每次指针传播仍归编译器／device库。不能在同VA复用后把旧指针重标成新对象 |
 
 ### 12.6 子对象和 tensor view
 
@@ -846,7 +1107,17 @@ cuCatch 中 BST 是 **Base and Size Table**，GPUArmor 的 BST 则可以指 **Bi
 
 此外，能找到一个 reaching base pointer，不意味着它一定是最初 allocation base；跨函数或内存加载可能已经成为新的分析 root。本文 D2 的闭合身份传播要求比“局部后端分析恢复 bounds”更强，成本也更高。
 
-预算：P＋D 核心约 50–98 kLOC，测试约 43–83 kLOC；只完成 D1 的受控原型应按任务单单独裁剪，不能承诺同时具有完整 D2 能力。
+预算：在已有KMD契约可复用、含一次cmodel且不含QEMU追加时，P＋D核心约 50–98 kLOC，测试约 43–83 kLOC；只完成 D1 的受控原型应按任务单单独裁剪，不能承诺同时具有完整 D2 能力。
+
+<a id="route-d-platforms"></a>
+
+### 12.8 功能级cmodel与QEMU的检测能力及改动
+
+| 问题 | 功能级 cmodel | QEMU 全系统平台 |
+|---|---|---|
+| 能检测什么 | D1 在来源可恢复范围检查原对象 bounds；D2 在闭合的时间身份传播范围区分同地址新旧对象指针 | Q2 可联测 GPU 检查与对象发布／回收；Q3 依赖同等真机实现；Q1 只能验证描述符传递，不能验证 GPU 指针流 |
+| GPU 执行核心是否要改 | 执行既有 ISA 的 metadata/check 代码可不改核心；独立 D1/D2 oracle 则要增加寄存器、内存槽、spill／reload、memcpy、atomic 等身份跟踪 | 需要把 Guest 中的对象 ID／epoch、参数 sidecar、设备分配及实际生效时序送到 Q2；QEMU 页表或分配表不能代替指针自身身份 |
+| 其他组件支持 | compiler provenance 分析／传播、device metadata runtime、UMD 描述符、跨函数／模块 ABI | KMD 管理的页映射不能单独推导 UMD 子对象或语言级 provenance；外部裸指针和不受控 writer 必须标记 unknown／覆盖缺口 |
 
 ## 13. 路线 E：编译插桩与运行时补充的混合方案
 
@@ -886,11 +1157,27 @@ UMD 依据这些字段选择原代码、已插桩代码、patch 后代码或拒�
 
 普通二进制 fallback 不能凭空为一个裸地址恢复它曾经属于哪个旧对象。
 
-### 13.4 组件投入
+### 13.4 编译器、KMD、UMD支持与修改
 
-编译器需要生成稳定 manifest 和边界摘要；runtime 需共享对象表并处理不同元数据级别；UMD 需要 patch 选择、版本校验和缓存；cmodel 要验证跨模式流转；报告工具必须显示每个错误和每段代码的覆盖等级。
+**hybrid。** 
 
-预算见第 16 章的去重拆解：P＋E 核心约 76–146 kLOC、测试约 66–127 kLOC。这是“B 全量＋D 独有部分＋C fallback 子集＋集成”的估算，不是将 B、C、D 总量相加。
+| 路线 | 组件 | 必须支持的契约／交付物 | 是否必须新改代码及判断条件 |
+|---|---|---|---|
+| E：hybrid | 编译器 | B／D支持的编译覆盖、稳定manifest、边界摘要及兼容device检查库；按每条边界声明bounds／identity保证 | 在已有B／D上补齐混合协议；共享检查器复用。binary fallback不能补回已经丢失的D2来源 |
+| E：hybrid | KMD | 提供所选B／D及C子集所需契约的并集；不同模式共用明确的context、映射、提交和错误路径 | 不因“混合”自动增加一套KMD；现有契约充分可0新增，新增项由具体缺口决定 |
+| E：hybrid | UMD | 按模块选择编译插桩、binary补充或拒绝／降级；共享对象表和报告ABI，防止重复插桩；管理跨模式参数和代码生命周期 | 需要loader策略、版本校验及跨模式适配。B/C/D共有的分配与报告底座复用；每段代码分别展示实际保证 |
+
+第16章的P＋E基础研发参考包为核心76–146 kLOC、测试66–127 kLOC，已计一次cmodel；KMD缺口与QEMU平台按独立包增加。E按B全量、D独有部分、C fallback子集和集成去重，不直接叠加B/C/D总量。
+
+<a id="route-e-platforms"></a>
+
+### 13.5 功能级cmodel与QEMU的检测能力及改动
+
+| 问题 | 功能级 cmodel | QEMU 全系统平台 |
+|---|---|---|
+| 能检测什么 | 执行编译插桩与 binary fallback 的组合，按模块保留 B／D1／D2／裸地址的保证等级 | Q2 可验模式选择、加载与真实执行的交接；Q3 可运行既有真机 E；Q1 只能验 manifest／模式选择协议 |
+| GPU 执行核心是否要改 | 合法产物全部落在现有 ISA 能力内时可不改；跨模式独立 oracle 或缺失语义另改 | 接通统一对象／queue 服务、manifest、runtime ABI、代码版本与覆盖报告；不能因接入全系统就为 fallback 恢复已丢失的来源 |
+| 其他组件支持 | compiler manifest、UMD patch 选择和避免重复插桩、共享 device runtime、边界摘要 | Guest 驱动及诊断服务保留 module／dispatch／checker 标识；资源失败和拒绝加载必须可见 |
 
 ## 14. 路线 F：硬件辅助
 
@@ -904,13 +1191,17 @@ UMD 依据这些字段选择原代码、已插桩代码、patch 后代码或拒�
 | Watchpoint／保护页 | 地址范围、权限及 fault 归因 | GPUVA 管理、guard page | 粒度较粗，无法替代对象级检查 |
 | 同步事件 trace | barrier／atomic／queue 事件输出 | race/sync 分析、流量控制 | 全访存 trace 的带宽可能不可接受 |
 
-### 14.2 新指令不是全部工作
+### 14.2 编译器、KMD、UMD及硬件支持
 
-完整路线需要设计 metadata 的地址权限、cache coherence、free 后失效、context switch、peer memory、迁移、fault 重放和错误归因。尤其不能让缓存中旧的“live”信息在释放之后继续使访问通过。
+**hardware。** 
 
-UMD、固件和 KMD 要配套资源初始化、上下文管理和错误处理；cmodel 支持新语义，时序模型用于性能评估；RTL/DV 验证则覆盖流水线、异常、并发和一致性。
+| 路线 | 组件 | 必须支持的契约／交付物 | 是否必须新改代码及判断条件 |
+|---|---|---|---|
+| F：hardware | 编译器 | 根据选定机制生成tag／bounds／metadata指令或标记，传播所需来源；device库承担尚未硬化的检查和报告 | 所用ISA／ABI已有支持时可复用；新指令、新指针表示或上下文参数需要修改。保护页等机制不必强制新增编译指令 |
+| F：hardware | KMD | 接通所选硬件的特权配置、metadata资源、context状态、失效／一致性、fault归因及终止／恢复；与固件职责明确 | 只有所需机制和契约均已存在才可能0新增；新寄存器、fault类型、context保存恢复或失效路径通常需配套改动。不能由软件预算推定硬件已经存在 |
+| F：hardware | UMD | 分配并发布tag／bounds／metadata，配置所支持模式，处理alias／peer／迁移和回收，解释硬件错误并给出覆盖边界 | 需与选定硬件语义集成；已有库可复用。硬件仅提供加速查询时，软件仍承担对象、身份和生命周期正确性 |
 
-GPUArmor 提供了这类软硬协同的公开研究例子，且实测／模拟基线必须按第 5 章区分。[P04]
+新指令之外还需明确metadata权限、cache一致性、free失效、context切换、peer/迁移和fault重放。硬件、固件与RTL/DV是外部前提，功能模型实现相同语义不代表硅片已经具备能力。GPUArmor提供软硬协同研究参照，基线仍按第5章区分。[P04]
 
 ### 14.3 选择 F 的证据门槛
 
@@ -924,7 +1215,17 @@ GPUArmor 提供了这类软硬协同的公开研究例子，且实测／模拟�
 
 ### 14.4 预算解释
 
-第 16 章的 P＋F 软件核心 30–60 kLOC、测试 29–56 kLOC，前提是所需硬件能力**已经存在或另有项目交付**。缺少这些能力时，不能用这张软件表报价完整 F。ISA／RTL／DV／固件的新增工作必须另行立项。
+第16章P＋F基础研发参考包的软件核心30–60 kLOC、测试29–56 kLOC，含一次cmodel；前提是所需硬件能力**已经存在或另有交付，相关KMD基础契约也可复用**。KMD新增使能及QEMU平台另按条件包计。缺少这些能力时，不能用这张软件表报价完整 F。ISA／RTL／DV／固件的新增工作必须另行立项。
+
+<a id="route-f-platforms"></a>
+
+### 14.5 功能级cmodel与QEMU的检测能力及改动
+
+| 问题 | 功能级 cmodel | QEMU 全系统平台 |
+|---|---|---|
+| 能检测什么 | 新增模型后验证 tag compare、bounds 指令、保护或 fault 的功能规则 | Q2 验证功能规则与 Guest 驱动交互；Q1 注入 fault 只验证处理；Q3 需要真实硬件已经提供相应能力 |
+| 必须修改什么 | 对缺失的新 ISA、metadata 状态、失效规则、异常／屏蔽行为修改模型；只是普通软件 helper 时应按 B/D 说明 | 修改设备模型与桥接，连接固件／KMD 的初始化、context、fault、reset；若模拟 cache，清楚声明其功能及一致性范围 |
+| 还需什么证据 | 功能模型可作为规则原型，不能替代校准后的时序模型与 RTL/DV | Q2 中 fault 正确不证明真实流水线、并发一致性、精准异常、面积或 slowdown；这些须由后续相应验证提供 |
 
 ## 15. Initcheck、Racecheck 与 Synccheck 的独立设计
 
@@ -987,132 +1288,311 @@ async copy 在**完成且满足可见性条件**时才对依赖读取构成定�
 
 判错必须基于目标指令语义，不能一律要求全部硬件 lane 参与：某些部分 mask 是合法的。超时只证明没有在预算时间内完成，若没有更强证据，不应直接宣称已证明程序死锁。
 
-### 15.6 工程拆分建议
+### 15.6 三组件与两类平台的checker职责
 
-| 检查器 | Compiler | Device runtime | UMD／Host | cmodel | Tooling |
+以下是【工程建议】的职责分解。Device runtime是运行在GPU上的检查库，本报告在编译器交付包内单列；Host runtime、SDK拦截和报告工具在UMD交付包内分层实现。功能级cmodel与QEMU平台是不同的执行／验证环境，不与前三项合并为同一种生产软件组件。
+
+| 检查器 | 编译器及设备检查库 | KMD | UMD及用户态工具 | 功能级cmodel | QEMU全系统平台 |
 |---|---|---|---|---|---|
-| Initcheck | 所有读写／copy 的定义性入口 | bitmap、合并与查询 | copy／memset／Host边界 | 独立定义性 oracle | 未定义范围与来源 |
-| Racecheck | 访问、atomic、scope、barrier | HB/FSM 或观测算法 | queue/event/graph顺序 | 多调度及小规模参考检测 | 两端PC或单边证据、级别 |
-| Synccheck | 同步指令和参与mask | barrier状态与错误聚合 | launch配置、完成／终止 | 同步状态和合法反例 | 参与者、phase、超时证据 |
+| Initcheck | 实际load/store/copy事件；byte定义性bitmap；设备端并发更新 | 提供映射、DMA/copy完成与失败契约；不推断寄存器值是否初始化 | 登记allocator、copy/memset及Host来源策略；按设备依赖更新状态 | 执行检查库或额外实现独立定义性oracle；必须看到实际byte enable | Q2接通Guest UMD/KMD、copy engine模型及GPU内访存；Q1仅能验证copy命令协议，不能覆盖kernel消费 |
+| Racecheck | 访存、atomic、scope/order和barrier采集；HB/FSM等独立引擎 | 提供提交、完成、共享对象与外部同步信息；job fence不自动等于任意GPU内存操作间HB | 建立queue/event/graph依赖，关联Host与设备事件 | 独立历史或HB检查；调度扰动仅扩大已探索执行，不能证明全部调度安全 | Q2保留GPU模型的并发语义并接Guest命令图；CPU/GPU联合检测还需CPU访问及同步观测，TCG插件不自动补齐GPU事件 |
+| Synccheck | 同步ID、参与mask、phase/token来源；设备状态与报告 | 提供故障通知和可用的abort/reset边界；取消未提交job不能替代中止正在执行的dispatch | launch参数、支持集合、等待失败和用户可见诊断 | 维护参与者、到达集合和等待依赖；区分确定违规、循环等待证据与普通超时 | Q2验证GPU同步状态到IRQ/完成/Guest错误回传全链；Q1只能注入错误码验证后半段，不能证明前半段已检测 |
 
-每个 checker 都应独立开关、单独统计性能与覆盖，再讨论组合运行能否共享事件并节省成本。
+KMD能力充分时可以复用现有接口，无需为三个checker分别增加重复ioctl。每个checker应独立开关、单独统计性能与覆盖；共用事件格式也不能把I1、R1、S1归并成一种shadow检查。硬件错误回传与Linux驱动的取消／重置语义应按实际实现核对。[K01][K02]
+
+<a id="component-estimates"></a>
 
 ## 16. 组件改动与代码量估算
 
-### 16.1 估算口径与可信度
+### 16.1 估算口径、三组件归属与适用边界
 
-**本章全部为【估算】。** 未读取用户 GPU 软件仓库，也没有任何厂商内部 SLOC 数据。数值用于比较投入级别、预留人员和拆分工作，不应直接作为采购或交付承诺。
+**本章全部数字均为【设计估算】，不是仓库实测、厂商内部数据、已完成实现的统计或工期承诺。** 尚未审计目标 GPU 软件仓库；区间用于拆分责任、比较投入和安排技术摸底。统一单位为 kLOC，1 kLOC 约为 1,000 行新写或实质修改的手写代码，同一行重复修改不反复计入。核心代码与手写测试分别列示；空行、注释、机械生成代码、未修改的第三方依赖均不计入。
 
-统一口径：
+生产软件按 **Compiler、KMD、UMD 三个顶层责任包**组织。这里是预算归属，不是执行位置或代码仓库布局：
 
-- 1 kLOC＝约 1,000 行新写或实质修改的手写代码；同一行重复修改不反复计入。
-- 核心代码与手写测试分列；不计空行、注释、机械生成代码、第三方代码复制和未修改的 LLVM 依赖。
-- 包含可发布给内部用户的工程化与失败路径处理；不包含成熟商业工具多代硬件的全部兼容与极限优化。
-- 已有可用 LLVM 后端、UMD、cmodel 和基础调试能力；C 另假设已有成熟解码／编码及基本 patch 框架。
-- A 预算以地址检查＋对象 map／同步观测为主，不包括通用全指令 provenance 模拟及所有调度穷举。
-- B/C/D/E/F 表格主预算针对内存检查及其基础设施；完整 init／race／sync 的新增分析引擎在 §16.7 单列。
-- F 软件表不包含缺失的硬件、RTL/DV 和硅片实现。
-- 下限对应基础设施较好、接口受控、平台较少；上限对应更多边界及兼容工作。架构不确定性仍可能使实际值超出区间。
+- **Compiler＝Pass／后端／编译链接支持＋device 检查库。** 前一子项在编译工具链工作，后一子项链接进设备程序并在 GPU 上执行；不能把设备检查开销解释为编译阶段开销。
+- **KMD＝内核态驱动中实际新增或实质修改的契约实现。** 只有已有接口无法满足检查器所需的映射、完成、错误和隔离契约时才追加；复用已有能力不计为新增实现。固件不是 KMD，缺失的固件配合单独列出。
+- **UMD＝SDK/API 接入、Host runtime、用户态 driver/loader 和 CLI/符号化等用户态工具的责任包。** SDK 暴露注册和配置入口；Host runtime 维护 API、队列与 graph 语义；用户态 driver/loader 管理对象、模块和提交；CLI/报告工具负责启动、符号化和结果消费。上述模块可分库、分进程，不要求把 SDK 或 CLI 嵌入底层 UMD driver。
 
-### 16.2 公共底座 P：只计一次
+**功能级 cmodel 独立计费。** A 中它承载检测主体；B–F 中它主要承担参考语义、差分执行或新增指令语义验证。随后另列的 QEMU 全系统平台只计算系统设备接线与 guest 集成，不再次购买同一个 cmodel 检测引擎。
 
-| 组件 | 核心 kLOC | 手写测试 kLOC | 主要内容 |
-|---|---:|---:|---|
-| Compiler | 1–2 | 1–2 | option、module manifest、诊断映射接口 |
-| Device runtime | 1–2 | 1–2 | context、报告缓冲、基础 ABI |
-| Host runtime＋UMD | 4–7 | 3–5 | allocation／queue／module 事件、生命周期 |
-| cmodel | 1–2 | 1–2 | 事件适配和统一输入输出 |
-| Tooling | 2–4 | 2–3 | CLI、符号化接线、覆盖和错误格式 |
-| **合计 P** | **9–17** | **8–14** | 基础协议和共享实现 |
+本章先给出“**已有 KMD 契约足够**”的基础估算，以保持既有五项预算的数值可追溯；再给条件性 KMD 增强和 QEMU 平台投入。基础前提为已有可用 LLVM GPU 后端、UMD、功能级 GPU cmodel 和基础调试能力；C 另外要求已有成熟 decode/encode 和基本 patch 框架。基础表包含内部可发布版本的失败路径和工程化，不覆盖全部历史硬件、任意语言 ABI 或商业工具的全部优化。
+
+A 的主预算为 A0 地址检查、受控 A1 shared/stack 对象 map 和同步事件观察/接线；不是通用 A2 指针 provenance、全指令值传播、所有合法调度穷举或完整 HB 引擎。B–F 的主预算针对内存检查与公共设施；完整 init/race/sync 引擎见 §16.7。F 仅为已有硬件能力的软件使能，RTL、DV、硅片及完整硬件设计不属于本章软件 SLOC。
+
+区间端点逐项相加仅形成规划范围，不是统计置信区间；下限对应基础设施和接口较完备，上限对应更多受控边界与兼容工作，架构前提失效仍可能超出上限。
+
+### 16.2 公共底座 P：按三个生产组件归属，只计一次
+
+| 责任包／范围 | 核心 kLOC | 手写测试 kLOC | 包含内容 |
+| --- | --- | --- | --- |
+| Compiler | 2–4 | 2–4 | Pass/后端 1–2、测试 1–2；device 检查库 1–2、测试 1–2。option、manifest、context、报告缓冲、基础 ABI。 |
+| KMD | 0 | 0 | 现有映射、队列完成、错误回传和隔离契约已足够；没有新增 KMD 实现。 |
+| UMD | 6–11 | 5–8 | SDK/Host runtime/用户态 driver 联合项 4–7、测试 3–5；CLI/符号化工具 2–4、测试 2–3。 |
+| **三生产组件小计** | 8–15 | 7–12 | 只表示生产侧软件责任包，不含下列功能模型。 |
+| 功能级 cmodel | 1–2 | 1–2 | 事件适配、统一输入输出及模型侧协议验证。 |
+| **含 cmodel 的公共研发参考包 P** | 9–17 | 8–14 | 对应原五项公共底座的合计；三组件与模型均未重复计数。 |
+
+KMD 的“0”表示不新增该组件代码，不表示接口免于验证。调用既有接口的分配、失败完成、取消、资源回收等集成用例计入 UMD 或模型测试；若这些用例证明契约不足，再转入 §16.8 的缺失能力包。
 
 ### 16.3 A／B／C 在 P 之上的新增量
 
-表格中的每个单元写作“核心；测试”，单位均为 kLOC。
+以下每行均未含 P；KMD 列为既有契约满足时的基线。模型行与三个生产组件分别归属。
 
-| 组件 | A：cmodel 增量 | B：shadow 增量 | C：binary 增量 |
-|---|---:|---:|---:|
-| Compiler | 1–2；1–2 | 7–13；6–11 | 0–2；0–2 |
-| Device runtime | 0–1；0–1 | 5–9；4–7 | 6–11；5–9 |
-| Host runtime＋UMD | 1–3；1–3 | 4–8；3–6 | 14–26；12–23 |
-| cmodel | 6–12；5–10 | 1–3；1–3 | 2–5；2–5 |
-| Tooling | 1–3；1–3 | 1–3；1–3 | 3–6；3–5 |
-| **新增核心合计** | **9–21** | **18–36** | **25–50** |
-| **新增测试合计** | **8–19** | **15–30** | **22–44** |
+| 路线 | 责任包 | 新增核心 kLOC | 新增手写测试 kLOC | 核心工作范围 | 测试工作范围 |
+| --- | --- | --- | --- | --- | --- |
+| A | Compiler | 1–3 | 1–3 | Pass/后端输出 PC、frame、shared/stack 对象 map；设备库按需提供 device allocator 事件。 | sidecar 与最终代码匹配、地址空间和 frame 边界、设备事件对齐。 |
+| A | KMD | 0 | 0 | 独立模型夹具可不参与 KMD；接入现有真实事件源时复用已有契约。 | KMD 无新增代码测试；事件重放和合法/非法次序由 UMD/模型测试承担。 |
+| A | UMD | 2–6 | 2–6 | SDK/runtime/driver 导出 alloc/free/copy/launch/queue 依赖；CLI 合并模型与 Host 诊断。 | API 与底层命令去重、异步生效边界、图重放 ID、日志截断和覆盖状态。 |
+| A | 功能级 cmodel（单列） | 6–12 | 5–10 | 真实访存 tap、宽度/byte enable/权限/对齐、受控对象 map、同步事件记录及停止策略。 | masked/vector、同址不同 block、分配释放顺序、合法反例和模型确定性；不含完整 A2。 |
+| B | Compiler | 12–22 | 10–18 | 访存/atomic/intrinsic/mask 插桩、多地址空间 lowering、shared/private 布局；设备 shadow 查询和报告 helper。 | 优化交互、任意访问长度、masked/EVL、原子语义、helper 不重入插桩及 SIMT 前进性。 |
+| B | KMD | 0 | 0 | 复用现有 GPUVA/映射、完成、错误回传及所选终止策略的契约；不足时按实际缺口选 K-M/K-E/K-A。 | 新增 KMD 测试为 0；对既有契约的端到端用例包含在 UMD/模型测试。 |
+| B | UMD | 5–11 | 4–9 | shadow 资源、poison/unpoison 排序、context/JIT 链接、池分配及 CLI 覆盖/资源不足报告。 | 异步 alloc/free、shadow 可见性、映射失败、卸载回收、日志满和合法别名。 |
+| B | 功能级 cmodel（单列） | 1–3 | 1–3 | 独立区间 oracle，核对 shadow 状态与应用命令的生效次序。 | 与插桩结果差分、边界精度、检测器自身访存分类和失败注入。 |
+| C | Compiler | 6–13 | 5–11 | 复用 MC/指令语义接口；设备 patch stub、寄存器保存恢复、metadata 查询与报告。 | stub 透明性、寄存器/谓词恢复、访问宽度和原子保持；不重计已有解码器。 |
+| C | KMD | 0 | 0 | 复用已有正规代码加载/执行、映射、完成及所选终止契约；调试接口仅在实现依赖时要求，缺口按需选 K-M/K-E/K-A/K-X。 | 新增 KMD 测试为 0；代码生命周期和故障归因的集成测试计在 UMD/模型。 |
+| C | UMD | 17–32 | 15–28 | 运行时重写、CFG/branch relocation、资源重算、patch cache、JIT/unload；CLI 恢复原 PC。 | 分支/调用/常量区重定位、并发加载、缓存版本、拒绝未知编码、资源声明及异常路径。 |
+| C | 功能级 cmodel（单列） | 2–5 | 2–5 | 原始代码与重写代码的独立差分执行；识别原指令和 stub 的语义差异。 | 编码、谓词、依赖等待、分支、特殊访存、异常路径的等价和错误反例。 |
 
-C 将二进制翻译和 patch 管理主要记在 Host runtime＋UMD 列。团队若把该实现放在独立工具库，应移动归属，不能同时记在 compiler 与 UMD 两列。
+C 的运行时重写/patch 管理延续原预算归入 UMD。若团队将其抽成独立库，调整责任归属即可，不能在 Compiler 与 UMD 各计一份。A 中同步事件 tap 不等于已经交付完整 race/sync 分析；I1/S1/R1 按 §16.7 选定的工作包补充。
 
 ### 16.4 D／E／F 在 P 之上的新增量
 
-| 组件 | D：bounds／provenance 增量 | E：去重后 hybrid 增量 | F：已有硬件的软件使能增量 |
-|---|---:|---:|---:|
-| Compiler | 18–34；15–29 | 23–44；19–36 | 5–10；5–10 |
-| Device runtime | 10–20；8–16 | 17–32；14–27 | 4–8；4–8 |
-| Host runtime＋UMD | 7–14；6–12 | 16–31；14–28 | 4–8；4–8 |
-| cmodel | 3–7；3–7 | 6–12；6–12 | 6–12；6–12 |
-| Tooling | 3–6；3–5 | 5–10；5–10 | 2–5；2–4 |
-| **新增核心合计** | **41–81** | **67–129** | **21–43** |
-| **新增测试合计** | **35–69** | **58–113** | **21–42** |
+以下每行均未含 P；KMD 列为既有契约满足时的基线。模型行与三个生产组件分别归属。
 
-D 包含受控接口范围内的 D2；不能据此承诺任意 C++ ABI、所有第三方库和任意未插桩 writer 都保留身份。
+| 路线 | 责任包 | 新增核心 kLOC | 新增手写测试 kLOC | 核心工作范围 | 测试工作范围 |
+| --- | --- | --- | --- | --- | --- |
+| D | Compiler | 28–54 | 23–45 | Pass/后端传播 bounds/identity、指针 load/store/copy/atomic 和受控 ABI；设备 descriptor/pointer-shadow 协议。 | phi/select、spill/reload、部分 copy、值-身份原子配对、ABA、unknown 来源及受控跨函数边界。 |
+| D | KMD | 0 | 0 | 复用已有 metadata 映射、context 隔离、完成及所选终止契约；不足时按需选 K-M/K-E/K-A。 | 新增 KMD 测试为 0；metadata 生存期与地址复用验证计入 UMD/模型。 |
+| D | UMD | 10–20 | 9–17 | 对象 ID/epoch、参数 sidecar、外部对象注册、能力协商、metadata 退休与 CLI 保证等级。 | 参数布局、epoch 复用、并发退休、未插桩 writer 边界和跨模块协商。 |
+| D | 功能级 cmodel（单列） | 3–7 | 3–7 | 受控寄存器/frame/内存槽身份 oracle 与原子发布参考语义；不是通用 A2 模型。 | 旧指针/新地址实例、部分写破坏身份、原子配对、已定义 ABI 集合的最小反例。 |
+| E | Compiler | 40–76 | 33–63 | B 全量＋D 独有部分＋C stub 子集和模式边界；共享检查 ABI、manifest 和 descriptor。 | 模式间值/身份流转、重复插桩防护、版本协商、provenance 降级及元数据一致性。 |
+| E | KMD | 0 | 0 | 共享 B/D/C 所需契约并集；不足时选 K-M/K-E/K-A/K-X，每包只计一次。 | 新增 KMD 测试为 0；跨模式集成验证已在 E 的 UMD/模型测试去重。 |
+| E | UMD | 21–41 | 19–38 | 按模块选择编译插桩或受控 binary fallback、缓存和版本校验、共同对象表及分级报告。 | 混合模块、JIT/graph 重放、共享对象身份、未知模块和拒绝重复 patch。 |
+| E | 功能级 cmodel（单列） | 6–12 | 6–12 | 共享 B 的区间 oracle、D 的受控身份参考和 C 子集差分，另加跨模式检查。 | 模式组合、同一对象跨边界、覆盖降级与失败路径；模型代码只计一份。 |
+| F | Compiler | 9–18 | 9–18 | 已有硬件能力的 intrinsic/指令选择与 ABI；设备 tag/bounds/metadata helper 及报告。 | 目标指令 lowering、硬件能力协商、错误 PC、metadata 版本和不支持设备回退。 |
+| F | KMD | 0 | 0 | 基线假设所需硬件资源/故障/上下文接口也可复用；缺口选 K-M/K-E/K-A/K-F。 | 新增 KMD 测试为 0；缺失契约的驱动验证另在条件包，不用此数覆盖固件或 DV。 |
+| F | UMD | 6–13 | 6–12 | 资源初始化、tag/descriptor 生命周期、上下文协商、失效请求及诊断工具。 | 释放后失效、context switch、已有支持范围内的 alias/peer、故障归因和资源不足。 |
+| F | 功能级 cmodel（单列） | 6–12 | 6–12 | 在已有 GPU 模型上补受限硬件检查语义及 reference fault；不是新建完整 GPU 模拟器。 | 新检查语义、缓存/身份失效可见性、故障/恢复协议的功能反例；不替代 RTL/DV。 |
 
-### 16.5 从 sanitizer 零起点建设的总量
+#### 责任包内的可追溯子项
 
-| 方案 | 核心 kLOC | 手写测试 kLOC | 两者合计 kLOC | 主要预算条件 |
-|---|---:|---:|---:|---|
-| P＋A | 18–38 | 16–33 | 34–71 | 已有 cmodel；非全部调度穷举 |
-| P＋B | 27–53 | 23–44 | 50–97 | 可重编译、shadow 布局可行 |
-| P＋C | 34–67 | 30–58 | 64–125 | 已有成熟 decode／encode／patch |
-| P＋D | 50–98 | 43–83 | 93–181 | 受控 provenance 与 ABI 支持集合 |
-| P＋E | 76–146 | 66–127 | 142–273 | B＋D 独有部分＋C 子集＋集成 |
-| P＋F | 30–60 | 29–56 | 59–116 | 硬件能力另有交付，不含 RTL/DV |
+下表保留原五项预算中 Compiler 与 Device runtime 的原始区间。P 是公共底座，其余均为路线增量；将两子项相加即得上表的 Compiler 列。
 
-**不能将这些“从零总量”相加。** 若采用 B 后再做 D，应剔除公共 P、shadow 通路、对象表和报告复用；E 已按这种方法单独计算。
+| 范围 | Pass／后端核心 | Pass／后端测试 | 设备检查库核心 | 设备检查库测试 |
+| --- | --- | --- | --- | --- |
+| P | 1–2 | 1–2 | 1–2 | 1–2 |
+| A | 1–2 | 1–2 | 0–1 | 0–1 |
+| B | 7–13 | 6–11 | 5–9 | 4–7 |
+| C | 0–2 | 0–2 | 6–11 | 5–9 |
+| D | 18–34 | 15–29 | 10–20 | 8–16 |
+| E | 23–44 | 19–36 | 17–32 | 14–27 |
+| F | 5–10 | 5–10 | 4–8 | 4–8 |
 
-### 16.6 E 的去重计算，供预算复核
+UMD 责任包同样保留两个可追溯子项。原预算没有进一步将 SDK、Host runtime 和用户态 driver 三者量化分开，因此联合区间不能冒充三个模块分别测得的 SLOC；代码审计后再按接口和文件归属细分。
 
-| 构成 | 新增核心 kLOC | 新增测试 kLOC |
-|---|---:|---:|
-| 公共 P | 9–17 | 8–14 |
-| B 完整增量 | 18–36 | 15–30 |
-| D 在 B 上的独有新增 | 29–55 | 24–46 |
-| C 的受控 binary fallback 子集 | 10–20 | 9–19 |
-| 跨模式集成与边界协议 | 10–18 | 10–18 |
-| **总计 P＋E** | **76–146** | **66–127** |
+| 范围 | SDK／Host runtime／driver 核心 | SDK／Host runtime／driver 测试 | CLI／符号化工具核心 | CLI／符号化工具测试 |
+| --- | --- | --- | --- | --- |
+| P | 4–7 | 3–5 | 2–4 | 2–3 |
+| A | 1–3 | 1–3 | 1–3 | 1–3 |
+| B | 4–8 | 3–6 | 1–3 | 1–3 |
+| C | 14–26 | 12–23 | 3–6 | 3–5 |
+| D | 7–14 | 6–12 | 3–6 | 3–5 |
+| E | 16–31 | 14–28 | 5–10 | 5–10 |
+| F | 4–8 | 4–8 | 2–5 | 2–4 |
 
-D 独有新增的五组件核心分别为 14–26／8–15／4–8／2–4／1–2，测试为 11–20／6–12／4–8／2–4／1–2。C 子集核心为 0–1／2–4／6–11／1–2／1–2，测试为 0–1／2–4／5–10／1–2／1–2。集成核心与测试各为 2–4／2–4／2–4／2–3／2–3。
+上述子项单位均为 kLOC；它们已经包含在路线表内，不能再次加入总量。D 包含受控接口集合内的 D2，不能据此承诺任意 C++ ABI、任意第三方库或任意未插桩 writer 都保留身份。
 
-这套 E 预算没有同时包含 C 的全部复杂 ISA、完整 A2 模型和任意语言 ABI 的 D2。需要这些能力时，在需求清单中明确追加。
+### 16.5 从 sanitizer 零起点建设的基础总量
 
-### 16.7 其他 checker 的新增预算
+“零起点”只指 sanitizer 功能本身，仍要求 §16.1 所述现有工具链、驱动和 GPU 模型基础。每个方案的两行是不同统计边界，**不能相加**。既有第16章的 18–38、27–53 等核心区间对应“含功能 cmodel 的研发参考包”；不是三生产组件的软件小计。
 
-以下估算以 P 和一个已稳定的访存事件／报告基础为前提。组件顺序仍为 Compiler／Device runtime／Host＋UMD／cmodel／Tooling。
+| 方案 | 统计边界 | 核心 kLOC | 手写测试 kLOC | 核心＋测试 kLOC |
+| --- | --- | --- | --- | --- |
+| P＋A | 三生产组件小计 | 11–24 | 10–21 | 21–45 |
+| P＋A | 含功能 cmodel 的研发参考包 | 18–38 | 16–33 | 34–71 |
+| P＋B | 三生产组件小计 | 25–48 | 21–39 | 46–87 |
+| P＋B | 含功能 cmodel 的研发参考包 | 27–53 | 23–44 | 50–97 |
+| P＋C | 三生产组件小计 | 31–60 | 27–51 | 58–111 |
+| P＋C | 含功能 cmodel 的研发参考包 | 34–67 | 30–58 | 64–125 |
+| P＋D | 三生产组件小计 | 46–89 | 39–74 | 85–163 |
+| P＋D | 含功能 cmodel 的研发参考包 | 50–98 | 43–83 | 93–181 |
+| P＋E | 三生产组件小计 | 69–132 | 59–113 | 128–245 |
+| P＋E | 含功能 cmodel 的研发参考包 | 76–146 | 66–127 | 142–273 |
+| P＋F | 三生产组件小计 | 23–46 | 22–42 | 45–88 |
+| P＋F | 含功能 cmodel 的研发参考包 | 30–60 | 29–56 | 59–116 |
 
-| 新增能力 | 五组件核心 kLOC | 核心合计 | 测试合计 | 边界 |
-|---|---|---:|---:|---|
-| I1 内存初始化位图 | 2–4／3–6／2–4／1–2／1–2 | 9–18 | 8–16 | 不含完整寄存器值级 MSan |
-| S1 基础 barrier／mask 检查 | 2–4／3–6／1–2／2–4／1–2 | 9–18 | 9–18 | cluster／复杂异步另扩展 |
-| R1 shared HB／FSM | 4–8／7–14／1–3／3–6／2–4 | 17–35 | 18–36 | 明确层次同步子集 |
-| R1 扩展至 global／跨kernel | 3–6／5–10／4–8／2–4／1–3 | 15–31 | 16–34 | 在前一 R1 基础上增量，不含全部跨设备模型 |
-| 重复访问／碰撞实验模式 | 3–6／3–6／1–2／1–3／1–2 | 9–19 | 8–18 | 概率检测、目标内存语义明确 |
-| 值级 MSan、通用跨CPU/GPU TSan | 需单独设计 | 不给伪精确合计 | 不给伪精确合计 | 数据传播和内存模型超出简单模块 |
+**A 的检测器主体就在功能 cmodel 中，三生产组件小计不足以交付完整 A。** B–F 的模型工作则用于研发参考、语义差分或功能验证；若项目另有等价验证资产，只能在逐工作包确认复用后扣除相应量，不能默认整包删除。
 
-多个 checker 组合可复用部分事件和 tooling。上表不是要求把每行全部实施后直接求和；在方案收敛后按最终工作包重新去重。
+所有基础总量均假设新增 KMD 为 0；缺失能力另加 §16.8，选择 QEMU 全系统验证再加 §16.9。也不能把 P＋B、P＋D、P＋C 的“从零总量”相加；公共 P、设备报告、对象表和其他共享实现会被重复计费。
 
-### 16.8 前提不满足时的条件追加
+### 16.6 E 的去重计算
 
-| 条件 | 可能新增工作 | 初始预算判断 |
-|---|---|---|
-| 缺少可用机器码重写基础 | 补齐 decoder/encoder、指令语义和基础重定位／资源接口 | 核心约15–35 kLOC、测试约15–40 kLOC；只计缺失基础，剔除C中已计的CFG／patch管理 |
-| 硬件已有取消能力，但未接通安全 dispatch／context abort | 固件、KMD 与错误回传的软件接线 | 核心约4–10 kLOC、测试约4–10 kLOC；若硬件能力也缺失，须先验证可行性再估算 |
-| 没有可控 GPUVA 或 shadow 预映射 | 地址管理、页表、元数据映射服务 | 先完成可行性原型，再估算；不默认只是常量 offset 修改 |
-| 多 GPU／IPC／外部导入为首版硬需求 | 规范对象身份、别名、跨设备时序 | 独立项目包，按实际 API／一致性能力估算 |
-| F 需要新硬件 | ISA、RTL、DV、性能模型、固件和硅片验证 | 不用软件 SLOC折算；纳入芯片计划 |
+| 构成 | 核心 kLOC | 手写测试 kLOC | 去重说明 |
+| --- | --- | --- | --- |
+| 公共 P | 9–17 | 8–14 | 共用协议只计一次 |
+| B 完整增量 | 18–36 | 15–30 | 作为 E 的基础插桩路径 |
+| D 在 B 上的独有新增 | 29–55 | 24–46 | 去除与 B 复用的检查通路、对象管理和报告 |
+| C 受控 fallback 子集 | 10–20 | 9–19 | 不包含 C 的全部复杂 ISA 和全部 patch 情况 |
+| 跨模式集成与边界协议 | 10–18 | 10–18 | 只计各单一路线不需要的模式选择与交接 |
+| **总计 P＋E** | **76–146** | **66–127** | 与 §16.5 含模型参考包一致 |
 
-### 16.9 如何把宽区间变成可信的项目预算
+按新责任包校验，E 在 P 之上的增量为 Compiler 核心 40–76、测试 33–63；UMD 核心 21–41、测试 19–38；功能 cmodel 核心 6–12、测试 6–12；基线 KMD 为 0。四项分别相加得到核心 67–129、测试 58–113，再加 P 得到上述参考包。
 
-建议用两周左右的技术摸底形成以下实际数据：待覆盖 opcode 数、kernel 类型数、allocator/API 数、现有 patch 支持情况、module ABI 边界数量，以及模型／真机已知差异。
+该估算不同时承诺完整 C、通用 A2 或任意语言 ABI 的 D2。若需要这些能力，先列出相对 E 的独有工作包；已有对象表、设备 runtime、报告和 KMD 契约均不得再次计费。
 
-随后以“接口＋算法＋失败路径＋兼容＋验证”的工作包估计人月，并与上述代码量交叉检查。不要按一个统一的“每人每天写多少行”直接推算项目时间。
+### 16.7 Initcheck、Racecheck、Synccheck 的独立新增预算
+
+以下以 P 和已稳定的访存事件/报告基础为前提。KMD 现有契约足够时均为新增核心 0、测试 0；如果需要扩充驱动契约，仍从 §16.8 按缺口选取，不能每增加一种 checker 就再收一套 KMD 底座。
+
+核心区间由原五项预算直接重组。**原预算的手写测试只有合计，没有组件分项；下表测试分摊是本次为排期提出的设计分配，保留原合计，不是补造历史测量值。**
+
+| 新增能力 | 责任包 | 新增核心 kLOC | 新增手写测试 kLOC |
+| --- | --- | --- | --- |
+| I1 内存初始化位图 | Compiler | 5–10 | 4–8 |
+| I1 内存初始化位图 | UMD | 3–6 | 3–6 |
+| I1 内存初始化位图 | 功能级 cmodel（单列） | 1–2 | 1–2 |
+| S1 基础 barrier/mask | Compiler | 5–10 | 5–10 |
+| S1 基础 barrier/mask | UMD | 2–4 | 2–4 |
+| S1 基础 barrier/mask | 功能级 cmodel（单列） | 2–4 | 2–4 |
+| R1 shared HB/FSM | Compiler | 11–22 | 11–22 |
+| R1 shared HB/FSM | UMD | 3–7 | 3–7 |
+| R1 shared HB/FSM | 功能级 cmodel（单列） | 3–6 | 4–7 |
+| R1 扩至 global/跨 kernel | Compiler | 8–16 | 8–17 |
+| R1 扩至 global/跨 kernel | UMD | 5–11 | 5–12 |
+| R1 扩至 global/跨 kernel | 功能级 cmodel（单列） | 2–4 | 3–5 |
+| 重复访问/碰撞模式 | Compiler | 6–12 | 5–10 |
+| 重复访问/碰撞模式 | UMD | 2–4 | 2–5 |
+| 重复访问/碰撞模式 | 功能级 cmodel（单列） | 1–3 | 1–3 |
+
+| 新增能力 | 核心合计 kLOC | 手写测试合计 kLOC | 边界 |
+| --- | --- | --- | --- |
+| I1 内存初始化位图 | 9–18 | 8–16 | 读写/copy 的字节定义性、并发位合并、copy/memset 生效和 Host 边界；不含值级寄存器 MSan。 |
+| S1 基础 barrier/mask | 9–18 | 9–18 | 参与集合、barrier 状态和 phase；复杂 async/cluster 另按范围扩展。 |
+| R1 shared HB/FSM | 17–35 | 18–36 | shared 访存历史、层次同步与 scope/ordering、clock 容量和前进性。 |
+| R1 扩至 global/跨 kernel | 15–31 | 16–34 | 在前一 R1 上扩 global、跨 block/kernel 和 queue/event/graph 边；不含全部跨设备内存模型。 |
+| 重复访问/碰撞模式 | 9–19 | 8–18 | 受控重复访问、延迟/碰撞观测及内存语义反例；报告概率与窗口限制。 |
+
+多个 checker 可复用事件、符号化和基础状态表，因此不能要求上表全选后机械相加。A 的基础事件入口或已有位图原语可以成为 I1/S1/R1 的复用资产，只有对应完整工作包已经满足验收范围时才能扣除；不能把“观察到了 barrier”当作完整 synccheck，也不能把功能模型按顺序执行一次当作完整 racecheck。
+
+值级 MSan、通用跨 CPU/GPU TSan、完整 A2 provenance 与多调度探索须另作语义设计和工作分解；本章不提供伪精确总量。
+
+### 16.8 KMD 条件增强与其他前提缺口
+
+#### 16.8.1 KMD 只为缺失契约追加
+
+下列是对**既有可用 KMD**做有限扩展的设计区间。先逐接口确认现有能力；足够时该包为 0，只在确有缺口时计费。各包核心/测试均为净新增，功能和文件边界必须在任务分解时再次去重。
+
+| 条件包 | 新增核心 kLOC | 新增手写测试 kLOC | 实现范围 | 测试范围 | 前提与去重边界 |
+| --- | --- | --- | --- | --- | --- |
+| K-M 内存/metadata 映射 | 3–7 | 3–8 | GPUVA 保留/映射权限/稀疏预映射或受控映射服务及资源回收。 | 映射冲突、权限、生命周期、失败注入和并发回收。 | 仅扩展已有 GPUVM/页表设施；不新建 GPU 内存管理器，不重复 UMD 的 shadow 分配策略。 |
+| K-E 故障/完成证据 | 2–4 | 2–5 | dispatch/context 标识、故障记录、失败完成与用户态回传。 | fault 与完成竞态、错误归因、reset 后旧完成、缓冲溢出。 | 已有队列和中断设施；不含 K-A 的取消状态机，不重复 UMD 的报告格式/符号化。 |
+| K-A 安全 abort 的 KMD 部分 | 2–5 | 2–5 | 调用已有硬件/固件取消能力、隔离受影响 dispatch/context、确认停止后清理。 | 取消与完成竞态、残留 DMA、队列阻塞、隔离及资源安全回收。 | 硬件支持已存在；这里仅计 KMD。固件尚需接线时另见正文。 |
+| K-X 正规可执行代码接口 | 1–3 | 1–3 | 既有加载/调试设施中补受控代码版本、可执行映射或资源校验接口。 | 权限、版本、并发加载卸载、错误拒绝与兼容。 | 不重计 UMD 的 decoder、CFG、patch cache 或 branch relocation；不以此预算承诺绕过既有安全策略。 |
+| K-F F 专属状态契约 | 3–7 | 3–8 | 已有 tag/bounds 等硬件资源的 context 保存恢复、失效及能力接口。 | context switch、失效顺序、旧身份残留、资源隔离。 | 排除 K-M 的映射、K-E 的故障输送、K-A 的 abort；不含 RTL/DV/新硬件。 |
+
+
+#### 16.8.2 每个方案的基线与条件附加
+
+下表右侧仅表示“列出的相关能力恰好全部缺失，但仍符合包内前提”时的组合上/下界，**不是每条路线的默认附加费**。实际增量等于所缺子集之和；B/C/D/E 共享包，E 尤其只能取契约并集。
+
+| 路线 | 已有契约时核心 | 已有契约时测试 | 可触发的缺失能力包 | 所列全缺时核心 | 所列全缺时测试 |
+| --- | --- | --- | --- | --- | --- |
+| A | 0 | 0 | 独立模型夹具无需 KMD | 0 | 0 |
+| B | 0 | 0 | K-M＋K-E＋K-A | 7–16 | 7–18 |
+| C | 0 | 0 | K-M＋K-E＋K-A＋K-X | 8–19 | 8–21 |
+| D | 0 | 0 | K-M＋K-E＋K-A | 7–16 | 7–18 |
+| E | 0 | 0 | K-M＋K-E＋K-A＋K-X | 8–19 | 8–21 |
+| F | 0 | 0 | K-M＋K-E＋K-A＋K-F | 10–23 | 10–26 |
+
+K-A 的 KMD 核心 2–5、测试 2–5，是将原“安全 dispatch/context abort 软件接线核心 4–10、测试 4–10”规划为内核驱动与外部固件两个责任包。若固件也尚未接通，再列**固件接线核心 2–5、测试 2–5**，两者合计仍为 4–10/4–10。这个二分是本次设计估算，不是原预算已有实测拆分。若固件已完成，只计缺失的 KMD 部分；用户态错误消费已在 UMD 基础范围时不得再加。若硬件取消能力本身不存在，上述区间不适用，先验证停止/隔离的可行性。
+
+K-F 同样只为未具备的驱动状态契约计费。F 的基础预算已经包含 UMD 资源初始化与功能 cmodel 新检查语义，不能再将这些实现搬入 K-F 后重复收费。
+
+#### 16.8.3 保留的其他条件项
+
+| 缺失前提 | 核心 kLOC | 手写测试 kLOC | 处理边界 |
+| --- | --- | --- | --- |
+| 成熟机器码重写基础不存在 | 15–35 | 15–40 | 仅补 decoder/encoder、语义与基础重定位/资源接口；剔除 C 已计的 CFG、patch 管理和缓存。 |
+| GPUVA/metadata 映射契约可通过既有设施有限扩展 | 采用 K-M | 采用 K-M | 若没有可行地址空间/页表或权限机制，先做可行性原型；不能默认 K-M 能新建整套 GPUVM。 |
+| 多 GPU/IPC/外部导入为首版硬需求 | 单独分解 | 单独分解 | 规范对象身份、别名、一致性和跨设备时序；现有 API 规模与保证未确定，不给统一追加数。 |
+| F 需要新硬件或大幅新增固件 | 不纳入软件表 | 不纳入软件表 | ISA/RTL/DV/性能模型/硅片和超出接线范围的固件另立计划。 |
+| 完整 A2、值级 MSan 或通用跨 CPU/GPU TSan | 单独设计 | 单独设计 | 语义和调度集合尚未冻结，不以 A 或 I1/R1 的基础区间替代。 |
+
+### 16.9 功能 cmodel 与 QEMU 全系统平台分别计费
+
+#### 16.9.1 四种环境不是同一种检测能力
+
+本节的 Q0–Q3 是项目配置定义。QEMU 是否能运行 Host/guest CPU，并不自动意味着能执行目标 GPU kernel；需要先明确 GPU 设备和执行模型实际存在什么。
+
+| 配置 | 定义与能验证的范围 | 平台新增核心 kLOC | 平台新增手写测试 kLOC | 不能据此承诺的能力 |
+| --- | --- | --- | --- | --- |
+| Q0：无目标 GPU 设备 | 已有 QEMU 运行 CPU/guest 的环境；可执行 CPU 侧单元测试。 | 0 | 0 | 没有目标 GPU kernel 执行，也没有 kernel 内访存/sync 检测。 |
+| Q1：不解释 GPU ISA 的设备桩 | 枚举、有限 MMIO/队列、命令格式、模拟完成或故障的协议夹具。 | 2–5 | 2–5 | 假完成或 DMA copy 不能证明 GPU load/store、atomic、mask、barrier 或 sanitizer 检查逻辑正确。 |
+| Q2：已有可执行目标 ISA 的 GPU cmodel 接入全系统 | guest KMD/UMD 提交真实命令，由已有模型执行 kernel；新增设备接线和系统集成。 | 14–28 | 14–30 | 此处只是一次性平台基础，另加路线特有接线；不包含从零编写 GPU 模拟器。 |
+| Q3：已有可用 VFIO/设备直通路径 | guest 驱动向真实 GPU 提交，另做平台验证与诊断接线。 | 3–7 | 4–9 | kernel 检测发生在真实 GPU 及其 sanitizer 上，不是由 QEMU CPU 模拟器完成。 |
+
+Q0 的 0 表示不建设 GPU 平台，不是“零成本拥有 GPU 检测”。Q1 是可选协议原型，不能自动再叠加到 Q2 全额预算；升级 Q2 时，实际复用的设备前端代码须从 Q2 相应包扣除。Q3 的范围是一套既定 guest OS/设备组合与已选 B–F 真机路径的验证接线；它不提供 A 所需的 GPU 模型，不能以设备直通替代 A 的模型执行。Q3 的前提包括已有适用的直通路径、IOMMU/设备隔离、reset 能力和可工作的 guest GPU 驱动；若这些前提尚未成立，3–7/4–9 只覆盖接线与验证，不能报价完整直通使能。
+
+#### 16.9.2 Q2 的一次性平台基础
+
+必须已有能够执行目标 ISA 的 GPU cmodel、可工作的 guest OS 和该 GPU 的 guest KMD/UMD，并有可连接的设备/内存契约。以下只计把现有部分接起来；不包含从零开发操作系统、全新 KMD、完整 GPU 模拟器、目标 ISA 全指令模型或新硬件。
+
+| 平台包 | 核心 kLOC | 手写测试 kLOC | 内容与边界 |
+| --- | --- | --- | --- |
+| 设备前端：MMIO/IRQ/reset | 3–6 | 3–6 | 设备枚举与寄存器、门铃、中断、复位和错误路径；不实现 GPU 指令。 |
+| 队列/DMA/地址空间桥接 | 5–9 | 5–10 | guest 提交队列、DMA 到 guest 内存、现有 GPUVA 翻译/权限接口的连接及完成次序；不重写 GPUVM。 |
+| 现有 GPU cmodel 执行桥 | 3–6 | 3–7 | 命令送入模型、访存回调、执行/停止和完成回调；不复制 A–F 检测器或模型 ISA 实现。 |
+| 已有 guest KMD 集成 | 3–7 | 3–7 | 使既有驱动绑定模型设备、连接已定义契约、启动回归、故障注入及退出清理；不从零开发 KMD。 |
+| **Q2 平台基础合计：一次** | 14–28 | 14–30 | 同一设备/OS/驱动支持范围内共享；多平台移植根据差异另计。 |
+
+guest KMD 的平台适配行与 §16.8 的“新增驱动契约”按修改内容划界：连接一个已存在的接口计在 Q2；实现此前不存在的 KMD 能力计在 K-M/K-E/K-A/K-X/K-F。一个工作包只能归入一处。
+
+因此，基础表的KMD为0不代表选择Q2后所有Guest驱动适配也是0。上表已包含该集成责任包；项目按文件和责任人记账时，可以把其中确属Guest KMD的修改移列到KMD，但总额不变，不能再加同一份代码。
+
+#### 16.9.3 Q2 的路线特有新增与去重
+
+下列都是平台接线/端到端验证增量，检测算法、device 检查库和功能 cmodel 检查实现仍在 §16.3–§16.7 内，只计一次。
+
+
+| 路线 | 路线特有核心 kLOC | 路线特有手写测试 kLOC | 范围 |
+| --- | --- | --- | --- |
+| A | 2–4 | 2–5 | 模型事件与 guest 队列/对象 ID 的关联、停止与报告传回；复用已有 A0/A1 模型检查器。 |
+| B | 2–4 | 3–6 | guest shadow 映射/权限、poison 命令和实际完成、失败归因与多层地址一致性。 |
+| C | 3–6 | 4–8 | guest 模块/重写代码生命周期、执行可见性、patch cache 与原 PC 诊断的全链路接线。 |
+| D | 3–6 | 4–8 | 参数 sidecar、descriptor/epoch、生存期与地址复用跨 guest/UMD/模型边界。 |
+| E | 5–10 | 6–12 | B 接线全量＋D 独有接线＋C 受控子集＋模式切换；不相加 B/C/D 三个全额。 |
+| F | 4–8 | 5–10 | 已有/另计的模型硬件语义与设备资源、metadata 状态、IRQ/fault 和 guest 错误协议连接。 |
+
+| 路线 | Q2 基础＋路线接线：核心 kLOC | Q2 基础＋路线接线：测试 kLOC |
+| --- | --- | --- |
+| A | 16–32 | 16–35 |
+| B | 16–32 | 17–36 |
+| C | 17–34 | 18–38 |
+| D | 17–34 | 18–38 |
+| E | 19–38 | 20–42 |
+| F | 18–36 | 19–40 |
+
+E 的平台特有增量按 B 接线核心 2–4/测试 3–6，加 D 独有 1–2/1–2、C 子集 1–2/1–2、跨模式交接 1–2/1–2，合为核心 5–10、测试 6–12。Q2 平台基础只加一次。
+
+**组合公式：** 选定路线的含功能 cmodel 研发参考包＋实际缺失的 KMD 能力净增量＋所选平台的净增量＋所选额外 checker 的去重增量。外部固件、硬件和其他已声明的前置项目单列。
+
+例如 B：基础参考包核心 27–53、测试 23–44；选择 Q2 时加平台基础与 B 接线核心 16–32、测试 17–36，合为核心 **43–85**、测试 **40–80**。若 K-M/K-E/K-A 又确实全缺，且符合各包前提，再加核心 7–16、测试 7–18，得核心 **50–101**、测试 **47–98**；固件缺口另列。不能先加含模型的 B，再把同一个模型随 Q2 重计一次。
+
+Q2 的通过说明已实现模型语义与指定 guest 栈的集成结果，不自动证明全部真机调度、真实 cache/一致性时序或性能。Q3 则使用真实 GPU，仍需按真实软件栈与工具覆盖范围解释结果。
+
+### 16.10 将区间转为项目预算与算术校验
+
+建议以两周左右技术摸底收集 opcode/访存类型、kernel 与 allocator/API 数量、已支持的 patch 模式、module ABI 数量、现有 KMD 契约、模型与真机差异，以及是否已有 Q2/Q3 平台。先做可运行的最小链路，再按“接口、算法、失败路径、兼容、验证”建立工作包和责任人；人月需要结合团队经验与审查/验证成本估计，不用统一的每天写多少行换算。
+
+本章数值的复核规则为：
+
+- Compiler 新区间＝原 Compiler＋原 Device runtime；UMD 新区间＝原 Host runtime＋UMD＋原 Tooling；功能 cmodel 保留原项；KMD 基线为 0。
+- 三生产组件小计＝Compiler＋KMD＋UMD；含模型参考包＝三生产组件小计＋功能 cmodel；从 sanitizer 零起点总量＝P＋路线增量。
+- E＝P＋B＋D 在 B 上的独有新增＋C 受控子集＋跨模式集成；共享 KMD 能力、Q2 基础和模型检查器均只计一次。
+- 区间相加采用 `[a,b]＋[c,d]＝[a＋c,b＋d]`；核心与手写测试独立相加，再检查核心＋测试总量。
+
+[配套算术数据](estimates-v1.2.json)保留了原五项矩阵、重组后的三组件/模型矩阵、逐路线总量、E 分项、KMD 条件包、额外 checker 与 QEMU 组合。程序化复核只说明重组与加总一致，不是实现功能、性能或工程量预测已经得到验证。
 
 ## 17. 性能、显存和可观测性设计
 
@@ -1168,7 +1648,9 @@ D 独有新增的五组件核心分别为 14–26／8–15／4–8／2–4／1�
 ### 17.5 推荐的性能报告模板
 
 ~~~text
-版本：compiler / runtime / UMD / firmware / cmodel / ISA
+版本：compiler / device-check-library / KMD / UMD / firmware / ISA
+执行环境：native / functional-cmodel / QEMU-Q2 / QEMU-Q3
+模型环境另记：QEMU / GPU-model / Guest-kernel / Guest-KMD / CPU-accelerator
 编译：优化级别、sanitizer模式、debug配置、LTO、编译时间
 工作负载：名称、输入hash、数据大小、launch数、并发队列
 基线：未插桩；诊断NOP；完整检查（分别记录）
@@ -1189,6 +1671,8 @@ D 独有新增的五组件核心分别为 14–26／8–15／4–8／2–4／1�
 **例子的地位与使用方式。** 除明确标注的规范事实外，本章是【工程建议】的原创教学和验收设计，尚未在用户 GPU 上编译或运行。代码采用 C/CUDA 风格伪代码及少量 ISA 风格操作，`alloc`、`kernel`、`consume`、`thread_id`、受控 allocator 和 metadata API 都表示相应语义，不是声称用户 SDK 已有同名接口。源级例子中的非法访问会涉及未定义行为；真实验收需要确认目标访问在优化后确实存在，必要时用受控 IR/MIR/ISA 测试补充，不能要求运行时报告一个已被编译器消除的操作。
 
 未另外说明时，分配成功、对象已发布且具有例中声明的访问权限；用于隔离单一错误的初始化和队列同步必须执行。一个场景里的错误版、修复版和其他变体应独立运行，不能让前一次非法操作污染后一次判断。访问范围统一使用半开区间 `[addr, addr+width)`；实际实现使用防整数溢出的等价比较，不直接信任可能回绕的 `addr+width`。
+
+**本版组件口径。** 各例中的deviceRT是编译器交付包内的设备检查库；Host runtime/loader/tooling在UMD交付包内分层。每例新增的KMD及功能级cmodel/QEMU支持关系统一列于[第18.29节](#scenario-platforms)，需要与例中检测前提一同阅读。
 
 **路线和检查器是两个维度。** A 是 cmodel，B 是 LLVM shadow，C 是二进制插桩，D1/D2 是对象 bounds／时间身份，E 是混合方案，F 是硬件辅助。它们决定事件从哪里采集、元数据怎样提供；init、race、sync 仍需各自的状态和分析引擎。例如“用 LLVM 插入 shared 访存事件”可以作为 race detector 的入口，但现成的地址 shadow 不会因此自动获得 happens-before 检测能力。以下只列与该例有关的可行路线，不把六条路线都写成无条件支持。
 
@@ -1915,6 +2399,47 @@ kernel void error_then_barrier(int32_t* p, int n) {
 
 **修复、合法反例与预期报告。** 修复应用下标后，在工具资源充足时应正常完成；保持应用合法但注入 metadata 失败时，应报告 `tool-resource-exhausted`，不能伪装成应用 OOB。错误程序即使日志满，也应保留失败状态并报告记录丢失；触发 abort 后确认其他任务的影响范围符合声明。验收分别检查资源耗尽、日志丢失和 barrier 终止，不能只用“进程退出了”作为通过证据。
 
+
+
+<a id="scenario-platforms"></a>
+
+### 18.29 场景与三组件、双平台的对应关系
+
+本表是对S01～S28的【工程建议】补充。各例原有compiler/deviceRT职责归入编译器交付包，Host runtime/UMD/tooling职责归入UMD交付包；KMD职责单独列出。表中“模型能检”均以相应检查器和输入已经实现为前提，不表示裸cmodel自带这些功能。Q2使用第7.7节定义的可执行目标ISA的GPU模型；Q0/Q1不能替代它。Q3是否检出取决于直通真机上的实际检查器，不增加模型级可见性。
+
+| 场景 | 功能级cmodel需要什么 | Q2新增系统验证／修改 | KMD应提供什么，不能替代什么 |
+|---|---|---|---|
+| [S01](#case-s01) 头／尾越界 | 实际访问范围、逻辑分配长度和无效区；或执行B检查 | Guest分配与GPUVA/shadow映射接通，错误回传 | 有效映射与权限；页／BO边界不能代替逻辑对象长度 |
+| [S02](#case-s02) 宽访问 | 全部有效字节和跨granule判断 | DMA／地址翻译不可截短目标访问，保留GPU原始宽度 | 映射与fault访问范围；不只依赖一次页命中 |
+| [S03](#case-s03) 对齐 | opcode自身要求和真实地址；IR承诺另查 | GPU模型按ISA处理，不能以Host可读写为正确标准 | 转交已发生的对齐fault及上下文；若硬件不报则依赖检查器 |
+| [S04](#case-s04) A进入live B | D1产物或独立A2来源跟踪 | 传递原对象sidecar，不能按Guest/GPU地址查当前BO代替来源 | BO/GPUVA映射；通常不知道该指针原本来自A |
+| [S05](#case-s05) 子分配／view | 子对象和stride语义，或执行相应D检查 | Guest框架/UMD注册子分配，区分父BO和子生命周期 | 支撑父映射；同一BO中的tensor边界由上层登记 |
+| [S06](#case-s06) Shared | launch/block/对象布局与实际访存 | 接通launch参数和GPU内部shared模型 | 调度资源配置；无法从外部DMA自动观察每个shared访问 |
+| [S07](#case-s07) Private/stack | thread/frame/对象身份及返回事件 | 执行插桩frame布局和scratch配置，核验上下文隔离 | backing映射及资源管理；scratch BO有效不证明栈对象有效 |
+| [S08](#case-s08) 未复用UAF | free生效事件与poison状态 | Guest队列顺序驱动metadata失效，再验证回传 | 完成／故障与映射生命周期；不以Host调用时间判失效 |
+| [S09](#case-s09) 复用UAF | 保存旧identity并与新epoch比较 | 验证Guest内存池复用、sidecar与映射重用相互独立 | 当前BO句柄或GPUVA不能重建旧指针身份 |
+| [S10](#case-s10) Invalid free | allocator/owner及基址契约输入 | 运行真实Guest用户态释放路径，观察ioctl是否应发生 | 校验内核句柄和权限；逻辑子分配错误可能在UMD已被拦截 |
+| [S11](#case-s11) Double free | 同一对象生命周期和释放事件去重 | 两次Guest释放与KMD资源引用、错误返回一致 | 内核资源引用计数与拒绝非法句柄；不混同不同allocator的逻辑ID |
+| [S12](#case-s12) Leak | 明确检查点和逻辑活跃账本 | 在约定检查点、退出／context自动回收前保存UMD逻辑账本；退出／销毁后另核对内核资源清理 | 实际BO/context清理；OS自动回收不抹去程序检查点的逻辑泄漏 |
+| [S13](#case-s13) Init | byte定义性、真实store及copy来源传播 | copy engine与Guest命令完成驱动位图更新 | DMA/copy完成和失败；不凭分配成功认定内容已定义 |
+| [S14](#case-s14) Shared race | byte冲突、线程身份、barrier HB或适用FSM | 保持GPU同步模型，核对launch/resource配置 | 不提供GPU内部逐线程HB；驱动job按序也不消除kernel内部race |
+| [S15](#case-s15) Global race | atomic宽度、scope/order及冲突历史 | GPU全grid语义与Guest提交一致，禁止检查器隐式串行化 | context/映射与外部同步；不能用每次DMA发生先后代替语言HB |
+| [S16](#case-s16) 跨queue race | 多queue/event图和GPU访问历史 | 验证Guest UMD到KMD提交依赖，记录执行与完成 | 真实依赖与完成fence；不得把Host提交先后补成依赖 |
+| [S17](#case-s17) Barrier/phase | live参与集合、完整phase来源与等待依赖 | 模型违规→IRQ/故障→Guest终止链；注入与真实检测分开 | 有效终止／reset和错误通知；超时不等于证明phase错误 |
+| [S18](#case-s18) Subgroup mask | 动态lane/mask/exit及目标匹配规则 | GPU模型保留参与集合，Guest回传原PC与mask | 故障传播；看不到mask时不能自行补造诊断 |
+| [S19](#case-s19) Async copy | copy group、完成、barrier phase与消费事件 | GPU内部异步引擎与系统DMA事件分别接入 | 外部copy引擎完成只说明该引擎，不代替kernel内部wait语义 |
+| [S20](#case-s20) Async free | allocation/free生效和访问依赖 | 跑真实Guest队列、等待及内存池复用，核对开始／回收边界 | 提交完成、回收与错误证据；不擅自将free提交等同于全部访问失效 |
+| [S21](#case-s21) Atomic越界 | 原子实际足迹、CAS成功/失败语义 | GPU模型保持原子性；shadow/descriptor和权限可达 | 原子故障及映射；不能用原子指令本身证明地址正确 |
+| [S22](#case-s22) Mask/EVL | 只观察实际启用lane/元素 | 检查与GPU访存mask一致，避免QEMU桥接层强行全向量访问 | 无需逐元素新接口；通常不拥有向量EVL语义 |
+| [S23](#case-s23) 权限／资源 | 资源格式、维度、坐标和边界模式 | Guest资源描述符/权限传入GPU模型，复现合法clamp | 映射权限与资源授权；padding和合法坐标需上层/ISA信息 |
+| [S24](#case-s24) CPU/GPU别名 | 规范对象、CPU事件和系统同步模型 | 关联Guest CPU、GPU与外部映射；KVM下另有CPU观测方案 | 共享BO、导入映射、权限及外部同步；不能单凭同址推断所有权 |
+| [S25](#case-s25) Atomic pointer | 指针值/身份配对协议；独立oracle需A2 | 同时验证Guest库边界与GPU原子协议；完整保存发布序号 | 只提供分配生命周期和映射，不能替代原子发布身份 |
+| [S26](#case-s26) 库/JIT | 支持实际生成ISA；覆盖清单与原PC映射 | Guest loader执行compile/patch选择，Guest KMD合法加载 | 正规代码加载、可执行映射与资源校验；不默认允许任意patch |
+| [S27](#case-s27) Graph replay | 执行ID、对象epoch及graph依赖 | Guest捕获/重放与设备侧launch接通，不能只盯Host回调 | 提交和资源生存期；每轮launch不自动产生新allocation身份 |
+| [S28](#case-s28) 工具失败／终止 | 故障注入、错误状态持久化和模型停止 | 验证真实Guest报告、fence/IRQ、abort/reset、资源清理 | 可靠的终止范围和完成语义；只有queued-job cancel不够 |
+
+**测试结果必须说明检查发生的位置。** 在GPU模型hook检出S01是路线A的证据；在同一模型上运行B插桩产物并由GPU检查库检出，是B的功能执行证据。若二者共享同一检查逻辑，不能将两次成功算作独立交叉验证。Q2的KMD测试还必须实际走Guest KMD的对应路径；在设备模型直接注入一个完成码，只验证该码之后的路径。
+
 ---
 
 <a id="validation"></a>
@@ -1927,7 +2452,7 @@ kernel void error_then_barrier(int32_t* p, int n) {
 |---|---|---|
 | V0：编译语义 | LLVM IR、MIR、反汇编和覆盖清单 | 检查没有被消除，新增目标访存可见 |
 | V1：最小错误与合法反例 | 每个能力一个确定触发样例及无错对应样例 | 误报／漏报、边界和整数溢出 |
-| V2：cmodel／真机差分 | 相同输入、相同对象和命令语义 | 模型、driver和真实ISA的一致性 |
+| V2：cmodel／QEMU／真机对照 | 相同语义用例，分别记录GPU执行与Guest驱动证据 | 区分共享模型和独立oracle，核对真实KMD路径 |
 | V3：真实应用与规模 | kernel库、框架内存池、长时间并发 | 性能、内存、时序、诊断可操作性 |
 
 公开 benchmark 用来补充 V1/V3，不取代目标 ISA 的语义验证。[P03][P06]
@@ -2008,6 +2533,24 @@ GMSBench 中不同 checker 使用不同适用分母，HiRace 的 code/input 组�
 
 误报和漏报调查应先缩小输入／opcode，再使用 cmodel、反汇编和时间线定位。不能仅因为“加同步后错误消失”就认定原检测器正确。
 
+### 19.7 功能级cmodel、QEMU全系统与真机的分层验收
+
+【工程建议】使用相同S01～S28输入与规范对象定义，分开保留以下证据。每项记录所用路线、checker和支持子集，不以环境名称代替检测能力。
+
+| 执行路径 | 可以验收的主要结果 | 必须保留的证据 | 不可据此宣称 |
+|---|---|---|---|
+| 独立功能级cmodel | GPU指令语义、模型侧A检查或B～F产物执行；小规模可控反例 | ISA/model版本、对象与命令输入、实际访存/同步轨迹、原始PC、oracle来源 | 真正运行了KMD；涵盖全部调度；真机性能已经达标 |
+| Q2全系统GPU模型 | Guest应用→UMD→KMD→设备模型→GPU执行→故障/报告的系统闭环 | Guest内核/KMD/UMD版本、QEMU及GPU模型版本、CPU accelerator、映射/队列/IRQ/fence关联 | 默认拥有硬件缓存/弱内存/精确时序；模型成功等同真机成功 |
+| 真机原生或Q3直通 | 实际硬件的访问检查、驱动回传、资源和性能表现 | 硬件/固件版本、Host/Guest驱动与VFIO配置、真实指令和错误记录、时间与资源原始数据 | Q3获得GPU模型内部hook；一次运行证明所有输入无错 |
+
+QEMU与独立cmodel复用相同GPU模型时，系统接入路径得到更多验证，但GPU语义oracle并未因此独立。应保留受控IR/MIR/ISA夹具、独立小规模参考实现和真机对照，不把同一模型的两种启动方式当成两个相互独立的真值来源。
+
+建议为现有错误协议增加 `execution_backend`（`functional-model`、`qemu-emulated-gpu`、`qemu-vfio`、`hardware-native`）、`cpu_accelerator`、Guest/Host KMD版本、GPU model build ID、上下文/地址域、对象/BO关联、命令与完成ID，以及“真实检测／故障注入／预期拒绝”标记。地址不应只记录一个无上下文的整数。
+
+**KMD专项验收至少覆盖四组正反例。** 第一，metadata/报告缓冲映射成功与映射失败，检查器失败不能回退成clean；第二，队列依赖正确与缺失，完成通知不能早于实际完成；第三，真实运行中的错误及abort/reset，区分未执行job取消、context终止与整设备重置的影响范围；第四，导入/alias/context销毁，确认对象生命周期、引用清理和错误回传不重复。Q1可用于这些协议的局部故障注入，但不替代Q2或真机产生GPU内部违规的证据。
+
+**可复现与性能的口径。** 若选择QEMU record/replay，目标GPU设备模型的异步事件、内部状态和外部输入也必须纳入可重放契约；保存Guest RAM并不自动保存模型的pointer identity、race历史或挂起copy。若暂未实现完整快照，就显式禁用该能力或从干净状态重跑。QEMU icount不是微架构周期模型，模型墙钟时间也不是目标GPU slowdown；真机性能仍按第17章的统一基线测量。[Q04][Q05]
+
 <a id="roadmap"></a>
 
 ## 20. 分阶段研发计划和团队安排
@@ -2018,24 +2561,26 @@ GMSBench 中不同 checker 使用不同适用分母，HiRace 的 code/input 组�
 
 | 阶段 | 范围 | 建议投入 | 预计跨度 | 退出证据 |
 |---|---|---|---|---|
-| M0 能力摸底 | GPUVA、ISA、abort、allocator、现有代码覆盖 | 2–3人 | 2–3周 | 接口清单、实际限制、预算修订 |
+| M0 能力摸底 | 三组件契约、GPUVA/ISA/abort、allocator、cmodel及Q0～Q3现状 | 2–3人 | 2–3周 | 接口清单、实际限制、预算修订 |
 | M1 窄原型 | 最小P＋B global＋A小用例oracle | 3–4人 | 6–10周 | 真机报错、确认B的地址reuse边界、首轮性能 |
-| M2 内存检查内测版 | P＋B完善、shared/private、API、诊断与覆盖 | 5–7人 | 再10–16周 | 支持矩阵闭合、应用样例、资源可控 |
+| M2 内存检查内测版 | P＋B完善、KMD契约回归、shared/private、API、诊断与覆盖 | 5–7人 | 再10–16周 | 支持矩阵闭合、应用样例、资源可控 |
 | M3 对象语义 | D1先行，再做受控D2与pool/view | 5–8人 | 16–28周 | 相邻对象／旧指针／atomic边界通过 |
 | M4 独立checker | init、sync、shared race逐项推进 | 3–6人/工作流 | 每项8–16周量级 | 各自覆盖、误报和性能报告 |
 | M5 生态补充 | E中binary fallback与JIT/外部库 | 4–6人 | 10–18周 | 混合边界无静默漏检 |
 | M6 硬件研究 | profile＋cmodel／时序模型＋ISA/DV方案 | 跨架构团队 | 单独排期 | 与软件基线的同口径收益 |
 
-M1 是有意缩小的原型，不能把 M1 的周期或代码量当成第16章完整 P＋B 的承诺。M3 和 M4 部分工作可并行，但公共元数据和 ABI 需要稳定版本。
+M1 是有意缩小的原型，不能把 M1 的周期或代码量当成第16章完整 P＋B 的承诺。M3和M4部分工作可并行，但公共元数据和ABI需要稳定版本。若Q2尚未具备，先独立完成第16章的平台基础包；上表原有日历区间没有隐含包含从零建设QEMU GPU全系统平台的工期。
 
 ### 20.2 团队职责建议
 
 | 角色 | 核心责任 |
 |---|---|
 | LLVM负责人 | 插桩时机、优化交互、目标指令覆盖、provenance |
-| 设备runtime负责人 | shadow／对象表、SIMT安全、错误通道和性能 |
-| UMD/runtime负责人 | 生命周期、queue/graph、模块、外部资源 |
-| cmodel/架构负责人 | ISA语义、独立oracle、终止和新硬件可行性 |
+| 编译器包内设备检查库负责人 | shadow／对象表、SIMT安全、错误通道和性能 |
+| KMD负责人 | BO/GPUVA、提交完成、fault、abort/reset、上下文与内核接口回归 |
+| UMD/runtime负责人 | 逻辑生命周期、queue/graph、模块、外部资源及用户态报告 |
+| 功能级cmodel/架构负责人 | GPU ISA语义、独立oracle、调度和硬件检查功能模型 |
+| QEMU全系统平台负责人 | GPU设备前端、地址/DMA/IRQ、Guest UMD/KMD接入、故障注入及状态管理 |
 | 测试与性能负责人 | 反例、真实workload、可复现数据和回归 |
 | 工具链集成人员 | CLI、符号化、安装、CI与用户文档 |
 
@@ -2059,6 +2604,9 @@ M1 是有意缩小的原型，不能把 M1 的周期或代码量当成第16章�
 | 二进制重写覆盖特殊指令不全 | 假clean或错误结果 | opcode清单、拒绝未知指令、差分执行 |
 | 性能优化偷偷降低覆盖 | 看似加速但工具退化 | 性能与覆盖同时验收，采样模式单列 |
 | 模型与真机内存语义不一致 | oracle不可信 | 目标litmus校验、事件差分、保留分歧 |
+| QEMU设备桩被误作完整GPU模型 | kernel未执行却报告通过 | Q0～Q3能力声明、GPU实际访存与checker位置证据 |
+| KMD只取消未运行job，却承诺运行中abort | 错误后挂死或扩大reset影响 | 分别验证queued cancel、dispatch/context abort和device reset [K01][K02] |
+| Guest地址、GPUVA与Host指针混用 | 错映射、误报、模型越界 | 显式地址域、上下文和转换链，使用声明的QEMU内存接口 [Q03] |
 | 把论文原型当可直接移植软件 | 计划低估、关键组件不可获得 | 核验artifact、实现开放范围和依赖 [P09] |
 | 追逐最低平均overhead | 忽略长尾和实际业务 | 使用自己的应用分布与端到端基线 |
 | 过早设计硬件 | 芯片投入与真正瓶颈错位 | 软件profile先证明需求 |
@@ -2075,12 +2623,14 @@ M1 是有意缩小的原型，不能把 M1 的周期或代码量当成第16章�
 4. 全部scalar/vector/atomic/async/tensor访存指令及修饰符。
 5. 原子宽度、memory order/scope和支持的同步原语。
 6. Host分配、设备分配、pool、VMM、managed、IPC、peer、图和JIT API清单。
-7. UMD／KMD／固件可提供的终止、fault、映射和完成证据。
-8. cmodel是功能模型还是时序模型；能否表达多调度和弱内存。
+7. KMD的OS/驱动架构、BO/GPUVA/导入接口、可执行代码加载、依赖与完成fence、fault精度，以及queued cancel、运行中abort、context/device reset的真实能力。
+8. 功能级cmodel已有的ISA/地址空间/atomic/async/sync覆盖、是否仅顺序调度；是否能够运行设备检查库，以及独立oracle的hook和身份输入。
 9. 真正要支持的语言／框架与闭源模块比例。
 10. 第一版是开发者工具、CI工具，还是更强的运行时防护需求。
 11. 必须支持的地址空间和错误类型，特别是对象／子对象与复用UAF。
-12. 可投入团队、可用真机、允许的显存和性能预算。
+12. QEMU平台属于Q0/Q1/Q2/Q3哪类；CPU accelerator、目标GPU设备模型、PCI/MMIO或其他总线接口、GPU MMU/VRAM/DMA/IRQ、Guest驱动、快照/重放和故障注入现状。
+13. Q2是否复用同一cmodel、地址域如何转换、Guest/Host KMD边界；Q3是否具备IOMMU隔离与实际设备直通条件。
+14. 可投入团队、可用真机、允许的显存和性能预算；明确三组件、模型、QEMU平台及硬件项目各自负责人。
 
 回答这些参数后，应优先修订第16章的估算和第20章排期，再进入具体实现设计。本轮结论已经足以决定首个原型的方向：公共P＋真机B＋独立A校验，以及明确预留D的对象身份协议。
 
@@ -2219,6 +2769,29 @@ M1 是有意缩小的原型，不能把 M1 的周期或代码量当成第16章�
 - 已核：address spaces、memory model和目标执行约定相关内容。
 - 用途：成熟GPU后端的目标语义参照；不能直接复制其编号与硬件假设。
 
+下列四条均为Linux内核官方在线文档，访问日期为2026-10-20；已阅读所列章节。未检查用户实际KMD、固件、ioctl实现或硬件，因此本文没有把通用Linux能力登记成用户平台既有能力。在线文档可能持续更新，落地实现应固定到所采用内核／驱动版本。
+
+
+**[K01] The Linux Kernel Documentation. DRM Memory Management.** [官方文档](https://docs.kernel.org/gpu/drm-mm.html)。已读GEM职责、DRM GPUVM Overview、GPU Scheduler backend callbacks；支持BO／GPUVA关系、驱动特定接口、`run_job`／`cancel_job`边界。由此提出的sanitizer职责划分属于工程推导。
+
+**[K02] The Linux Kernel Documentation. Userland interfaces — Device reset.** [官方文档](https://docs.kernel.org/gpu/drm-uapi.html#device-reset)。已读Kernel Mode Driver、User Mode Driver与Reporting causes of resets；支持reset责任、fence错误和context状态向用户态传播的约定，不证明某平台具有细粒度abort。
+
+**[K03] The Linux Kernel Documentation. Buffer Sharing and Synchronization (dma-buf).** [官方文档](https://docs.kernel.org/driver-api/dma-buf.html)。已读三种共享／同步原语、exporter／importer与CPU同步说明；支持dma-fence完成语义、共享关系及缓存一致性不等于访问互斥的边界。
+
+**[K04] The Linux Kernel Documentation. VFIO — “Virtual Function I/O”.** [官方文档](https://docs.kernel.org/driver-api/vfio.html)。已读IOMMU group／device API、DMA map示例及IOMMUFD章节；支持设备地址域与Host映射参数的区分。本文不据此宣称QEMU自动提供GPU ISA检查或对象级sanitizer。
+
+下列QEMU官方在线页面访问日期为2026-10-20；本次读取的master文档标示版本11.1.50。master页面会继续更新，工程落地应固定到实际采用的QEMU版本；这不是用户平台的安装版本。
+
+**[Q01] QEMU. Introduction.** [官方文档](https://www.qemu.org/docs/master/system/introduction.html)。本次核验：系统仿真的CPU／memory／device构成、TCG与KVM等accelerator、设备模型及直通边界。
+
+**[Q02] QEMU. QEMU TCG Plugins.** [官方文档](https://www.qemu.org/docs/master/devel/tcg-plugins.html)。本次核验：翻译／执行回调及vCPU上下文；成功load/store后触发memory callback，faulting access不触发该回调。不能据此假设自定义GPU内部执行自动可见。
+
+**[Q03] QEMU. The memory API.** [官方文档](https://www.qemu.org/docs/master/devel/memory.html)。本次核验：MemoryRegion、AddressSpace、MMIO、RAM backing、IOMMU及address_space_rw；为设备DMA与地址域接入提供接口参照。
+
+**[Q04] QEMU. TCG Instruction Counting.** [官方文档](https://www.qemu.org/docs/master/devel/tcg-icount.html)。本次核验：指令计数与虚拟时间；明确不是cycle-accurate，限定system emulation，且与multi-threaded TCG不兼容。
+
+**[Q05] QEMU. Execution Record/Replay.** [官方文档](https://www.qemu.org/docs/master/devel/replay.html)。本次核验：icount依赖、非确定事件、虚拟设备确定性、异步bottom-half接入及状态保存／恢复要求；不证明外接GPU模型已自动满足这些要求。
+
 ### 23.2 原始论文与可复现材料
 
 **[P01] Mohamed Tarek Ibn Ziad, Sana Damani, Aamer Jaleel, Stephen W. Keckler, Mark Stephenson. cuCatch: A Debugging Tool for Efficiently Catching Memory Safety Violations in CUDA Applications.**
@@ -2307,7 +2880,9 @@ Zenodo v1，2026-03-17。DOI：[10.5281/zenodo.19058944](https://doi.org/10.5281
 |---|---|---|
 | 技术负责人做选型 | N02/N05、A01、P01、P04 | 覆盖目标与路线条件 |
 | LLVM后端工程师 | L05/L06、L03、P01、P08 | 插桩点、目标指令清单、身份传播边界 |
-| UMD/runtime工程师 | N03/N08、A01/A02、I01/I02、本文第8/18章 | 分配和命令生效协议、资源预算 |
+| UMD/runtime工程师 | N03/N08、A01/A02、I01/I02、K01～K04、本文第8/18章 | 逻辑分配与内核资源对应、命令生效和报告协议 |
+| KMD工程师 | K01～K04、本文第8/16/19章 | 映射、完成、fault/abort/reset支持清单和新增包 |
+| QEMU平台工程师 | Q01～Q05、K04、本文第7.7/8.8/19.7节 | Q0～Q3能力、Guest接入、地址域和GPU模型边界 |
 | cmodel/架构工程师 | L06、N08/N09、P02/P03、P04、本文第18章 | 模型事件、同步语义、硬件前提 |
 | 测试/性能工程师 | P03、P06、P08、本文第17/18/19章 | 数据集分母、三基线、失败与跳过记录 |
 | 产品化与部署 | N05/N07、I02、M01/M02 | 版本矩阵、已知限制、错误处理策略 |
@@ -2329,6 +2904,8 @@ Zenodo v1，2026-03-17。DOI：[10.5281/zenodo.19058944](https://doi.org/10.5281
 
 1.1版新增实例采用官方页面直接打开、站内链接与页面定位核验，重点复核[N02]的synccheck/async copy/stream-ordered检查、[N03]的device graph launch、[N08]的十个语义章节、[N09]的访存及资源指令，以及[L05]的masked/VP操作。此轮补充没有新增关键词检索统计。新增代码是原创语义示例，未执行CUDA编译、GPU运行或用户平台测试。
 
+1.2版补充核验QEMU官方system/TCG plugin/Memory API/icount/replay文档与Linux kernel的GPU内存、共享缓冲、同步和reset契约。采用直接打开、页面定位及官方站内链接；新预算为工程假设，没有把公开文档当成用户KMD或GPU模型的能力证明。QEMU master文档版本与访问日期见Q01～Q05。
+
 ### 23.5 核验中保留的分歧与限制
 
 - NVIDIA产品总览与新版initcheck章节存在更新不同步，正文采用新版手册和release notes。
@@ -2337,10 +2914,11 @@ Zenodo v1，2026-03-17。DOI：[10.5281/zenodo.19058944](https://doi.org/10.5281
 - GPUArmor作者页面、期刊online日期和文稿模板页眉不同，参考文献采用期刊元数据，性能机制采用已读作者全文。
 - 对MUSA内部插桩机制，当前公开证据不足以确认用户参考描述的具体架构；正文保留可证实的功能，不补写内部实现。
 - cmodel、真机和论文模拟器承担不同证据角色；本文未运行用户硬件，也未声称完成论文复现。
-- 第16章估算已检查组件加总和复用关系；实际预算仍需用户仓库与ISA参数支持。
+- 第16章按三组件重组并保留子项，KMD条件包和QEMU平台包分列；基础参考包与1.1总量可追溯，新增范围未伪装成原预算已包含。实际预算仍需用户仓库和接口支持。
+- Linux DRM/VFIO与QEMU文档给出公开机制参照，不证明用户使用相同内核子系统或已经完成GPU模型。功能语义、Guest系统路径和真机时序的证据必须分开。
 
 ### 23.6 文档完成标准与后续入口
 
-本版已详细说明项目背景和建设目标，覆盖友商、机制、量化结果边界、六条实现路线、compiler／device runtime／UMD／cmodel／tooling改动、代码量、内存性能、验收和阶段计划。第18章的28个场景分别给出触发前提、具体操作或冲突事件、实现选项、组件信息、合法对照及报告边界，并与第19章测试矩阵关联。
+本版已详细说明项目背景和建设目标，覆盖友商、机制、量化结果边界、六条实现路线、编译器（含设备检查库）／KMD／UMD（含用户态工具）的改动，以及功能级cmodel／QEMU全系统平台的支持和修改条件、代码量、内存性能、验收和阶段计划。第18章的28个场景分别给出触发前提、具体操作或冲突事件、实现选项、组件信息、合法对照及报告边界，并与第19章测试矩阵关联。1.2版在每条A～F路线分别列出三组件支持与双平台能力，第18.29节补充逐场景的KMD和平台观测条件。
 
 下一步若进入实现，应以第22章的实际平台参数收敛M0/M1设计；把选定路线转成具体目录、接口、opcode和测试工作包。本版是一份可用于该决策的调研文档，尚不是已实现的GPU sanitizer。
