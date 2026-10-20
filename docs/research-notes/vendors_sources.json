@@ -1,0 +1,276 @@
+{
+  "checked_at": "2026-10-20",
+  "scope": "Primary-source vendor documentation verification",
+  "sources": [
+    {
+      "id": "NV-MANUAL",
+      "title": "Compute Sanitizer — Compute Sanitizer",
+      "url": "https://docs.nvidia.com/compute-sanitizer/ComputeSanitizer/index.html",
+      "version": "Online manual, checked 2026-10-20",
+      "sections": [
+        "Memcheck Tool",
+        "Racecheck Tool",
+        "Initcheck Address Space Selection",
+        "Synccheck Tool",
+        "Compile-time patching",
+        "Memory Footprint",
+        "Error Actions"
+      ],
+      "verified_claims": [
+        "memcheck global/local/shared and atomic coverage",
+        "racecheck shared data hazards",
+        "initcheck global default, shared/all selectable",
+        "only memcheck compile-time instrumentation",
+        "base-and-bounds analysis with fallback",
+        "compilation-unit hybrid instrumentation",
+        "host/device metadata memory footprint and launch loss risk",
+        "stream-ordered allocation lifespan races"
+      ]
+    },
+    {
+      "id": "NV-RELEASE",
+      "title": "Release Notes — Compute Sanitizer",
+      "url": "https://docs.nvidia.com/compute-sanitizer/ReleaseNotes/index.html",
+      "version": "Top release heading Updates in 2026.3; checked 2026-10-20",
+      "sections": [
+        "Updates in 2026.3",
+        "Updates in 2025.4",
+        "Known Limitations",
+        "Known Issues"
+      ],
+      "verified_claims": [
+        "2025.4 introduced compiler instrumentation and shared initcheck",
+        "function-level hybrid within module unsupported",
+        "compile-time memcheck HMM false positives",
+        "JIT requires -Xptxas=-sanitize=memcheck",
+        "compile-time shared accesses with clusters unsupported",
+        "2025.3 removed Maxwell/Pascal/Volta support",
+        "2026.3 added Rubin and Windows-on-ARM support"
+      ]
+    },
+    {
+      "id": "NV-NVCC",
+      "title": "NVIDIA CUDA Compiler Driver 13.4 documentation",
+      "url": "https://docs.nvidia.com/cuda/cuda-compiler-driver-nvcc/",
+      "version": "CUDA Toolkit 13.4 online documentation",
+      "sections": [
+        "4.2.8.29 --fdevice-sanitize (-fdevice-sanitize)",
+        "4.2.9.2 --sanitize (-sanitize)"
+      ],
+      "verified_claims": [
+        "memcheck only supported value",
+        "instrumented binary requires compute-sanitizer with matching tool; unsupported/undefined otherwise",
+        "compiler tools and sanitizer same Toolkit version"
+      ]
+    },
+    {
+      "id": "NV-BLOG",
+      "title": "Better Bug Detection: How Compile-Time Instrumentation for Compute Sanitizer Enhances Memory Safety",
+      "url": "https://developer.nvidia.com/blog/better-bug-detection-how-compile-time-instrumentation-for-compute-sanitizer-enhances-memory-safety/",
+      "version": "Published 2025-12-10; feature starts CUDA13.1",
+      "sections": [
+        "Improving coverage with a compiler analysis",
+        "Caveats and sharp edges to understand up front"
+      ],
+      "verified_claims": [
+        "fat pointers carry pointer/base/bounds",
+        "compiler analysis detects adjacent allocation overrun",
+        "runtime-only improvement claim in some cases, excludes compilation",
+        "extra registers/stack/code, lineinfo preferred to -G",
+        "dynamic execution coverage and timing changes"
+      ]
+    },
+    {
+      "id": "NV-API",
+      "title": "Compute Sanitizer API Reference Manual",
+      "url": "https://docs.nvidia.com/compute-sanitizer/SanitizerApiGuide/index.html",
+      "version": "Online documentation checked 2026-10-20",
+      "sections": [
+        "Overview",
+        "Callback API",
+        "Patching API",
+        "Memory API",
+        "Special cases: Device graph launch"
+      ],
+      "verified_claims": [
+        "callback, patching and memory API split",
+        "host API/resource/sync/launch/copy/memset events",
+        "device patches PC/address/accessSize/flags",
+        "callback reentrancy and one-subscriber constraints",
+        "no host callback for device-launched graph; dedicated graph data"
+      ]
+    },
+    {
+      "id": "NV-CUCATCH",
+      "title": "cuCatch: A Debugging Tool for Efficiently Catching Memory Safety Violations in CUDA Applications",
+      "url": "https://research.nvidia.com/publication/2023-06_cucatch-debugging-tool-efficiently-catching-memory-safety-violations-cuda",
+      "version": "PLDI; publication date 2023-06-19",
+      "sections": [
+        "Abstract",
+        "Publication Date"
+      ],
+      "verified_claims": [
+        "compiler instrumentation + driver support",
+        "paper reports 19% average slowdown on its experiment set"
+      ],
+      "caution": "This paper metric is not a CUDA13.1/13.4 Compute Sanitizer product performance guarantee."
+    },
+    {
+      "id": "AMD-ASAN-724",
+      "title": "Using the AddressSanitizer on a GPU — llvm-project 22.0.0 Documentation",
+      "url": "https://rocm.docs.amd.com/projects/llvm-project/en/docs-7.2.4/conceptual/using-gpu-sanitizer.html",
+      "version": "ROCm7.2.4; banner identifies7.13.0 as technology preview and7.2.4 for production",
+      "sections": [
+        "Compiling for ASan",
+        "ASan instrumented ROCm libraries",
+        "Preparing to run an instrumented application",
+        "Runtime overhead",
+        "Runtime reporting",
+        "Known issues with using GPU sanitizer"
+      ],
+      "verified_claims": [
+        "-fsanitize=address -shared-libsan -g and xnack+",
+        "xnack- produces uninstrumented GPU code with warning",
+        "HMM and HSA_XNACK=1",
+        "correct instrumented ROCm runtime needed for reports",
+        "load/store/atomic shadow checks",
+        "finite redzone limitations, private/stack uninstrumented, LDS modeled global, NULL shadow not poisoned",
+        "GPU report single frame plus lanes/addresses"
+      ]
+    },
+    {
+      "id": "AMD-LLNL",
+      "title": "Using El Capitan Systems: Debugging Tools",
+      "url": "https://hpc.llnl.gov/documentation/user-guides/using-el-capitan-systems/using-el-capitan-systems-debugging-tools",
+      "version": "Current page checked2026-10-20; ASan examples explicitly tested with rocmcc/7.0.0; no individual section date",
+      "sections": [
+        "Address Sanitizer (ASAN) on the GPUs",
+        "Compiling with ASAN",
+        "Running Applications",
+        "Known Issues"
+      ],
+      "verified_claims": [
+        "rpath ASan library example",
+        "HSA_XNACK=1 and ASAN_OPTIONS=detect_leaks=0",
+        "LLNL still lists hipFree double-free, hipMemcpy invalid-address and mixed deallocation limitations"
+      ],
+      "caution": "Site-specific/version-qualified field guidance, not proof every ROCm7.2.4 configuration retains all listed limitations."
+    },
+    {
+      "id": "AMD-PREVIEW-713",
+      "title": "ROCm Core SDK7.13.0 release notes",
+      "url": "https://rocm.docs.amd.com/en/7.13.0-preview/about/release-notes.html",
+      "version": "7.13.0 technology preview",
+      "sections": [
+        "Issues related to AddressSanitizer"
+      ],
+      "verified_claims": [
+        "preview has shared-memory false report/fault issues",
+        "large-thread-count ASan launch issues",
+        "multi-architecture ASan HIP binary issues"
+      ],
+      "caution": "Optional forward-looking note only; do not mix preview-specific defects into stable7.2.4 matrix."
+    },
+    {
+      "id": "MUSA-USER",
+      "title": "MUSA Compute Sanitizer 用户指南",
+      "url": "https://docs.mthreads.com/mooreperf/mooreperf-doc-online/musa_compute_sanitizer/user_guide/",
+      "version": "Current guide includesv1.1.1 output control; no independent publication date",
+      "sections": [
+        "主要功能",
+        "v1.1.1 输出控制",
+        "功能范围与限制"
+      ],
+      "verified_claims": [
+        "global OOB and API error default enabled, leak explicitly enabled",
+        "atomic/robust LSU/TME future plan",
+        "private/shared/local/host pinned incomplete",
+        "extra memory/runtime and perturbation",
+        "print-limit truncates detail but summary keeps totals"
+      ]
+    },
+    {
+      "id": "MUSA-111",
+      "title": "MUSA Compute Sanitizerv1.1.1 版本说明",
+      "url": "https://docs.mthreads.com/mooreperf/mooreperf-doc-online/musa_compute_sanitizer/releasenote/v1.1.1_release_note/",
+      "version": "v1.1.1; no reliable publication date shown",
+      "sections": [
+        "环境要求",
+        "API error 过滤逻辑",
+        "问题修复"
+      ],
+      "verified_claims": [
+        "Intel CPU,amd64/x86_64,MTT S5000 environment",
+        "explicit top-level API error default",
+        "NotReady/peer-access state-return exclusions",
+        "fixed sanitizer-induced incorrect result"
+      ]
+    },
+    {
+      "id": "MUSA-110",
+      "title": "MUSA Compute Sanitizerv1.1.0 版本说明",
+      "url": "https://docs.mthreads.com/mooreperf/mooreperf-doc-online/musa_compute_sanitizer/releasenote/v1.1.0_release_note/",
+      "version": "v1.1.0; no reliable publication date shown",
+      "sections": [
+        "问题修复",
+        "已知问题"
+      ],
+      "verified_claims": [
+        "OOB mechanism refactor",
+        "driver5.1.0+VMM false positives possible;5.2.0+ recommended"
+      ],
+      "caution": "Full address-range wording does not establish every GPU address-space or instruction coverage."
+    },
+    {
+      "id": "MUSA-INTRO",
+      "title": "MUSA Compute Sanitizer 产品介绍",
+      "url": "https://docs.mthreads.com/mooreperf/mooreperf-doc-online/musa_compute_sanitizer/introduction/",
+      "version": "Current online guide checked2026-10-20",
+      "sections": [
+        "核心功能",
+        "错误报告"
+      ],
+      "verified_claims": [
+        "runtime GPU debug tool",
+        "global OOB,leak,API-return-error reporting"
+      ]
+    },
+    {
+      "id": "INTEL-DEVICE",
+      "title": "Device-Side Compiler Sanitizers",
+      "url": "https://www.intel.com/content/www/us/en/docs/dpcpp-cpp-compiler/developer-guide-reference/2026-0/device-side-compiler-sanitizers.html",
+      "version": "C/C++2026.0; document date2026-04-28",
+      "sections": [
+        "Device-Side AddressSanitizer",
+        "Device-Side MemorySanitizer",
+        "Device-Side ThreadSanitizer"
+      ],
+      "verified_claims": [
+        "ASan OpenMP/SYCL capability table",
+        "SYCL-specific bad-context/bad-free/double-free/buffer",
+        "MSan since2025.1,local/private since2025.2",
+        "TSan since2025.2 focusing device USM",
+        "ASan quarantine0,redzone16 defaults",
+        "compiler+Unified Runtime layer flags"
+      ]
+    },
+    {
+      "id": "INTEL-LIMITS",
+      "title": "Compiler Sanitizers",
+      "url": "https://www.intel.com/content/www/us/en/docs/dpcpp-cpp-compiler/developer-guide-reference/2026-0/compiler-sanitizers.html",
+      "version": "C/C++2026.0",
+      "sections": [
+        "System Requirements",
+        "Limitations"
+      ],
+      "verified_claims": [
+        "Linux/Ponte Vecchio,one-card configuration",
+        "ASan forces sequential kernels",
+        "private-memory overhead may reduce workgroup maximum",
+        "large workgroup counts may cause local/private ASan/MSan checks to be skipped",
+        "OpenMP C/C++ GPU-only execution"
+      ]
+    }
+  ],
+  "archive_note": "Research working notes, not the final specification. May contain early candidate conclusions. Refer to docs/llvm-gpu-sanitizer-research.md for final judgments. Internal retrieval identifiers were removed; no third-party full text is included."
+}

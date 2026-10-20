@@ -1,0 +1,99 @@
+{
+  "status": "pass",
+  "file": "docs/llvm-gpu-sanitizer-research.md",
+  "bytes": 105211,
+  "lines": 1501,
+  "chapters": 22,
+  "unique_references": 28,
+  "tables": 39,
+  "fence_balance": "pass",
+  "citation_targets": "pass",
+  "estimate_arithmetic": "pass",
+  "route_totals_core_test_combined": {
+    "A": [
+      [
+        18,
+        38
+      ],
+      [
+        16,
+        33
+      ],
+      [
+        34,
+        71
+      ]
+    ],
+    "B": [
+      [
+        27,
+        53
+      ],
+      [
+        23,
+        44
+      ],
+      [
+        50,
+        97
+      ]
+    ],
+    "C": [
+      [
+        34,
+        67
+      ],
+      [
+        30,
+        58
+      ],
+      [
+        64,
+        125
+      ]
+    ],
+    "D": [
+      [
+        50,
+        98
+      ],
+      [
+        43,
+        83
+      ],
+      [
+        93,
+        181
+      ]
+    ],
+    "E": [
+      [
+        76,
+        146
+      ],
+      [
+        66,
+        127
+      ],
+      [
+        142,
+        273
+      ]
+    ],
+    "F": [
+      [
+        30,
+        60
+      ],
+      [
+        29,
+        56
+      ],
+      [
+        59,
+        116
+      ]
+    ]
+  },
+  "sha256": "90037ee21a7e54a3b9eb636c6ca57bde8286c9d22be160f45c5d3899828c18fe"
+}
