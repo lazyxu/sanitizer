@@ -65,6 +65,9 @@ def compile_case(item, backend, compiler_patch):
         cmd = ["nvcc", "-std=c++17", "-O0", "-lineinfo"]
         if os.getenv("CUDA_ARCH"):
             cmd += ["-arch=" + os.environ["CUDA_ARCH"]]
+        elif case == "S19":
+            # S19必须编译成真实SM80+ cp.async，否则可能静默退化为同步copy。
+            cmd += ["-arch=sm_80"]
         if compiler_patch and item[backend]["tool"] == "memcheck":
             cmd += ["-fdevice-sanitize=memcheck"]
     else:
