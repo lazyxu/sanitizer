@@ -46,6 +46,14 @@ python3 scripts/run_samples.py --backend cuda --case all --compile-only
 # ROCm compile-only仍需显式支持的ROCM_ARCH
 ~~~
 
+## 1.5 GitHub Actions 真正GPU验证
+
+已提供 **[NVIDIA/AMD GPU硬件工作流](../.github/workflows/gpu-hardware.yml)** 和 **[详细启用指南](../docs/gpu-actions-ci.md)**。自托管Linux GPU Runner额外标签分别为`gpu-nvidia`与`gpu-amd-xnack`，且必须在仓库Actions Variables中明确设置`GPU_CI_ENABLED=true`；AMD另设`GPU_ROCM_ARCH=gfx...:xnack+`。未启用时GPU工作流`Skipped`，不能算通过。
+
+GitHub Actions的`workflow_dispatch`允许选择`backend=cuda/rocm/both`以及`suite=smoke/compile-all/safe-all`。默认smoke：CUDA检测S01、S13、S14；AMD检测S01；全部包含`--good`合法对照及`--bad`应有设备报告。脚本`[ci-gpu.sh](../scripts/ci-gpu.sh)`自动Docker构建、确认GPU真实可见、执行并将`summary-*.json`和逐案例原始日志上传Artifact。常规CI绝不启动危险的S17/S18/S20/S27坏例。
+
+CPU-only静态工作流有成功记录，仅表明清单、语法和虚构日志解析单元测试通过；**未验证nvcc/hipcc在真实GPU上的执行或工具实际检出**。自托管Runner禁止从不可信PR运行代码，建议使用隔离、一次性设备。
+
 ## 2. Runner如何区分检测结论？
 
 | 标识 | 精确定义 |
@@ -59,6 +67,8 @@ python3 scripts/run_samples.py --backend cuda --case all --compile-only
 | `CPU_ASAN_ONLY_NOT_GPU` | AMD log只有Host CPU ASan报告，没有明确GPU设备报告 |
 | `PREREQUISITE_NOT_MET` | 架构、GPUVA复用或相关功能不满足，代码显式`SKIP:` |
 | `BUILD_OR_INSTRUMENTATION_FAILURE` | nvcc/hipcc或GPU插桩runtime检查失败 |
+| `MISMATCHED_GPU_DIAGNOSTIC` | 仅出现了其他GPU错误类别（如S01只有设备泄漏，而非global OOB），不能计作正确检出 |
+| `UNCLASSIFIED_SANITIZER_ERROR` | GPU工具报告非零错误但没有可归类的设备违规证据，不能标记为CLEAN |
 | `SKIPPED_DANGEROUS` / `TIMEOUT` | 危险Barrier/Graph/Free默认不自动执行；显式开启仍受超时控制 |
 
 `--strict`会使预期确定检出的故障未检出、工具失败或合法用例误报导致运行器非零退出。输出保留在`results/{backend}/{Sxx}.{mode}.log`和`summary.json`。如果设置`--attempt-unsupported`会执行无厂商保证的坏例，只用于调查，不提高所宣称的覆盖等级。S17/S18/S20/S27需单独加`--allow-dangerous`；实验GPU可能hang或reset。

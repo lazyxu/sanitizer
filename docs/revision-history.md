@@ -1,5 +1,16 @@
 # 文稿修订记录
 
+## v1.5 · 2026-10-21
+
+1. 在master增加`docker/Dockerfile.cuda`、`Dockerfile.rocm`与`scripts/setup-docker.sh`，采用已确认存在的CUDA 13.1.2/ROCm 7.2.4官方开发镜像。宿主必须真实提供GPU/驱动，不能用CPU sanitizer代替。
+2. 增加`samples/S01～S28`每组CUDA `cuda.cu`、AMD HIP `amd.hip.cpp`以及详细中文README，合计56份主源文件，附`samples/manifest.json`逐GPU厂商能力判断和`scripts/run_samples.py` GPU专用编译/运行器。
+3. 独立增加CUDA Driver API与HIP GPU VMM Guard Page实验，明确其使用GPUVA保留/映射/权限和GPU MMU fault，而非Host `mprotect`，并保留页粒度与字节级对象bounds的区别。
+4. 新增`.github/workflows/gpu-hardware.yml`：GPU_CI_ENABLED显式开关、可信master、自托管NVIDIA/AMD GPU Runner，手动/可信push/周期触发；提供smoke/compile-all/safe-all，按manifest真实检测和上报Artifact；无GPU Runner时GPU任务显示SKIPPED。
+5. 新增`scripts/ci-gpu.sh`、`tests/test_gpu_runner.py`，扩展CPU CI仅测试静态结构与合成日志类别；S01/S13/S14按特定设备错误类别验收，阻止CPU ASan、GPU API错误、其他设备诊断或无法分类的工具错误冒充目标检测成功。
+6. 新增[GPU Actions与Runner使用说明](gpu-actions-ci.md)，强调AMD XNACK+、GPU权限、官方T4大型Runner准入条件、自托管公有仓库的PR安全限制。明确：28源文件均已加入，真实GPU nvcc/hipcc编译和sanitizer运行尚未证明，不可声称双厂商28个错误全部能够检出。
+7. 主文档升为1.5，保留v1.3/QEMU和v1.4详细场景的机制设计。GPU CI新增只属于NVIDIA/AMD厂商样例验收，尚未实现自研LLVM GPU后端的sanitizer。
+
+
 ## 1.3 · 2026-10-21
 
 本轮根据用户补充：“QEMU全系统虚拟平台已有GPU ISA执行模型”、要求深入展开友商产品实现原理，以及逐方案标明借鉴／融合／原创来源，完成以下变更：

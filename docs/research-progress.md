@@ -1,5 +1,16 @@
 # GPU Sanitizer 研究进度
 
+## 2026-10-21 · v1.5 新增真实GPU验证基础设施
+
+**完成：** 28组CUDA+HIP样例共56份独立源文件及中文README；NVIDIA/ROCm官方Docker镜像配置；GPU设备端Sanitizer Runner、28案例能力清单、GPU Guard Page CUDA/HIP实验；[GPU硬件工作流](../.github/workflows/gpu-hardware.yml)和[完整GPU Runner配置文档](gpu-actions-ci.md)。CPU静态CI增加合成GPU日志分类测试与Bash/Python校验，且已取得成功记录。
+
+**关键能力边界：** GitHub Actions标准ubuntu CPU Runner不能执行GPU检测；NVIDIA GPU大型Runner需符合组织/企业准入条件，AMD依靠可用ROCm GPU Runner。GPU工作流由`GPU_CI_ENABLED=true`显式启用，缺省跳过、不冒充成功。smoke实际要求CUDA S01/S13/S14或AMD S01的设备违规报告及无误报合法对照，并保留Artifact。`compile-all`仅编译28组本平台源文件，`safe-all`对可安全运行的坏例做检测并显式保留unsupported/未检出状态。
+
+**尚未完成：** 这里没有可访问的真实NVIDIA/AMD GPU；GPU Runner/Actions变量未由本会话配置；没有目标GPU的nvcc/hipcc编译、设备检测报告或性能数据。部分样例覆盖28场景的子范围（例如S19 HIP异步指令、S26真正混合库、S28工具OOM）；不能宣称28/28双厂商可检出。F0 Guard Page使用真实GPU VMM页映射，不等于任意4B逻辑对象边界检查。
+
+**执行入口：** [样例说明](../samples/README.md) → [Docker脚本](../scripts/setup-docker.sh) → [真实GPU CI脚本](../scripts/ci-gpu.sh) → [Actions Runner配置](gpu-actions-ci.md)。下一项真实验收依赖可调度GPU Runner及其完整输出，不能根据CPU CI通过自动标记GPU完成。
+
+
 **当前正式文档：v1.3（2026-10-21）；设计研究与方案映射已更新。Sanitizer尚未在用户GPU、QEMU/cmodel和KMD/UMD中实际实现或测试。**
 
 ## 当前已确认的事实

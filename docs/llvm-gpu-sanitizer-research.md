@@ -1,10 +1,10 @@
 # 自研 LLVM GPU 后端 Sanitizer 技术调研与实施方案
 
-**版本：1.4 · 资料核验日期：2026-10-21 · 文档语言：中文**
+**版本：1.5 · 资料核验日期：2026-10-21 · 文档语言：中文**
 
 **用途：技术立项、编译器／驱动／架构联合评审、研发任务拆分与预算讨论。**
 
-**1.4 版修订：** 已增加[双厂商GPU Docker构建与28场景实代码](../samples/README.md)，每个案例独立CUDA `cuda.cu`、AMD HIP `amd.hip.cpp` 与中文README；统一runner区分真实GPU报告、GPU API错误、CPU ASan、未检出/不支持。**既有1.3版**明确 用户明确确认 **QEMU 全系统平台现有可执行目标GPU ISA的执行模型（Q2）**；本版将其作为既有前提而非待建设能力，并按实际缺失接线重新解释预算。[友商及LLVM机制深挖](#vendor-deep-dive)逐一说明原理/代码入口/证据限制；[全部路线出处及融合矩阵](#route-provenance-matrix)明确借鉴、融合与本项目需自行实现的部分，保留28个详细实例。
+**1.5 版修订：** 在1.4样例/容器基础上新增[GitHub Actions GPU硬件验证](gpu-actions-ci.md)：按真实CUDA/ROCm GPU分别执行smoke、28例compile-only或安全全集，正确区分设备报告/API错误/CPU ASan/部分覆盖并上传日志；默认未启用GPU Runner，因此尚无真机验收。**1.4版原有内容：** 已增加[双厂商GPU Docker构建与28场景实代码](../samples/README.md)，每个案例独立CUDA `cuda.cu`、AMD HIP `amd.hip.cpp` 与中文README；统一runner区分真实GPU报告、GPU API错误、CPU ASan、未检出/不支持。**既有1.3版**明确 用户明确确认 **QEMU 全系统平台现有可执行目标GPU ISA的执行模型（Q2）**；本版将其作为既有前提而非待建设能力，并按实际缺失接线重新解释预算。[友商及LLVM机制深挖](#vendor-deep-dive)逐一说明原理/代码入口/证据限制；[全部路线出处及融合矩阵](#route-provenance-matrix)明确借鉴、融合与本项目需自行实现的部分，保留28个详细实例。
 
 本文回答：在自研 GPU、LLVM 后端、KMD（Kernel-Mode Driver，内核态驱动）、UMD（User-Mode Driver，用户态驱动）及验证环境的边界下，怎样建设可用于真机调试的 sanitizer；不同路线能检测什么、需要修改哪些组件、投入多少、如何验证，以及什么情况下值得进一步投入二进制插桩或硬件支持。
 
@@ -2927,6 +2927,22 @@ GMSBench 中不同 checker 使用不同适用分母，HiRace 的 code/input 组�
 
 **不得混淆容器镜像与目标GPU。** Docker仅准备NVCC、Compute Sanitizer或HIP+ASan runtime，不能在普通CPU宿主上完成GPU Kernel检测。CUDA编译无需`-fsanitize=address`（这会混入CPU ASan）；AMD HIP使用`-fsanitize=address`时也需验证设备目标和instrumented runtime，不能把CPU报告冒充GPU报告。每次实验保留GPU架构、驱动、镜像、编译参数、Sanitizer版本、log和受支持指令集合。
 
+
+
+### 19.6b GitHub Actions GPU硬件验收（可选启用，非CPU模拟）
+
+**本项目新增真实GPU持续验证工作流：** [`.github/workflows/gpu-hardware.yml`](../.github/workflows/gpu-hardware.yml)搭配[GPU Runner与Actions配置说明](gpu-actions-ci.md)。NVIDIA目标采用Compute Sanitizer的memcheck/initcheck/racecheck，AMD目标采用`-fsanitize=address -shared-libsan --offload-arch=gfx...:xnack+`与真正instrumented HIP runtime。两边都不允许用Host CPU ASan、单纯API异常或`ERROR SUMMARY`非零替代设备侧具体错误证据。[N02][A01]
+
+| 执行层 | 运行位置与操作 | 只能证明什么 |
+|---|---|---|
+| CPU静态GitHub CI | 标准`ubuntu-latest`，验证56份主源代码文件存在、脚本Python/Bash语法及合成日志解析 | 结构与解析器单元测试，**不证明GPU编译或检测** |
+| NVIDIA GPU CI | 专用`gpu-nvidia` Runner，Docker GPU可见，S01/S13/S14可选择`smoke`，也可`compile-all`或`safe-all` | 只有获得正确具体GPU错误日志且合法对照没有误报时，才称本轮支持子场景成功 |
+| AMD GPU CI | 专用`gpu-amd-xnack` Runner，`ROCM_ARCH`必须为真实支持的`gfx...:xnack+`，镜像插桩runtime必需可验证 | S01设备ASan必须报告`on amdgpu device`且错误类别吻合；普通CPU ASan不能代替 |
+| 无可用GPU Runner / 未启用 | `GPU_CI_ENABLED`默认未设置，所有GPU硬件Job显示Skipped | **GPU_NOT_RUN，不是检出、通过或可用GPU平台的证明** |
+
+**触发策略：** 仅可信master的push、schedule和workflow_dispatch；GPU job显式`GPU_CI_ENABLED=true`才调度。自托管Runner上不能让不可信`pull_request`或`pull_request_target`执行代码，需隔离/短生命周期Runner；GitHub托管T4大型GPU Runner仅在有对应组织/企业资质并完成配置后使用。危险S17/S18/S20/S27不在常规GPU CI中运行。所有GPU结果以原始日志与`results/<backend>/summary-*.json` Artifact存档，不可以凭CPU静态CI绿色状态发布“GPU Sanitizer全28例通过”。[C01][A04]
+
+**状态（2026-10-21）：** 工作流/脚本/README已经提交，CPU静态CI有成功记录，GPU硬件Job尚未获得真实GPU运行结果。GitHub Actions GPU能提高验收自动化，但只有真实GPU Runner已配置且正确报告对应设备错误时，才能升级对应测试状态。自研QEMU GPU ISA模型验证是独立轨道，不是本工作流直接测到的生产GPU。
 
 ### 19.7 功能级cmodel、QEMU全系统与真机的分层验收
 

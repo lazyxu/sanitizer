@@ -2,11 +2,11 @@
 
 本仓库保存面向自研GPU和LLVM后端的sanitizer技术调研与架构实施建议。生产软件按**编译器、KMD（Kernel-Mode Driver，内核态驱动）、UMD（User-Mode Driver，用户态驱动）**分工；功能级cmodel与基于QEMU的全系统虚拟平台分别分析。
 
-**当前版本1.3（2026-10-21）：用户确认QEMU全系统平台已具有目标GPU ISA执行模型；厂商/LLVM机制深挖及所有路线的来源／融合／原创工作已补齐。设计文稿已更新，实际Sanitizer实现及用户平台验证尚未进行。**
+**当前版本1.5（2026-10-21）：已加入56份 CUDA/AMD HIP 样例源码、Docker 环境、GPU-only 检测运行器和可选的 NVIDIA/AMD GitHub Actions GPU 硬件验收。CPU 静态 CI 有成功记录；真正GPU工作流目前未启用、未取得GPU验收记录。**
 
 ## 阅读入口
 
-- [正式调研与实施方案](docs/llvm-gpu-sanitizer-research.md)：23章、40项参考来源，包含详细背景与目标、六条技术路线、组件契约、工程预算和28个检测场景。
+- [正式调研与实施方案](docs/llvm-gpu-sanitizer-research.md)：23章、44项参考来源，包含详细背景与目标、六条技术路线、组件契约、工程预算和28个检测场景。
 - [项目背景](docs/llvm-gpu-sanitizer-research.md#background)与[建设目标](docs/llvm-gpu-sanitizer-research.md#goals)：建设动因、现有调试盲区、使用者、功能／质量目标、验收证据和优先级。
 - [厂商/LLVM详细机制](docs/llvm-gpu-sanitizer-research.md#vendor-deep-dive)与[各方案来源／融合／原创对照](docs/llvm-gpu-sanitizer-research.md#route-provenance-matrix)：NVIDIA runtime/compile-time、AMD GPU ASan、Intel UR、MUSA公开能力、LLVM shadow/tag与cuCatch/HiRace/GPUArmor等研究。
 - [三组件支持契约](docs/llvm-gpu-sanitizer-research.md#component-contracts)：编译器、KMD、UMD分别生产哪些信息、依赖什么接口，以及现有支持与新增修改的区别。
@@ -17,6 +17,17 @@
 - [检测场景与实例分析](docs/llvm-gpu-sanitizer-research.md#detection-scenarios)：S01～S28逐例说明错误位置、检测方案、组件配合、修复／合法对照、报告与限制；[逐场景KMD和平台对应表](docs/llvm-gpu-sanitizer-research.md#scenario-platforms)补充每例的执行与观测条件。
 - [验证基准与验收矩阵](docs/llvm-gpu-sanitizer-research.md#validation)、[研究进度](docs/research-progress.md)、[修订记录](docs/revision-history.md)、[文稿验证记录](docs/validation-report.json)。
 - [归档研究笔记](docs/research-notes/)：架构、论文及友商资料的过程记录与来源链接。
+
+## 新增：真实 GPU Docker + GitHub Actions 验证
+
+- **[28组独立 CUDA/AMD HIP 设备样例](samples/README.md)**：每组有源码、详细中文注释、README、合法对照及预期覆盖等级；源码加入不等于厂商GPU工具必检出。
+- **[Docker一键配置](scripts/setup-docker.sh)**：`./scripts/setup-docker.sh cuda` / `ROCM_ARCH=gfx90a:xnack+ HSA_XNACK=1 ./scripts/setup-docker.sh rocm`，进入容器后 `./scripts/run-all.sh cuda|rocm`。
+- **[GitHub Actions GPU 硬件工作流](.github/workflows/gpu-hardware.yml)**：可信`master`、可选变量`GPU_CI_ENABLED=true`、专用NVIDIA/AMD GPU Runner、`smoke / compile-all / safe-all`模式；结果原始日志与JSON上传Artifact。
+- **[GPU Runner部署和完整验收说明](docs/gpu-actions-ci.md)**：GPU Runner标签、宿主驱动、Docker设备透传、GitHub仓库变量、安全隔离，以及GPU报告/CPU ASan/API错误的严格区分。
+- **[CPU 静态 CI](.github/workflows/sample-structure.yml)** 只检查脚本结构与合成GPU日志分类；不得标称GPU检出成功。
+- **[真实GPU Guard Page实验](samples/experiments/gpu-guard-page/README.md)**：采用GPUVA/VMM页级保护，不使用CPU`mprotect`，不承诺任意小对象的字节级边界检出。
+
+**现状：** GPU CI所需Runner和仓库变量尚未由本会话配置；因此GPU任务`Skipped`只是**未运行**。28种错误并非两家工具都具备检测能力；本轮不宣称全部样例已在真实GPU编译或检出。
 
 ## 1.3版：现有QEMU GPU ISA执行模型＋厂商机制溯源
 
