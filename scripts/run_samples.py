@@ -106,7 +106,15 @@ def classify(backend, expected, mode, rc, log):
         return "CPU_ASAN_ONLY_NOT_GPU"
     if "GPU_API_ERROR:" in log:
         return "GPU_API_ERROR_NOT_GPU_KERNEL_SANITIZER"
-    if rc not in (0, 86):
+    # 非零SUMMARY和指定sanitizer异常退出不能当成无错误：
+    # 未识别的tool诊断需要人工归类，不能编造具体设备错误。
+    has_nonzero_summary = bool(re.search(
+        r"(?:ERROR SUMMARY:\s*[1-9]\d*\s+errors|"
+        r"RACECHECK SUMMARY:.*\([1-9]\d*\s+errors?)",
+        log, flags=re.I))
+    if has_nonzero_summary or rc == 86:
+        return "UNCLASSIFIED_SANITIZER_ERROR"
+    if rc != 0:
         return "RUNTIME_ERROR_NO_GPU_REPORT"
     if mode == "good":
         return "CLEAN"
@@ -177,7 +185,8 @@ def main():
     print("GPU_API_ERROR、CPU_ASAN_ONLY、UNSUPPORTED、NOT_DETECTED均不是设备检测成功。")
     if a.strict:
         fail={"BUILD_OR_INSTRUMENTATION_FAILURE","FALSE_POSITIVE_OR_OTHER_ERROR",
-              "TIMEOUT","RUNTIME_ERROR_NO_GPU_REPORT","CPU_ASAN_ONLY_NOT_GPU"}
+              "TIMEOUT","RUNTIME_ERROR_NO_GPU_REPORT","CPU_ASAN_ONLY_NOT_GPU",
+              "UNCLASSIFIED_SANITIZER_ERROR"}
         if any(x["status"] in fail or
                (x.get("mode")=="bad" and x["expected"]=="detect" and
                 x["status"]!="DETECTED_GPU") for x in results):
