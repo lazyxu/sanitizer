@@ -1,22 +1,33 @@
-name: GPU samples static structure (not hardware validation)
+# 此CI在普通CPU runner上执行，仅验证源码结构、Python/Bash语法和报告分类。
+# 绝不能将其“success”标记为CUDA/ROCm真机GPU检测通过。
+name: GPU sample static checks (CPU only, not GPU validation)
 on:
   push:
     paths:
       - 'samples/**'
       - 'scripts/**'
+      - 'tests/**'
+      - 'docker/**'
       - '.github/workflows/sample-structure.yml'
+      - '.github/workflows/gpu-hardware.yml'
   pull_request:
     paths:
       - 'samples/**'
       - 'scripts/**'
+      - 'tests/**'
+      - 'docker/**'
 jobs:
   static-structure:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
-      - name: Python syntax
-        run: python3 -m py_compile scripts/run_samples.py scripts/validate_layout.py
+      - name: Compile Python scripts (syntax only)
+        run: python3 -m py_compile scripts/run_samples.py scripts/validate_layout.py tests/test_gpu_runner.py
       - name: Bash syntax
-        run: bash -n scripts/setup-docker.sh scripts/run-all.sh
-      - name: Source inventory only — no GPU hardware
+        run: bash -n scripts/setup-docker.sh scripts/run-all.sh scripts/ci-gpu.sh
+      - name: Validate case source inventory (not nvcc/hipcc)
         run: python3 scripts/validate_layout.py
+      - name: Unit-test GPU report classification with synthetic logs
+        run: python3 -m unittest discover -s tests -v
