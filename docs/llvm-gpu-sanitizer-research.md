@@ -2357,7 +2357,7 @@ GMSBench 中不同 checker 使用不同适用分母，HiRace 的 code/input 组�
 
 | 阶段 | 完成判定 | 本轮状态 |
 |---|---|---|
-| SOURCE_ADDED | 已提供完整CUDA/HIP源码、中文注释、README和manifest | **已完成28×2，附F0双平台实验** |
+| SOURCE_ADDED | 已提供完整CUDA/HIP源码、中文注释、README和manifest | **已提供28×2样例源码，另有CUDA/HIP两种F0页级实验源码；未完成真机验收** |
 | STATIC_STRUCTURE_PASS | Python/Bash语法和目录清单、文档链接与分类一致 | 脚本/CI已编写；GitHub Actions须以实际运行结论为准 |
 | GPU_COMPILED | 在指定容器版本/目标架构上，nvcc和hipcc真实成功，未静默忽略GPU ASan | **尚未验证** |
 | GPU_DETECTED | 执行`--bad`后得到具备源PC/地址/设备身份的GPU检查报告 | **尚未验证** |
