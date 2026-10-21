@@ -1,0 +1,426 @@
+{
+  "version": 1,
+  "generated_on": "2026-10-21",
+  "cases": [
+    {
+      "id": "S01",
+      "name": "Global对象头尾越界",
+      "dangerous": false,
+      "cuda": {
+        "tool": "memcheck",
+        "expect": "detect",
+        "reason": "真实GPU heap边界访问；受支持工具应报告。"
+      },
+      "rocm": {
+        "tool": "gpu-asan",
+        "expect": "detect",
+        "reason": "真实GPU heap边界访问；受支持工具应报告。"
+      }
+    },
+    {
+      "id": "S02",
+      "name": "宽访存跨越尾界",
+      "dangerous": false,
+      "cuda": {
+        "tool": "memcheck",
+        "expect": "detect",
+        "reason": "16字节设备宽load跨逻辑堆对象末端。"
+      },
+      "rocm": {
+        "tool": "gpu-asan",
+        "expect": "detect",
+        "reason": "16字节设备宽load跨逻辑堆对象末端。"
+      }
+    },
+    {
+      "id": "S03",
+      "name": "真实指令对齐错误",
+      "dangerous": false,
+      "cuda": {
+        "tool": "memcheck",
+        "expect": "conditional",
+        "reason": "实际opcode与lowering可能使未对齐访问合法或变为字节访问。"
+      },
+      "rocm": {
+        "tool": "gpu-asan",
+        "expect": "conditional",
+        "reason": "实际opcode与lowering可能使未对齐访问合法或变为字节访问。"
+      }
+    },
+    {
+      "id": "S04",
+      "name": "对象A跳入存活B",
+      "dangerous": false,
+      "cuda": {
+        "tool": "memcheck",
+        "expect": "unsupported",
+        "reason": "同一pool中两个逻辑对象都处于合法大分配；缺乏provenance。"
+      },
+      "rocm": {
+        "tool": "gpu-asan",
+        "expect": "unsupported",
+        "reason": "同一pool中两个逻辑对象都处于合法大分配；缺乏provenance。"
+      }
+    },
+    {
+      "id": "S05",
+      "name": "Tensor view逻辑子边界",
+      "dangerous": false,
+      "cuda": {
+        "tool": "memcheck",
+        "expect": "unsupported",
+        "reason": "Tensor view的列索引非法但物理GPUVA在合法pool里。"
+      },
+      "rocm": {
+        "tool": "gpu-asan",
+        "expect": "unsupported",
+        "reason": "Tensor view的列索引非法但物理GPUVA在合法pool里。"
+      }
+    },
+    {
+      "id": "S06",
+      "name": "Shared/LDS越界",
+      "dangerous": false,
+      "cuda": {
+        "tool": "memcheck",
+        "expect": "conditional",
+        "reason": "Shared/LDS对象与整体backing边界可能不同。"
+      },
+      "rocm": {
+        "tool": "gpu-asan",
+        "expect": "conditional",
+        "reason": "Shared/LDS对象与整体backing边界可能不同。"
+      }
+    },
+    {
+      "id": "S07",
+      "name": "Private/stack越界",
+      "dangerous": false,
+      "cuda": {
+        "tool": "memcheck",
+        "expect": "conditional",
+        "reason": "AMD GPU ASan公开指出private/stack空间有覆盖缺口；NVIDIA视优化后的访问。"
+      },
+      "rocm": {
+        "tool": "gpu-asan",
+        "expect": "unsupported",
+        "reason": "AMD GPU ASan公开指出private/stack空间有覆盖缺口；NVIDIA视优化后的访问。"
+      }
+    },
+    {
+      "id": "S08",
+      "name": "未复用UAF",
+      "dangerous": false,
+      "cuda": {
+        "tool": "memcheck",
+        "expect": "conditional",
+        "reason": "释放后的旧GPUVA可能硬件fault或被工具判断UAF，报告形式与窗口不保证。"
+      },
+      "rocm": {
+        "tool": "gpu-asan",
+        "expect": "conditional",
+        "reason": "释放后的旧GPUVA可能硬件fault或被工具判断UAF，报告形式与窗口不保证。"
+      }
+    },
+    {
+      "id": "S09",
+      "name": "复用GPUVA旧指针",
+      "dangerous": false,
+      "cuda": {
+        "tool": "memcheck",
+        "expect": "unsupported",
+        "reason": "普通分配器不保证重用相同GPUVA；需要确定性的epoch身份检测。"
+      },
+      "rocm": {
+        "tool": "gpu-asan",
+        "expect": "unsupported",
+        "reason": "普通分配器不保证重用相同GPUVA；需要确定性的epoch身份检测。"
+      }
+    },
+    {
+      "id": "S10",
+      "name": "非法gpuFree内部地址",
+      "dangerous": false,
+      "cuda": {
+        "tool": "memcheck",
+        "expect": "api",
+        "reason": "GPU Runtime/Driver API错误；不是GPU kernel内部Sanitizer命中。"
+      },
+      "rocm": {
+        "tool": "gpu-asan",
+        "expect": "api",
+        "reason": "GPU Runtime/Driver API错误；不是GPU kernel内部Sanitizer命中。"
+      }
+    },
+    {
+      "id": "S11",
+      "name": "重复GPU Free",
+      "dangerous": false,
+      "cuda": {
+        "tool": "memcheck",
+        "expect": "api",
+        "reason": "重复释放属于GPU Runtime/API检查；不是设备指令越界。"
+      },
+      "rocm": {
+        "tool": "gpu-asan",
+        "expect": "api",
+        "reason": "重复释放属于GPU Runtime/API检查；不是设备指令越界。"
+      }
+    },
+    {
+      "id": "S12",
+      "name": "GPU显存泄漏",
+      "dangerous": false,
+      "cuda": {
+        "tool": "memcheck",
+        "expect": "conditional",
+        "reason": "NVIDIA --leak-check=full可报告未释放GPU内存；ROCm GPU ASan不是相同设备漏检工具。"
+      },
+      "rocm": {
+        "tool": "gpu-asan",
+        "expect": "unsupported",
+        "reason": "NVIDIA --leak-check=full可报告未释放GPU内存；ROCm GPU ASan不是相同设备漏检工具。"
+      }
+    },
+    {
+      "id": "S13",
+      "name": "未初始化Global读",
+      "dangerous": false,
+      "cuda": {
+        "tool": "initcheck",
+        "expect": "detect",
+        "reason": "CUDA initcheck可报告未初始化GPU Global读取；AMD GPU ASan不检查定义性。"
+      },
+      "rocm": {
+        "tool": "gpu-asan",
+        "expect": "unsupported",
+        "reason": "CUDA initcheck可报告未初始化GPU Global读取；AMD GPU ASan不检查定义性。"
+      }
+    },
+    {
+      "id": "S14",
+      "name": "Shared RAW竞争",
+      "dangerous": false,
+      "cuda": {
+        "tool": "racecheck",
+        "expect": "detect",
+        "reason": "NVIDIA racecheck检查GPU Shared hazard；ROCm GPU ASan只检查地址安全。"
+      },
+      "rocm": {
+        "tool": "gpu-asan",
+        "expect": "unsupported",
+        "reason": "NVIDIA racecheck检查GPU Shared hazard；ROCm GPU ASan只检查地址安全。"
+      }
+    },
+    {
+      "id": "S15",
+      "name": "Global跨线程竞争",
+      "dangerous": false,
+      "cuda": {
+        "tool": "racecheck",
+        "expect": "unsupported",
+        "reason": "全局GPU数据竞争不是NVIDIA racecheck的普遍检测范围。"
+      },
+      "rocm": {
+        "tool": "gpu-asan",
+        "expect": "unsupported",
+        "reason": "全局GPU数据竞争不是NVIDIA racecheck的普遍检测范围。"
+      }
+    },
+    {
+      "id": "S16",
+      "name": "跨Queue Kernel竞争",
+      "dangerous": false,
+      "cuda": {
+        "tool": "racecheck",
+        "expect": "unsupported",
+        "reason": "两个stream之间没有HB，不等于工具提供跨Kernel race detector；事件影响真实调度。"
+      },
+      "rocm": {
+        "tool": "gpu-asan",
+        "expect": "unsupported",
+        "reason": "两个stream之间没有HB，不等于工具提供跨Kernel race detector；事件影响真实调度。"
+      }
+    },
+    {
+      "id": "S17",
+      "name": "Block Barrier参与不全",
+      "dangerous": true,
+      "cuda": {
+        "tool": "synccheck",
+        "expect": "conditional",
+        "reason": "Divergent block barrier可能挂起GPU，需要显式允许危险测试。"
+      },
+      "rocm": {
+        "tool": "gpu-asan",
+        "expect": "unsupported",
+        "reason": "Divergent block barrier可能挂起GPU，需要显式允许危险测试。"
+      }
+    },
+    {
+      "id": "S18",
+      "name": "Warp/Subgroup Mask错误",
+      "dangerous": true,
+      "cuda": {
+        "tool": "synccheck",
+        "expect": "conditional",
+        "reason": "CUDA __syncwarp无效参与mask可能被synccheck识别；HIP builtin不等价。"
+      },
+      "rocm": {
+        "tool": "gpu-asan",
+        "expect": "unsupported",
+        "reason": "CUDA __syncwarp无效参与mask可能被synccheck识别；HIP builtin不等价。"
+      }
+    },
+    {
+      "id": "S19",
+      "name": "GPU Async Copy缺Wait",
+      "dangerous": false,
+      "cuda": {
+        "tool": "synccheck",
+        "expect": "conditional",
+        "reason": "CUDA sm80+的cp.async语义，缺wait错误受调度影响；HIP源码仅功能对照。"
+      },
+      "rocm": {
+        "tool": "gpu-asan",
+        "expect": "unsupported",
+        "reason": "CUDA sm80+的cp.async语义，缺wait错误受调度影响；HIP源码仅功能对照。"
+      }
+    },
+    {
+      "id": "S20",
+      "name": "Async Free跨Queue缺依赖",
+      "dangerous": true,
+      "cuda": {
+        "tool": "memcheck",
+        "expect": "conditional",
+        "reason": "CUDA stream-ordered free生命周期竞态依赖执行顺序，不能承诺必报。"
+      },
+      "rocm": {
+        "tool": "gpu-asan",
+        "expect": "unsupported",
+        "reason": "CUDA stream-ordered free生命周期竞态依赖执行顺序，不能承诺必报。"
+      }
+    },
+    {
+      "id": "S21",
+      "name": "Atomic Global越界",
+      "dangerous": false,
+      "cuda": {
+        "tool": "memcheck",
+        "expect": "detect",
+        "reason": "GPU原子访存同样有对象边界；ROCm是否插桩由实际目标决定。"
+      },
+      "rocm": {
+        "tool": "gpu-asan",
+        "expect": "conditional",
+        "reason": "GPU原子访存同样有对象边界；ROCm是否插桩由实际目标决定。"
+      }
+    },
+    {
+      "id": "S22",
+      "name": "Masked-off地址不能误报",
+      "dangerous": false,
+      "cuda": {
+        "tool": "memcheck",
+        "expect": "clean",
+        "reason": "故意构造inactive lane中的非法地址但无设备访问，正确结果应无报告。"
+      },
+      "rocm": {
+        "tool": "gpu-asan",
+        "expect": "clean",
+        "reason": "故意构造inactive lane中的非法地址但无设备访问，正确结果应无报告。"
+      }
+    },
+    {
+      "id": "S23",
+      "name": "Constant资源符号边界",
+      "dangerous": false,
+      "cuda": {
+        "tool": "memcheck",
+        "expect": "conditional",
+        "reason": "Constant符号边界与资源坐标/权限不能等同，ASan并不保证这类地址空间。"
+      },
+      "rocm": {
+        "tool": "gpu-asan",
+        "expect": "unsupported",
+        "reason": "Constant符号边界与资源坐标/权限不能等同，ASan并不保证这类地址空间。"
+      }
+    },
+    {
+      "id": "S24",
+      "name": "CPU/GPU共享映射",
+      "dangerous": false,
+      "cuda": {
+        "tool": "memcheck",
+        "expect": "unsupported",
+        "reason": "共享host-mapped显存中的CPU-GPU冲突，不能交给CPU ASan冒充GPU竞态。"
+      },
+      "rocm": {
+        "tool": "gpu-asan",
+        "expect": "unsupported",
+        "reason": "共享host-mapped显存中的CPU-GPU冲突，不能交给CPU ASan冒充GPU竞态。"
+      }
+    },
+    {
+      "id": "S25",
+      "name": "Atomic Pointer/身份不一致",
+      "dangerous": false,
+      "cuda": {
+        "tool": "memcheck",
+        "expect": "unsupported",
+        "reason": "两个独立原子槽不能形成整体value+identity事务，厂商ASan无指针身份协议。"
+      },
+      "rocm": {
+        "tool": "gpu-asan",
+        "expect": "unsupported",
+        "reason": "两个独立原子槽不能形成整体value+identity事务，厂商ASan无指针身份协议。"
+      }
+    },
+    {
+      "id": "S26",
+      "name": "未插桩设备函数",
+      "dangerous": false,
+      "cuda": {
+        "tool": "memcheck",
+        "expect": "conditional",
+        "reason": "HIP可对特定函数禁用AddressSanitizer，CUDA同TU不能保证混合CU覆盖实验。"
+      },
+      "rocm": {
+        "tool": "gpu-asan",
+        "expect": "unsupported",
+        "reason": "HIP可对特定函数禁用AddressSanitizer，CUDA同TU不能保证混合CU覆盖实验。"
+      }
+    },
+    {
+      "id": "S27",
+      "name": "Graph Replay悬垂引用",
+      "dangerous": true,
+      "cuda": {
+        "tool": "memcheck",
+        "expect": "conditional",
+        "reason": "捕获的graph引用GPU对象已释放，实际运行可能API拒绝或硬件fault。"
+      },
+      "rocm": {
+        "tool": "gpu-asan",
+        "expect": "unsupported",
+        "reason": "捕获的graph引用GPU对象已释放，实际运行可能API拒绝或硬件fault。"
+      }
+    },
+    {
+      "id": "S28",
+      "name": "大量GPU越界与日志限额",
+      "dangerous": false,
+      "cuda": {
+        "tool": "memcheck",
+        "expect": "conditional",
+        "reason": "许多GPU线程同时OOB，测试报告聚合；不能从应用证明工具metadata OOM。"
+      },
+      "rocm": {
+        "tool": "gpu-asan",
+        "expect": "conditional",
+        "reason": "许多GPU线程同时OOB，测试报告聚合；不能从应用证明工具metadata OOM。"
+      }
+    }
+  ]
+}
