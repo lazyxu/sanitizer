@@ -1,5 +1,16 @@
 # 文稿修订记录
 
+## 1.3 · 2026-10-21
+
+本轮根据用户补充：“QEMU全系统虚拟平台已有GPU ISA执行模型”、要求深入展开友商产品实现原理，以及逐方案标明借鉴／融合／原创来源，完成以下变更：
+
+1. 在第1.1、1.2、7.7、8.8、16.9、18.1、18.29、19.7、20及22章相关段落中，将本项目QEMU明确定为**已有目标GPU ISA执行模型的Q2**。其他Q0/Q1/Q3只是架构分类，不代表本项目缺少GPU执行器。cmodel是否同源、Guest链路完整性、checker/metadata接口仍需源码核实。
+2. 第4章扩展为十个小节：NVIDIA memcheck默认运行时/可选编译期、patching/callback/memory API、race/init/sync机制；AMD GPU ASan的Shadow/Redzone及LLVM-runtime接线；Intel Unified Runtime和设备ASan/MSan/TSan分工；MUSA产品可证实功能与未知内部实现；LLVM ASan/HWASan源码；cuCatch/BARRACUDA/HiRace/GPUArmor/SuperCollider研究来源；全路线机制矩阵和官方源链接。
+3. 第4.8节和第9～14章分别明确A、B1/B2、C、D1/D2、E、F0/F1/F2是直接借鉴公开机制、融合多个来源，还是本项目必须单独设计的工程实现。第15.7节增补init/race/sync算法溯源；“原创”不表示基本算法学术新颖。
+4. 第7.7.6、8.8.5提供现有QEMU GPU ISA执行器的pre-access hook、对象/错误协议与最小实现示例；S01详细实例增补七类路线的来源和Compiler/KMD/UMD/cmodel/QEMU改动。
+5. 第16.9.4重新界定预算：QEMU GPU ISA模型已经存在，不重计开发费；既有14–28kLOC Q2一次性基础包及各路线接入增量只是**对应接口全部缺失时的条件性预算参考**。新增[estimates-v1.3.json](estimates-v1.3.json)，保留原[v1.2](estimates-v1.2.json)以便追溯。
+6. 官方参考新增[I03] oneAPI Unified Runtime，资料数更新至40；同步README、研究进度、验证记录。所有检查仅为文档结构/设计核对，未实现或执行目标GPU sanitizer。
+
 ## 1.2 · 2026-10-20
 
 依据“按编译器、KMD、UMD划分组件，逐方案说明功能级cmodel及QEMU全系统平台的检测与修改支持”的修订要求：
