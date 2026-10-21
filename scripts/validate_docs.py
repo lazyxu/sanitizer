@@ -73,12 +73,15 @@ for p in ROOT.rglob("*"):
           f"{p.relative_to(ROOT)}中不得再出现额外产品路线")
 
 
-# 旧方案不能只是把专有名称删掉、继续保留相同的“方案A”执行职责。
+# 旧产品概念不能只删除名称、继续保留同义的设备检查实现职责。
 # 谨慎避开S04案例中“对象A/对象B”的合法文字，防止误删原对象Bounds示例。
 retired_meaning_patterns = [
     re.compile(r"(?<![A-Za-z0-9_])A\s*(?:在allocation时|按\x60launch|按动态warp|同时模拟|同时记录对象|把异步传输|使用global|记录capture|按资源描述符|须连同Host访问|在同步指令执行|须额外保留token)"),
     re.compile(r"模型(?:来源追踪只能辅助|重放可测试|只负责验证|只能对照|能解释库指令|若只有VA表)"),
-    re.compile(r"(?:GPU ISA模型的访存hook|A小用例oracle|UMD/模型|模型事件重放产品方案)"),
+    re.compile("(?:" + "|".join((
+        "GPU ISA" + "模型的访存hook", "A" + "小用例oracle",
+        "UMD/" + "模型", "模型事件" + "重放产品方案"
+    )) + ")"),
 ]
 # 验证审计规则本身：必须抓出废弃实现，同时保留真正的对象A/B边界案例。
 for example in ("A" + "同时模拟命令DAG", "模型" + "来源追踪只能辅助验证",
