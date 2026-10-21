@@ -1,0 +1,653 @@
+{
+  "version": "1.8",
+  "as_of": "2026-10-21",
+  "status": "UNMEASURED_DESIGN_ESTIMATE; REAL_GPU_NOT_TESTED",
+  "unit": "kLOC newly written or substantively modified; ranges are planning envelopes",
+  "eligibility": "B,C,D,E require device ISA checks running on physical GPU; F requires real GPU MMU/Tag/Bounds mechanisms; F0 page granular",
+  "responsibility": "Compiler includes delivered GPU Device Runtime but it executes on device. C pure-runtime requires no production Compiler changes; device stubs and binary rewriter counted in UMD.",
+  "budget_scope": "P included exactly once per standalone route; KMD assumed reused; new KMD interfaces added by confirmed gaps only; no new RTL/Firmware/ASIC costs",
+  "production": {
+    "P": {
+      "compiler": {
+        "core": [
+          2,
+          4
+        ],
+        "test": [
+          2,
+          4
+        ]
+      },
+      "umd": {
+        "core": [
+          6,
+          11
+        ],
+        "test": [
+          5,
+          8
+        ]
+      },
+      "kmd": {
+        "core": [
+          0,
+          0
+        ],
+        "test": [
+          0,
+          0
+        ]
+      }
+    },
+    "routes": {
+      "B": {
+        "Compiler": {
+          "core": [
+            14,
+            26
+          ],
+          "test": [
+            12,
+            22
+          ]
+        },
+        "UMD": {
+          "core": [
+            11,
+            22
+          ],
+          "test": [
+            9,
+            17
+          ]
+        },
+        "KMD": {
+          "core": [
+            0,
+            0
+          ],
+          "test": [
+            0,
+            0
+          ]
+        },
+        "productionTotals": {
+          "core": [
+            25,
+            48
+          ],
+          "test": [
+            21,
+            39
+          ],
+          "combined": [
+            46,
+            87
+          ]
+        }
+      },
+      "C": {
+        "Compiler": {
+          "core": [
+            0,
+            0
+          ],
+          "test": [
+            0,
+            0
+          ]
+        },
+        "UMD": {
+          "core": [
+            31,
+            60
+          ],
+          "test": [
+            27,
+            51
+          ]
+        },
+        "KMD": {
+          "core": [
+            0,
+            0
+          ],
+          "test": [
+            0,
+            0
+          ]
+        },
+        "productionTotals": {
+          "core": [
+            31,
+            60
+          ],
+          "test": [
+            27,
+            51
+          ],
+          "combined": [
+            58,
+            111
+          ]
+        }
+      },
+      "D": {
+        "Compiler": {
+          "core": [
+            30,
+            58
+          ],
+          "test": [
+            25,
+            49
+          ]
+        },
+        "UMD": {
+          "core": [
+            16,
+            31
+          ],
+          "test": [
+            14,
+            25
+          ]
+        },
+        "KMD": {
+          "core": [
+            0,
+            0
+          ],
+          "test": [
+            0,
+            0
+          ]
+        },
+        "productionTotals": {
+          "core": [
+            46,
+            89
+          ],
+          "test": [
+            39,
+            74
+          ],
+          "combined": [
+            85,
+            163
+          ]
+        }
+      },
+      "E": {
+        "Compiler": {
+          "core": [
+            42,
+            80
+          ],
+          "test": [
+            35,
+            67
+          ]
+        },
+        "UMD": {
+          "core": [
+            27,
+            52
+          ],
+          "test": [
+            24,
+            46
+          ]
+        },
+        "KMD": {
+          "core": [
+            0,
+            0
+          ],
+          "test": [
+            0,
+            0
+          ]
+        },
+        "productionTotals": {
+          "core": [
+            69,
+            132
+          ],
+          "test": [
+            59,
+            113
+          ],
+          "combined": [
+            128,
+            245
+          ]
+        }
+      },
+      "F": {
+        "Compiler": {
+          "core": [
+            11,
+            22
+          ],
+          "test": [
+            11,
+            22
+          ]
+        },
+        "UMD": {
+          "core": [
+            12,
+            24
+          ],
+          "test": [
+            11,
+            20
+          ]
+        },
+        "KMD": {
+          "core": [
+            0,
+            0
+          ],
+          "test": [
+            0,
+            0
+          ]
+        },
+        "productionTotals": {
+          "core": [
+            23,
+            46
+          ],
+          "test": [
+            22,
+            42
+          ],
+          "combined": [
+            45,
+            88
+          ]
+        }
+      }
+    }
+  },
+  "condition_KMD_contracts": {
+    "K_M_mapping": {
+      "core": [
+        3,
+        7
+      ],
+      "test": [
+        3,
+        8
+      ]
+    },
+    "K_E_fault_completion": {
+      "core": [
+        2,
+        4
+      ],
+      "test": [
+        2,
+        5
+      ]
+    },
+    "K_A_abort_kernel_driver_only": {
+      "core": [
+        2,
+        5
+      ],
+      "test": [
+        2,
+        5
+      ]
+    },
+    "K_X_executable_code_interface": {
+      "core": [
+        1,
+        3
+      ],
+      "test": [
+        1,
+        3
+      ]
+    },
+    "K_F_hardware_metadata_context": {
+      "core": [
+        3,
+        7
+      ],
+      "test": [
+        3,
+        8
+      ]
+    }
+  },
+  "condition_KMD_routes": {
+    "B": {
+      "packages": [
+        "K_M_mapping",
+        "K_E_fault_completion",
+        "K_A_abort_kernel_driver_only"
+      ],
+      "all_listed_missing_envelope": {
+        "core": [
+          7,
+          16
+        ],
+        "test": [
+          7,
+          18
+        ]
+      }
+    },
+    "C": {
+      "packages": [
+        "K_M_mapping",
+        "K_E_fault_completion",
+        "K_A_abort_kernel_driver_only",
+        "K_X_executable_code_interface"
+      ],
+      "all_listed_missing_envelope": {
+        "core": [
+          8,
+          19
+        ],
+        "test": [
+          8,
+          21
+        ]
+      }
+    },
+    "D": {
+      "packages": [
+        "K_M_mapping",
+        "K_E_fault_completion",
+        "K_A_abort_kernel_driver_only"
+      ],
+      "all_listed_missing_envelope": {
+        "core": [
+          7,
+          16
+        ],
+        "test": [
+          7,
+          18
+        ]
+      }
+    },
+    "E": {
+      "packages": [
+        "K_M_mapping",
+        "K_E_fault_completion",
+        "K_A_abort_kernel_driver_only",
+        "K_X_executable_code_interface"
+      ],
+      "all_listed_missing_envelope": {
+        "core": [
+          8,
+          19
+        ],
+        "test": [
+          8,
+          21
+        ]
+      }
+    },
+    "F": {
+      "packages": [
+        "K_M_mapping",
+        "K_E_fault_completion",
+        "K_A_abort_kernel_driver_only",
+        "K_F_hardware_metadata_context"
+      ],
+      "all_listed_missing_envelope": {
+        "core": [
+          10,
+          23
+        ],
+        "test": [
+          10,
+          26
+        ]
+      }
+    }
+  },
+  "additional_checkers": {
+    "Initcheck": {
+      "Compiler": {
+        "core": [
+          5,
+          10
+        ],
+        "test": [
+          4,
+          8
+        ]
+      },
+      "UMD": {
+        "core": [
+          3,
+          6
+        ],
+        "test": [
+          3,
+          6
+        ]
+      },
+      "total": {
+        "core": [
+          8,
+          16
+        ],
+        "test": [
+          7,
+          14
+        ]
+      }
+    },
+    "Synccheck": {
+      "Compiler": {
+        "core": [
+          5,
+          10
+        ],
+        "test": [
+          5,
+          10
+        ]
+      },
+      "UMD": {
+        "core": [
+          2,
+          4
+        ],
+        "test": [
+          2,
+          4
+        ]
+      },
+      "total": {
+        "core": [
+          7,
+          14
+        ],
+        "test": [
+          7,
+          14
+        ]
+      }
+    },
+    "shared_race": {
+      "Compiler": {
+        "core": [
+          11,
+          22
+        ],
+        "test": [
+          11,
+          22
+        ]
+      },
+      "UMD": {
+        "core": [
+          3,
+          7
+        ],
+        "test": [
+          3,
+          7
+        ]
+      },
+      "total": {
+        "core": [
+          14,
+          29
+        ],
+        "test": [
+          14,
+          29
+        ]
+      }
+    },
+    "global_race_addition": {
+      "Compiler": {
+        "core": [
+          8,
+          16
+        ],
+        "test": [
+          8,
+          17
+        ]
+      },
+      "UMD": {
+        "core": [
+          5,
+          11
+        ],
+        "test": [
+          5,
+          12
+        ]
+      },
+      "total": {
+        "core": [
+          13,
+          27
+        ],
+        "test": [
+          13,
+          29
+        ]
+      }
+    },
+    "collision_mode": {
+      "Compiler": {
+        "core": [
+          6,
+          12
+        ],
+        "test": [
+          5,
+          10
+        ]
+      },
+      "UMD": {
+        "core": [
+          2,
+          4
+        ],
+        "test": [
+          2,
+          5
+        ]
+      },
+      "total": {
+        "core": [
+          8,
+          16
+        ],
+        "test": [
+          7,
+          15
+        ]
+      }
+    }
+  },
+  "hybrid_E_dedup": {
+    "P": {
+      "core": [
+        8,
+        15
+      ],
+      "test": [
+        7,
+        12
+      ]
+    },
+    "B_increment": {
+      "core": [
+        17,
+        33
+      ],
+      "test": [
+        14,
+        27
+      ]
+    },
+    "D_unique": {
+      "core": [
+        27,
+        51
+      ],
+      "test": [
+        22,
+        42
+      ]
+    },
+    "C_subset": {
+      "core": [
+        9,
+        18
+      ],
+      "test": [
+        8,
+        17
+      ]
+    },
+    "cross_mode": {
+      "core": [
+        8,
+        15
+      ],
+      "test": [
+        8,
+        15
+      ]
+    },
+    "total": {
+      "core": [
+        69,
+        132
+      ],
+      "test": [
+        59,
+        113
+      ]
+    }
+  },
+  "hardware_delivery": {
+    "F0": "Real GPU MMU mappings/fault; page-level only",
+    "F1": "Physical GPU Tag ISA/metadata/invalidations required",
+    "F2": "Physical GPU bounds/metadata mechanism required",
+    "absent_hardware": "UNSUPPORTED; RTL/ASIC and firmware separately scoped"
+  },
+  "verification": {
+    "target_hardware_executed": false,
+    "source_code_implemented": false,
+    "arithmetic_verified": true,
+    "comment": "only structure and arithmetic can be validated by scripts; all measurement status unknown"
+  }
+}
