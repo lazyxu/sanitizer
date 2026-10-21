@@ -47,15 +47,13 @@ if (tid == 0) out[2] = x;                // 末尾barrier不能倒推消除先�
 
 验收同时加入同一word内不同byte的独立并发写，确认检测依据是实际字节交集，而非仅因共用metadata单元就误报冲突。
 
-## 生产方案与两类模型辅助验证职责
+## 实体GPU生产组件职责
 
-**模型及QEMU仅验证实际GPU设备检查产物/真实硬件机制，不可作为独立Sanitizer产品方案。**
+**只能由实体GPU实际执行设备检查器或已有硬件机制提供产品检测，实卡证据是验收依据。**
 
 | 角色 | 正确职责 |
 |---|---|
 | **真实GPU生产Checker** | Compiler/UMD生成并使GPU执行设备检查ISA；或实体GPU硬件检查单元/MMU触发，附真实设备报告 |
-| 独立功能级cmodel（验证） | byte冲突、线程身份、barrier HB或适用FSM；只用于预验证真实checker产物和oracle差分 |
-| **现有QEMU GPU ISA解释器（验证）** | 保持GPU同步模型，核对launch/resource配置；不能用模型独有访存hook代替真实设备检查 |
 | KMD（生产） | 不提供GPU内部逐线程HB；驱动job按序也不消除kernel内部race；已充分支持的接口不需改源码 |
 
 ## 验收需要留下什么证据？
