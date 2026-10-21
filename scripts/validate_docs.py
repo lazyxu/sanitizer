@@ -149,14 +149,14 @@ for required in (
     "D1", "原对象", "当前Live", "辅助", "Shadow",
 ):
     check(required in s01, "S01缺少来源/当前表/辅助硬件语义：" + required)
-check("F0（原G）" in s01 and "不作为独立完整路线" in main
+check("F0（原G）" in s01 and "不作为独立完整方案" in main
       and "F0页保护仅辅助" in root_readme,
       "F0/G必须是辅助GPU页保护，而不是完整4B对象检测产品")
 check("D1 original" in s01 or "D1原对象" in s01,
       "必须分清B1当前Live表和D1 original-object provenance")
 check("I是B1" in s01 and "E是混合交付策略" in s01,
       "旧I不得独立立项，E不得宣称独立检测算法")
-check("F1/F2" in budget.get("eligibility", "")
+check("F1" in budget.get("eligibility", "") and "F2" in budget.get("eligibility", "")
       and "auxiliary" in budget.get("hardware_delivery", {}).get("F0", "").lower(),
       "预算F必须依赖F1/F2真实硬件；F0不能单独进入F完整产品估算")
 taxonomy = budget.get("route_taxonomy", {})
