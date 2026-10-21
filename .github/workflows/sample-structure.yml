@@ -1,0 +1,22 @@
+name: GPU samples static structure (not hardware validation)
+on:
+  push:
+    paths:
+      - 'samples/**'
+      - 'scripts/**'
+      - '.github/workflows/sample-structure.yml'
+  pull_request:
+    paths:
+      - 'samples/**'
+      - 'scripts/**'
+jobs:
+  static-structure:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Python syntax
+        run: python3 -m py_compile scripts/run_samples.py scripts/validate_layout.py
+      - name: Bash syntax
+        run: bash -n scripts/setup-docker.sh scripts/run-all.sh
+      - name: Source inventory only — no GPU hardware
+        run: python3 scripts/validate_layout.py
