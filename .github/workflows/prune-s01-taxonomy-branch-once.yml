@@ -1,0 +1,52 @@
+name: One-time S01 taxonomy branch cleanup
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - ".github/workflows/prune-s01-taxonomy-branch-once.yml"
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  delete-merged-pr-branch:
+    if: github.repository == 'lazyxu/sanitizer' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Delete exact verified merged PR head ref
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const {owner, repo} = context.repo;
+            const expected = "9140e1a159b6163ebc415462b8f0e3fb3ab48068";
+            const branch = "docs/s01-xnack-route-taxonomy-20261021";
+            const {data: pr} = await github.rest.pulls.get({
+              owner, repo, pull_number: 5
+            });
+            if (pr.state !== "closed" || !pr.merged_at ||
+                pr.head.ref !== branch || pr.head.sha !== expected ||
+                pr.head.repo?.full_name !== owner + "/" + repo) {
+              throw Error("PR #5 not safely merged or head changed");
+            }
+            const ref = "heads/" + branch;
+            try {
+              const x = await github.rest.git.getRef({owner, repo, ref});
+              if (x.data.object.sha !== expected) throw Error("Unexpected branch HEAD");
+            } catch (err) {
+              if (err.status === 404) {
+                core.info("Branch already absent");
+                return;
+              }
+              throw err;
+            }
+            await github.rest.git.deleteRef({owner, repo, ref});
+            try {
+              await github.rest.git.getRef({owner, repo, ref});
+              throw Error("Deleted branch unexpectedly still exists");
+            } catch (err) {
+              if (err.status !== 404) throw err;
+            }
+            core.info("Verified removed merged branch: " + branch);
