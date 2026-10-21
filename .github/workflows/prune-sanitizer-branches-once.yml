@@ -1,0 +1,87 @@
+name: One-time retired sanitizer branch pruning
+
+# Temporary, explicitly scoped maintenance action. Remove this file after a successful run.
+on:
+  push:
+    branches: [master]
+    paths:
+      - ".github/workflows/prune-sanitizer-branches-once.yml"
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  prune-exact-refs:
+    if: github.repository == 'lazyxu/sanitizer' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify PR state and exact ref before deletion
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const {owner, repo} = context.repo;
+            const rules = [
+              {
+                pr: 1,
+                branch: "docs/real-gpu-only-remove-model-references-20261021",
+                sha: "b505bdecac6bc93d0e1195003a547ac6df5323cf",
+                merged: false
+              },
+              {
+                pr: 2,
+                branch: "docs/gpu-sanitizer-hardware-only-components",
+                sha: "51e47c1680d48da179c367c0c0968ce48fe2d394",
+                merged: true
+              },
+              {
+                pr: 3,
+                branch: "docs/amd-gpu-asan-hardware-fallback-legacy-cleanup-20261021",
+                sha: "2c1bcc5e3181fe55bb4f8a6cd03269182232b293",
+                merged: true
+              },
+              {
+                pr: 4,
+                branch: "chore/final-r01-r05-prune-branches-20261021",
+                sha: null,
+                merged: true
+              }
+            ];
+            let deleted = 0;
+            for (const rule of rules) {
+              const {data: pr} = await github.rest.pulls.get({
+                owner, repo, pull_number: rule.pr
+              });
+              if (pr.state !== "closed" ||
+                  Boolean(pr.merged_at) !== rule.merged ||
+                  pr.head.ref !== rule.branch ||
+                  pr.head.repo?.full_name !== owner + "/" + repo) {
+                throw Error("PR state/ref mismatch for #" + rule.pr + ": " + rule.branch);
+              }
+              const ref = "heads/" + rule.branch;
+              let actual = null;
+              try {
+                const response = await github.rest.git.getRef({owner, repo, ref});
+                actual = response.data.object.sha;
+              } catch (error) {
+                if (error.status !== 404) throw error;
+                core.info("Already absent: " + rule.branch);
+                continue;
+              }
+              const expected = rule.sha || pr.head.sha;
+              if (actual !== expected) {
+                throw Error("Branch changed after review, refusing deletion: " + rule.branch +
+                            ", expected=" + expected + ", actual=" + actual);
+              }
+              await github.rest.git.deleteRef({owner, repo, ref});
+              try {
+                await github.rest.git.getRef({owner, repo, ref});
+                throw Error("Branch still present after delete: " + rule.branch);
+              } catch (error) {
+                if (error.status !== 404) throw error;
+              }
+              core.info("Deleted verified retired ref: " + rule.branch);
+              deleted += 1;
+            }
+            core.info("Verified retired refs pruned this run: " + deleted);

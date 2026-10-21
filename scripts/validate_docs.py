@@ -77,6 +77,7 @@ for p in ROOT.rglob("*"):
 # 谨慎避开S04案例中“对象A/对象B”的合法文字，防止误删原对象Bounds示例。
 retired_meaning_patterns = [
     re.compile(r"(?:方案|路线)\s*A(?=\W|[\u4e00-\u9fff])"),
+    re.compile(r"独立\s*A\s*(?:校验|验证|检测|检查)"),
     re.compile(r"(?<![A-Za-z0-9_])A\s*(?:在allocation时|按\x60launch|按动态warp|同时模拟|同时记录对象|把异步传输|使用global|记录capture|按资源描述符|须连同Host访问|在同步指令执行|须额外保留token)"),
     re.compile(r"模型(?:来源追踪只能辅助|重放可测试|只负责验证|只能对照|能解释库指令|若只有VA表)"),
     re.compile("(?:" + "|".join((
@@ -85,7 +86,8 @@ retired_meaning_patterns = [
     )) + ")"),
 ]
 # 验证审计规则本身：必须抓出废弃实现，同时保留真正的对象A/B边界案例。
-for example in ("路线" + "A的旧条目", "A" + "同时模拟命令DAG",
+for example in ("独立" + "A校验", "路线" + "A的旧条目",
+                "A" + "同时模拟命令DAG",
                 "模型" + "来源追踪只能辅助验证",
                 "A" + "按动态warp", "A" + "记录capture节点"):
     check(any(pat.search(example) for pat in retired_meaning_patterns),
