@@ -1,6 +1,6 @@
 # S01 工程实施指南：先看 NVIDIA、再看 AMD，最后比较其他方案
 
-**版本 1.0 · 2026-10-21 · 适用对象：自研 LLVM GPU 编译器、KMD、UMD、功能级 cmodel、已有目标 GPU ISA 执行器的 QEMU 全系统平台。**
+**版本 1.1（澄清运行时二进制插桩的编译器零改动边界）· 2026-10-21 · 适用对象：自研 LLVM GPU 编译器、KMD、UMD、功能级 cmodel、已有目标 GPU ISA 执行器的 QEMU 全系统平台。**
 
 > 本文是面向研发落地的**厂商方案优先**设计说明，不是某个闭源 GPU Sanitizer 的反编译说明。凡“厂商官方确认”的机制都给出来源与限长英文原文；凡没有公开具体实现的数据结构、ISA 注入方法或内核接口，均明确写作**本项目建议实现**，不冒充 NVIDIA/AMD 的私有实现。
 >
@@ -41,7 +41,7 @@ bool within(uint64_t addr, uint64_t width,
 
 | 层 | 作用 | 是否必须新增代码的判断 |
 |---|---|---|
-| Compiler | 收集或注入设备访存检查点、可选原对象来源/DebugLoc、输出能力声明 | NVIDIA运行时式C可主要复用MC/ISA工具；AMD式B必须改编译器/Pass；NVIDIA编译期式D还要来源传播 |
+| Compiler | 为编译期方案插桩、保留原对象或调试映射；**NVIDIA-R纯运行时模式无需它参与** | **NVIDIA-R：生产编译器可保持完全不改（新增0）**。可选择复用现有MC库，或由UMD侧独立开发机器码解码器；AMD式LLVM ASan与NVIDIA编译期式Bounds才需要编译器改动 |
 | KMD | GPUVA/BO映射、执行提交与完成、所选错误策略需要的fault/abort或reset | 有足够既有契约则可以新增 **0**；KMD不应代替UMD凭空推断每个tensor长度 |
 | UMD | 用户逻辑 requested_size、分配/释放与异步顺序、module load/patch、Shadow/对象表、诊断解析 | 各真机方案都需要UMD侧可靠对象事件，但实现量不同 |
 | 功能级 cmodel | 可选独立地址/原对象 oracle 和访存语义差分 | 如果希望独立判定错误，需要模型hook/参考检查器，不是只运行一次插桩后的代码 |
@@ -85,12 +85,32 @@ Host报告（kernel、PC、block/thread、GPUVA、字节宽度、allocation）
 
 NVIDIA 公开的 Patching API 示例使用 `sanitizerPatchInstructions`、`sanitizerPatchModule`、`sanitizerSetCallbackData`，其设备访问回调携带 `pc`、`ptr`、`accessSize`、`flags` 等。**这些是可公开使用的 NVIDIA工具API，不代表自研 GPU现成拥有该API；也不是 NVIDIA 内部完整重写器源码。**
 
+### 1.2.1 “不要求特殊编译”到底意味着什么？
+
+**【官方事实】** [NVIDIA Compute Sanitizer 用户手册 — Compilation Options](https://docs.nvidia.com/compute-sanitizer/ComputeSanitizer/index.html#compilation-options)：
+
+> The Compute Sanitizer tools do not need any special compilation flags to function.
+
+准确含义是**用户程序按原有编译器生成二进制**；运行时工具在二进制已生成以后做插桩。对自研 GPU，**并非必须修改生产编译器、LLVM Pass、CodeGen、MC 后端或重新编译应用**。上版把“可选复用已有 Compiler/MC 解码库”误写成“Compiler/MC 必须交付新功能”，这是错误的必需依赖，已修正。
+
+需要区分四种动作：
+
+| 动作 | 是否要求修改生产编译器？ | 应由谁负责 |
+|---|---|---|
+| 使用现有编译器编译原始应用 | **否**，产物可以早已存在，甚至源代码不可得 | 原编译流程；Sanitizer无额外编译要求 |
+| 编译新编写的设备 Patch Callback | **否**，使用已存在的目标编译器／汇编器编译一个**工具自己的模块**；不会修改原应用二进制生成规则 | UMD Runtime Instrumentation 项目的设备 Patch 库 |
+| 解码现有机器码、插入检查、修正控制流并重新编码 | **否**，可由**独立的 Runtime Binary Rewriter** 在UMD工具域实现；**复用现有 MC 库是可选实现优化** | UMD／独立运行时插桩库 |
+| 扩展 LLVM Pass、修改 CodeGen/MC 来支持新插桩语义 | **是**，但**仅为某个实施选择额外要求时才做**，不是 NVIDIA-R 风格的必要条件 | Compiler可选协作，不属于纯运行时方案的强制工作 |
+
+NVIDIA 公开 [Patching API Guide](https://docs.nvidia.com/compute-sanitizer/SanitizerApiGuide/index.html#writing-a-patch) 使用普通`nvcc --cubin --compile-as-tools-patch`生成工具 Patch CUBIN，再通过 `sanitizerAddPatchesFromFile`、`sanitizerPatchInstructions`、`sanitizerPatchModule`作用于**已经存在的用户模块**。这一示例恰好说明：**编译一个新工具模块≠修改编译器≠必须重新编译原应用**。[官方Patching API](https://docs.nvidia.com/compute-sanitizer/api/group__SANITIZER__PATCHING__API.html)
+
 #### 若模仿 NVIDIA-R，自研 GPU 每个组件要改什么？
 
 | 组件 | 需要交付的新增模块／具体接口 | 需要验证的关键边界 |
 |---|---|---|
-| **Compiler / MC** | 给 UMD 提供目标机器码解码器、访存指令种类/宽度/谓词/地址空间语义表、branch relocation/encode、resource usage更新；可选源PC映射 | IR后产生的所有Global opcode/atomic/vector不能无声漏掉；若原decoder不支持，明确报UNSUPPORTED |
-| **UMD（主要工作包）** | `SanModulePatcher`、`SanPatchCache`、`SanAllocationRegistry`、`SanReportDecoder`；拦截用户模块/JIT load、alloc/free、launch/event；patch新机器码并维护原PC→新PC映射 | 用户requested_size与BO大小不同；缓存版本+ABI变化；多stream/graph及device-side allocator的覆盖 |
+| **Compiler（生产编译器）** | **默认无新增修改：0。** 原流程生成GPU二进制即可；可读取既有目标ISA规范、现有反汇编工具或DebugInfo；不强制新增LLVM Pass/MC/CodeGen | 如果二进制是签名/加密/不可重写格式，运行时插桩需先验证允许的正规工具接口；不能把“改编译器”伪装成唯一解 |
+| **Runtime Binary Rewriter（UMD侧独立库）** | **真正负责**机器码 decode/访存opcode与谓词/宽度/地址空间语义、插入patch stub、branch relocation、encode、reg/scratch/resource usage重算。可选择调用现有MC库但不修改它，也可以自建decoder/encoder | 每个实际Global opcode都有准确语义；未支持的明确记录PARTIAL_COVERAGE。重写后需要执行等价性测试及资源审计 |
+| **UMD（主要工作包）** | 装载/调用Runtime Binary Rewriter，负责`SanModulePatcher`、`SanPatchCache`、`SanAllocationRegistry`、`SanReportDecoder`与设备Patch模块；拦截用户模块/JIT load、alloc/free、launch/event，维护原PC→新PC映射 | 用户requested_size与BO大小不同；代码签名与运行权限、缓存版本+ABI变化；多stream/graph/device-side allocator覆盖；不能绕过正常loader/KMD安全检查 |
 | **KMD** | 复用合法的可执行代码映射、BO/GPUVA、提交/完成、出错context处理；若资源描述/运行中终止接口缺失，单列修改 | 不允许通过任意可写可执行映射绕过代码安全策略；部分硬件fault可能只有粗粒度定位 |
 | **功能级 cmodel** | 加入原二进制与patch后二进制的等价性差分、访问事件/reference oracle | 工具插桩不得更改合法指令的predicate、寄存器值、barrier和lane活跃集合 |
 | **已有 QEMU GPU ISA 执行器** | 使用正常 Guest UMD路径装载patch二进制并执行；接入报告、module PC以及对象事件 | 不重做 GPU ISA解释器；如果patch引入新opcode，才按实际补语义；不能把CPU TCG回调算GPU访存 |
@@ -126,6 +146,8 @@ PatchedModule patch_module(const Module& module) {
     return result.finish();
 }
 ~~~
+
+**上述 `target_isa_decode`、`CodeBuilder`、重定位与资源计算全部属于独立 Runtime Binary Rewriter/UMD 工具库，不是对生产 Compiler 的必需改动；既有LLVM MC库只是可选复用依赖。**
 
 其中 `emit_guarded_check` **必须**落成目标 GPU 上真正能执行的检查指令序列或设备函数，不是 Host检查函数。需要失败动作（继续/终止）与barrier-safe策略，以免出错lane提前退出让其他lane卡在barrier。
 
@@ -234,11 +256,11 @@ compute-sanitizer --tool memcheck ./s01_ct --bad
 | 问题 | NVIDIA-R / 运行时 | NVIDIA-C / 编译期 |
 |---|---|---|
 | 需要重编译应用并提供特殊选项吗 | 不需要（普通可执行二进制） | 需要启用编译器插桩 |
-| 是否必须建设机器码decoder/rewriter | **自研复制该路线需要** | 不需要二进制rewriter作为首版前置 |
+| 是否需要机器码decoder/rewriter能力 | **需要，但可由UMD独立构建/复用，不要求修改生产编译器**；已有合法Patch API时复用 | 不需要二进制rewriter作为首版前置 |
 | 是否必须建设LLVM来源分析 | 非首版条件 | **必须做已声明范围的原对象分析** |
 | 错误落入相邻live对象B | 当前有效区检查可能漏 | 来源已知时能检出 |
 | 第一版更推荐哪条 | 仅闭源模块很重要且已有成熟rewriter时 | 想要原对象保证、能改LLVM时 |
-| 最主要成本位置 | UMD Loader/Patcher、Compiler MC、覆盖审计 | Compiler SSA来源传播、对象ABI、Device Checker |
+| 最主要成本位置 | **UMD/独立Binary Rewriter**、设备Patch/Report、ISA语义和覆盖审计；Compiler源代码默认零改动 | Compiler SSA来源传播、对象ABI、Device Checker |
 | 现有 QEMU GPU模型 | 运行patch后二进制，核对合法行为不变 | 运行编译产物，核对原对象描述符与设备报告 |
 
 若想兼顾预编译库与可重编译自研模块，NVIDIA官方手册也有 **Hybrid Instrumentation**：对已编译期插桩的编译单元使用该机制，对没有插桩的单元使用运行时二进制检查。针对本项目需要自行设计module manifest与能力降级，**不能**声称混用后任意未插桩函数自然获得相同D1保证。
