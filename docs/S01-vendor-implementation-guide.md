@@ -8,7 +8,7 @@
 
 ## 0. S01 应交付的检测保证（先固定问题）
 
-真实 GPU 算子中最常见的例子是长度为 1000 的向量，按 256 线程/block 启动 4 个 block，遗漏 \`idx < N\` 判断，造成线程 1000～1023 访问非法的数组元素。另一个例子是卷积/stencil 的首个线程访问 \`input[-1]\`，末个线程访问 \`input[N]\`。这不是 CPU 数组访问错误，而是 GPU Global Load/Store 真实生效时的访存问题。
+真实 GPU 算子中最常见的例子是长度为 1000 的向量，按 256 线程/block 启动 4 个 block，遗漏 `idx < N` 判断，造成线程 1000～1023 访问非法的数组元素。另一个例子是卷积/stencil 的首个线程访问 `input[-1]`，末个线程访问 `input[N]`。这不是 CPU 数组访问错误，而是 GPU Global Load/Store 真实生效时的访存问题。
 
 可重复的 S01 基准：UMD 登记 64 B 逻辑对象，受控示例用户首地址 0x1000，合法区间为 [0x1000,0x1040)，4 B 访问如下：
 
@@ -59,7 +59,7 @@ NVIDIA 官方 [Compute Sanitizer User Manual — Compile-time patching](https://
 
 **含义：** NVIDIA 默认 Memcheck 是**运行时二进制插桩**；编译期插桩是另一条路径，只有 Memcheck 当前支持该模式。Racecheck、Initcheck、Synccheck 仍有自己的运行时机制，不能把它们归为同一个 Bounds 算法。
 
-NVIDIA 2025-12-10 [官方开发者技术文章](https://developer.nvidia.com/blog/better-bug-detection-how-compile-time-instrumentation-for-compute-sanitizer-enhances-memory-safety/)解释运行时检测是访问点附近的二进制插桩，按**当前有效分配地址范围**检查，可能漏掉 A 越界进入同样有效的 B；通过 \`--padding 32\` 等可提高部分边界情形的检出率。**不能据此推断 NVIDIA 内部使用 LLVM ASan 的1:8 Shadow布局或某种特定对象查找树**——默认 Memcheck 的完整私有实现并未公开。
+NVIDIA 2025-12-10 [官方开发者技术文章](https://developer.nvidia.com/blog/better-bug-detection-how-compile-time-instrumentation-for-compute-sanitizer-enhances-memory-safety/)解释运行时检测是访问点附近的二进制插桩，按**当前有效分配地址范围**检查，可能漏掉 A 越界进入同样有效的 B；通过 `--padding 32` 等可提高部分边界情形的检出率。**不能据此推断 NVIDIA 内部使用 LLVM ASan 的1:8 Shadow布局或某种特定对象查找树**——默认 Memcheck 的完整私有实现并未公开。
 
 ### 1.2 路径 NVIDIA-R：运行时二进制插桩（不要求特殊编译）
 
@@ -83,14 +83,14 @@ Host报告（kernel、PC、block/thread、GPUVA、字节宽度、allocation）
 
 > The Compute Sanitizer Patching API allows you to load patch functions and insert them into user code.
 
-NVIDIA 公开的 Patching API 示例使用 \`sanitizerPatchInstructions\`、\`sanitizerPatchModule\`、\`sanitizerSetCallbackData\`，其设备访问回调携带 \`pc\`、\`ptr\`、\`accessSize\`、\`flags\` 等。**这些是可公开使用的 NVIDIA工具API，不代表自研 GPU现成拥有该API；也不是 NVIDIA 内部完整重写器源码。**
+NVIDIA 公开的 Patching API 示例使用 `sanitizerPatchInstructions`、`sanitizerPatchModule`、`sanitizerSetCallbackData`，其设备访问回调携带 `pc`、`ptr`、`accessSize`、`flags` 等。**这些是可公开使用的 NVIDIA工具API，不代表自研 GPU现成拥有该API；也不是 NVIDIA 内部完整重写器源码。**
 
 #### 若模仿 NVIDIA-R，自研 GPU 每个组件要改什么？
 
 | 组件 | 需要交付的新增模块／具体接口 | 需要验证的关键边界 |
 |---|---|---|
 | **Compiler / MC** | 给 UMD 提供目标机器码解码器、访存指令种类/宽度/谓词/地址空间语义表、branch relocation/encode、resource usage更新；可选源PC映射 | IR后产生的所有Global opcode/atomic/vector不能无声漏掉；若原decoder不支持，明确报UNSUPPORTED |
-| **UMD（主要工作包）** | \`SanModulePatcher\`、\`SanPatchCache\`、\`SanAllocationRegistry\`、\`SanReportDecoder\`；拦截用户模块/JIT load、alloc/free、launch/event；patch新机器码并维护原PC→新PC映射 | 用户requested_size与BO大小不同；缓存版本+ABI变化；多stream/graph及device-side allocator的覆盖 |
+| **UMD（主要工作包）** | `SanModulePatcher`、`SanPatchCache`、`SanAllocationRegistry`、`SanReportDecoder`；拦截用户模块/JIT load、alloc/free、launch/event；patch新机器码并维护原PC→新PC映射 | 用户requested_size与BO大小不同；缓存版本+ABI变化；多stream/graph及device-side allocator的覆盖 |
 | **KMD** | 复用合法的可执行代码映射、BO/GPUVA、提交/完成、出错context处理；若资源描述/运行中终止接口缺失，单列修改 | 不允许通过任意可写可执行映射绕过代码安全策略；部分硬件fault可能只有粗粒度定位 |
 | **功能级 cmodel** | 加入原二进制与patch后二进制的等价性差分、访问事件/reference oracle | 工具插桩不得更改合法指令的predicate、寄存器值、barrier和lane活跃集合 |
 | **已有 QEMU GPU ISA 执行器** | 使用正常 Guest UMD路径装载patch二进制并执行；接入报告、module PC以及对象事件 | 不重做 GPU ISA解释器；如果patch引入新opcode，才按实际补语义；不能把CPU TCG回调算GPU访存 |
@@ -127,7 +127,7 @@ PatchedModule patch_module(const Module& module) {
 }
 ~~~
 
-其中 \`emit_guarded_check\` **必须**落成目标 GPU 上真正能执行的检查指令序列或设备函数，不是 Host检查函数。需要失败动作（继续/终止）与barrier-safe策略，以免出错lane提前退出让其他lane卡在barrier。
+其中 `emit_guarded_check` **必须**落成目标 GPU 上真正能执行的检查指令序列或设备函数，不是 Host检查函数。需要失败动作（继续/终止）与barrier-safe策略，以免出错lane提前退出让其他lane卡在barrier。
 
 Device Checker 使用 current-live-range 语义的示例：
 
@@ -158,7 +158,7 @@ compute-sanitizer --tool memcheck --padding 32 ./s01 --bad
 compute-sanitizer --tool memcheck ./s01 --bad --head
 ~~~
 
-**预期：** good无设备非法访存；bad在实际访问尾后4B时报告；head变体需记录是否真的有头部无效区和真实GPU错误输出，不能凭源码推断必定报错。NVIDIA手册说明 \`--padding\` 支持部分 \`cudaMalloc\`/Host分配，不支持 \`cudaHostRegister\` 或 VMM API；也不能覆盖所有shared/global变量布局。它不是通用D1对象身份替代品。[官方Padding章节](https://docs.nvidia.com/compute-sanitizer/ComputeSanitizer/index.html#padding)
+**预期：** good无设备非法访存；bad在实际访问尾后4B时报告；head变体需记录是否真的有头部无效区和真实GPU错误输出，不能凭源码推断必定报错。NVIDIA手册说明 `--padding` 支持部分 `cudaMalloc`/Host分配，不支持 `cudaHostRegister` 或 VMM API；也不能覆盖所有shared/global变量布局。它不是通用D1对象身份替代品。[官方Padding章节](https://docs.nvidia.com/compute-sanitizer/ComputeSanitizer/index.html#padding)
 
 ### 1.3 路径 NVIDIA-C：CUDA 13.1+ 的编译期 Base-and-Bounds
 
@@ -166,7 +166,7 @@ NVIDIA 官方技术文章说明编译器尝试使用带指针、Base和Bounds的
 
 > Pointer arithmetic on fat pointers only modifies the pointer component, leaving the base and bounds intact.
 
-**含义：** 例如 \`a[16]\` 计算出B的地址，预期对象仍是A，因此可以在当前地址有效的情况下报告原对象越界。编译期分析若失败，官方手册说明会降级为常规分配范围检查；**不能对未知来源仍声称达到D1保证**。
+**含义：** 例如 `a[16]` 计算出B的地址，预期对象仍是A，因此可以在当前地址有效的情况下报告原对象越界。编译期分析若失败，官方手册说明会降级为常规分配范围检查；**不能对未知来源仍声称达到D1保证**。
 
 **真实执行链：**
 
@@ -188,8 +188,8 @@ Compute Sanitizer memcheck运行时提供分配/报告/元数据服务
 
 | 组件 | 具体交付 |
 |---|---|
-| **Compiler（最主要）** | \`GPUProvenancePass\`：识别Kernel参数关联对象root，跟踪GEP/phi/select/调用与ABI；\`GPUBoundsInstrumentation\`：在实际访存前查原对象base/size；输出来源是否已知、检查点/覆盖等级和site_id |
-| **UMD** | \`ObjectRegistry\`维护allocation ID/原始逻辑范围；\`KernelArgSidecar\`对公开裸指针参数提供expected object ID/base/size；模块ABI版本、图重放和间接指针数据结构的支持集合 |
+| **Compiler（最主要）** | `GPUProvenancePass`：识别Kernel参数关联对象root，跟踪GEP/phi/select/调用与ABI；`GPUBoundsInstrumentation`：在实际访存前查原对象base/size；输出来源是否已知、检查点/覆盖等级和site_id |
+| **UMD** | `ObjectRegistry`维护allocation ID/原始逻辑范围；`KernelArgSidecar`对公开裸指针参数提供expected object ID/base/size；模块ABI版本、图重放和间接指针数据结构的支持集合 |
 | **KMD** | 原有合法BO/GPUVA、同步及错误管理；无需在每条GPU访存时恢复指针来源；可重用接口时新增0 |
 | **功能级 cmodel** | 对原对象A和邻接B给出独立指针来源检查（不是按当前地址重新定位到B） |
 | **已有 QEMU GPU ISA模型** | 执行编译插桩与设备元数据访问、连接Guest UMD sidecar；构造A越界落入活B，比较真实GPU PC和预期对象；无需新GPU执行器 |
@@ -217,7 +217,7 @@ SanVerdict check_d1(const PointerMeta& p, uint32_t bytes) {
 }
 ~~~
 
-**真正难点：** 编译器不能只传播顶层 \`kernel(int* a)\`，还要明确覆盖指针载入/存储、整数往返、间接调用、模板/库边界、真实Atomic Pointer值与身份的一致性。S01最初可以仅支持已知Kernel指针参数；本报告S04/S09/S25则要求独立追加元数据传播和生命周期能力。
+**真正难点：** 编译器不能只传播顶层 `kernel(int* a)`，还要明确覆盖指针载入/存储、整数往返、间接调用、模板/库边界、真实Atomic Pointer值与身份的一致性。S01最初可以仅支持已知Kernel指针参数；本报告S04/S09/S25则要求独立追加元数据传播和生命周期能力。
 
 官方用法：
 
@@ -322,8 +322,8 @@ SanVerdict check_shadow(const SanContext& ctx,
 
 | 组件 | 必须新增或确认复用的代码 | 具体要测试 |
 |---|---|---|
-| **Compiler（主要）** | LLVM Pass \`GlobalLoad/Store/Atomic → check\`；\`TargetASInfo\`确定Global地址空间；\`ShadowMapping\`、Device Helper ABI与site_id；后端最终访存指令coverage audit | 4B首/末/头/尾，宽访存跨granule，masked-off不误报，原Shadow helper不递归插桩，部分IR操作在后端产生访存不能静默缺口 |
-| **UMD（主要）** | \`SanDebugAllocator\`给GPU对象做Redzone；\`SanShadowManager\`负责映射/poison/unpoison；\`SanLaunchContext\`传Shadow Root/Report Ring；\`SanReportDecoder\`符号化；在实际queue依赖中发布更新 | 用户requested_size≠BO页级size，poison可见性、不同context隔离、async free有效时刻和error工具OOM |
+| **Compiler（主要）** | LLVM Pass `GlobalLoad/Store/Atomic → check`；`TargetASInfo`确定Global地址空间；`ShadowMapping`、Device Helper ABI与site_id；后端最终访存指令coverage audit | 4B首/末/头/尾，宽访存跨granule，masked-off不误报，原Shadow helper不递归插桩，部分IR操作在后端产生访存不能静默缺口 |
+| **UMD（主要）** | `SanDebugAllocator`给GPU对象做Redzone；`SanShadowManager`负责映射/poison/unpoison；`SanLaunchContext`传Shadow Root/Report Ring；`SanReportDecoder`符号化；在实际queue依赖中发布更新 | 用户requested_size≠BO页级size，poison可见性、不同context隔离、async free有效时刻和error工具OOM |
 | **KMD（按需）** | 复用已有GPUVM/BO/map/fence/fault/错误完成；缺少shadow VA预留/映射或终止路径时补正当接口 | Shadow和Report Buffer映射权限、提交/完成顺序、多context清理；不用要求KMD遍历每条Kernel访存 |
 | **功能级 cmodel** | 执行同一检查器设备指令；如要独立oracle，再加非shadow的区间检查 | Shadow读写可见性，用户store之前执行checker，访问宽度/active lane准确 |
 | **已有 QEMU GPU ISA执行器** | 使用现成目标ISA模型运行真正LLVM插桩产物，接Guest UMD Shadow资源与错误反馈 | 完整Guest→UMD→KMD→GPU Model→Report闭环，无需开发第二个ISA解释器 |
@@ -363,7 +363,7 @@ ldd ./s01_hip        # 确认ASan runtime/插桩HIP库路径
 ./s01_hip --bad      # 应搜索明确标记“on amdgpu device N”的设备报告
 ~~~
 
-AMD官方文档明确要求 \`--offload-arch=gfx...:xnack+\`，并指出在 \`xnack-\` 的目标上编译器可能给出warning、设备代码**没有插桩**，即使二进制运行正常也不能算GPU ASan通过。GPU Debug模式使用的ASan运行库也需要与编译版本匹配，并核查实际加载的是 \`/asan/\` 的HIP相关库。[ROCm GPU ASan官方Compiling章节](https://rocmdocs.amd.com/projects/llvm-project/en/latest/conceptual/using-gpu-sanitizer.html#compiling-for-asan)
+AMD官方文档明确要求 `--offload-arch=gfx...:xnack+`，并指出在 `xnack-` 的目标上编译器可能给出warning、设备代码**没有插桩**，即使二进制运行正常也不能算GPU ASan通过。GPU Debug模式使用的ASan运行库也需要与编译版本匹配，并核查实际加载的是 `/asan/` 的HIP相关库。[ROCm GPU ASan官方Compiling章节](https://rocmdocs.amd.com/projects/llvm-project/en/latest/conceptual/using-gpu-sanitizer.html#compiling-for-asan)
 
 已知限制：有限Redzone会被wild访问跳过；Shadow状态若未正确维护可能误报/漏报；Private/stack设备地址空间并非天然全部覆盖，LDS/shared还有其降级处理。这些事实证明 **ASan不是KMD MMU检查，也不是完整来源/时间身份验证**。参考同一官方文档Known issues章节。
 
@@ -401,7 +401,7 @@ if (lane_active && opcode_is_effective_global_store) {
 
 **出处：** LLVM访存插桩组织＋通用有序区间索引；**是针对自研GPU的简化工程方案，不是声称AMD当前产品采用这种表**。
 
-- Compiler：为Global普通Load/Store插入查询 \`san_check_interval(addr,width)\`；输出site_id及覆盖清单。
+- Compiler：为Global普通Load/Store插入查询 `san_check_interval(addr,width)`；输出site_id及覆盖清单。
 - KMD：已有descriptor表BO映射和submit/fence足够则无新增；缺失时补GPUVA/生命周期契约。
 - UMD：按Base排序的不可变对象表，给每个queue发布快照并按fence延迟回收，禁止GPU边查表UMD边原地改写。
 - cmodel：用另一份线性/暴力oracle校验设备侧二分索引不漏对象。
@@ -437,7 +437,7 @@ Place probe at first page last 4 bytes
 p[0] → legal; p[1] → GPU page fault
 ~~~
 
-**重要局限：** GPU页粒度通常远大于64B，\`a[16]\`若仍处在已映射页内不会触发Guard Page。也可能只得到粗粒度GPU fault而非精确对象诊断；因此只能作KMD/fault验证和特定跨页错误捕捉。
+**重要局限：** GPU页粒度通常远大于64B，`a[16]`若仍处在已映射页内不会触发Guard Page。也可能只得到粗粒度GPU fault而非精确对象诊断；因此只能作KMD/fault验证和特定跨页错误捕捉。
 
 ### 3.4 方案T：Pointer/Memory Tag（F1）
 
@@ -473,7 +473,7 @@ for (auto granule : real_accessed_tag_granules(addr,width)) {
 
 **出处：** NVIDIA手册的Hybrid Instrumentation、AMD/LLVM GPU ASan Shadow与NVIDIA编译期Bounds构成**多源融合工程方案**。不是直接从某个厂商仓库复制现成混合系统。
 
-- Compiler：输出 \`SanModuleManifest\`（支持的地址空间/ISA/checker/模块ABI、是否编译期插桩）；B2与D1按相应路径生成检查。
+- Compiler：输出 `SanModuleManifest`（支持的地址空间/ISA/checker/模块ABI、是否编译期插桩）；B2与D1按相应路径生成检查。
 - KMD：共用正常GPUVA/执行/fault服务，不另立Hybrid KMD。
 - UMD：针对已插桩模块直接装载；可重写模块才patch；未知或不兼容模块标PARTIAL_COVERAGE/按策略拒绝；共享同一对象表和报告。
 - cmodel：用合法路径差分确保双模式没有重复插桩/破坏SIMT；比较原对象与当前地址级能力区别。
@@ -522,8 +522,8 @@ struct SanReport {
 
 | 用例 | 模型或GPU期望 |
 |---|---|
-| \`a[0]\`、\`a[15]\` | 正常、无报错 |
-| \`a[-1]\`、\`a[16]\` | 在明确无效redzone/受控布局下报告Underflow/Overflow |
+| `a[0]`、`a[15]` | 正常、无报错 |
+| `a[-1]`、`a[16]` | 在明确无效redzone/受控布局下报告Underflow/Overflow |
 | 仅thread 0实际store，另外31 lane inactive | 只记录实际生效访问，不因其他lane计算地址而误报 |
 | 访问起点合法，但16 B访问跨过尾部 | **S02延伸**：所有真实触及字节都检查，不能只查首地址 |
 | A来源指针越界进入live B | 基础地址有效性可能漏；D1有来源时必须检出 |
@@ -540,7 +540,7 @@ struct SanReport {
 - 一键Docker构建与GPU检测：[scripts/setup-docker.sh](../scripts/setup-docker.sh)、[scripts/run_samples.py](../scripts/run_samples.py)，以及[GitHub GPU Actions配置](gpu-actions-ci.md)。
 - 原研究主稿 [§18.1 S01](llvm-gpu-sanitizer-research.md#case-s01) 和 [S01目录README](../samples/S01/README.md) 将链接本指南。
 
-这些源码是**NVIDIA/AMD厂家现有工具的对照测试**，不是已经实现了自研GPU的Compiler/KMD/UMD Sanitizer。当前只有源码、文档与CPU静态CI的证据；没有真实GPU设备检出记录，不能把\`detect\`的预期写成已保证通过。
+这些源码是**NVIDIA/AMD厂家现有工具的对照测试**，不是已经实现了自研GPU的Compiler/KMD/UMD Sanitizer。当前只有源码、文档与CPU静态CI的证据；没有真实GPU设备检出记录，不能把`detect`的预期写成已保证通过。
 
 ## 6. 官方资料与关键原文索引（正文只复述已公开机制）
 
