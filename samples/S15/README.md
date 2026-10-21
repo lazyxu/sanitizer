@@ -49,19 +49,16 @@ good_increment<<<2, 1>>>(x);              // 独立合法反例：完成后计�
 
 另保留普通读与原子写并发的混合访问错误，避免检查器只见到一端为atomic，就把同址的全部访问放行。
 
-## 生产方案与两类模型辅助验证职责
+## 实体GPU生产组件职责
 
-**本场景只能由真实GPU设备代码或者已实现的硬件检查机制提供产品保证；模拟器和QEMU不能单独增加真机检测能力。**
+**只能由实体GPU实际执行设备检查器或已有硬件机制提供产品检测，实卡证据是验收依据。**
 
 | 角色 | 正确职责 |
 |---|---|
 | **真实GPU生产Checker** | 编译/运行时GPU检查ISA、GPU设备运行库、或受支持硬件MMU/Tag/Bounds；必须真机执行及报告 |
-| 独立功能级cmodel（验证） | atomic宽度、scope/order及冲突历史；用真实checker产物做语义预验证 |
-| **现有QEMU GPU ISA解释器（验证）** | GPU全grid语义与Guest提交一致，禁止检查器隐式串行化；模型独有hook不得计GPU产品实现 |
 | KMD（生产） | context/映射与外部同步；不能用每次DMA发生先后代替语言HB；原接口满足契约时不新增代码 |
 
 ## 验收需要留下什么证据？
 
-在对应真实GPU上记录：1）硬件型号、驱动和CUDA/ROCm版本；2）编译命令、目标GPU架构及最终ISA访存；3）`--good`正常且无误报；4）`--bad`出现对应的**设备级**GPU检查器报告，或者明确归类为`UNSUPPORTED/NOT_DETECTED/PREREQUISITE_NOT_MET`；5）`results/<backend>/S15.*.log`日志及`summary.json`。Host API或模拟器独有检查不能计作GPU设备检测；硬件fault不能保证对象级边界精度。
 
 **当前状态：只有源码/文档及CPU静态检查证据，尚无实际GPU编译和sanitizer检出数据。** [GPU CI启用方法](../../docs/gpu-actions-ci.md)说明如何在可信master的NVIDIA/AMD GPU Runner中自动验证。
