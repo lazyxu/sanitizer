@@ -20,7 +20,7 @@
 
 ## 本次补充
 
-- 清理主研究和S01～S28历史方案A的实现语义，仅保留真正GPU检查器及Host/驱动职责；对象A/B案例保留。
+- 清理主研究和S01～S28已废弃的检查实现描述，仅保留真正GPU检查器及Host/驱动职责；对象A/B案例保留。
 - AMD当前官方GPU ASan所需XNACK/HMM与自研GPU通过显式设备Shadow/区间表和软件Bounds替代之间的适用边界，见[逐组件及缺硬件替代指南](amd-gpu-asan-hardware-fallback.md)。
 - 静态CI增加语义防回归；仍不包含目标自研GPU产品代码或实卡运行记录。
 
