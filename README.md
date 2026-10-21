@@ -1,6 +1,6 @@
 # LLVM GPU Sanitizer：真实硬件实施调研
 
-**版本 v1.9（2026-10-21）· 文档及工程伪代码阶段，目标自研 GPU 尚无实卡检出验收。**
+**版本 v1.10（2026-10-21）· 文档及工程伪代码阶段，目标自研 GPU 尚无实卡检出验收。**
 
 面向自研 LLVM GPU 后端、GPU Device Runtime、UMD、KMD 及必要的 Firmware/RTL，研究内存越界、生命周期、Initcheck、Racecheck、Synccheck 的可部署方案。正式候选仅包括 B（LLVM编译期地址检查：B2 Shadow或B1当前Live区间表）、C（运行时GPU二进制重写）、D（D1原对象Bounds/D2指针身份）、E（混合**集成策略**）、F（目标GPU确有Tag/Bounds时的硬件检查）。**方案I归B1，G/F0只是辅助页保护实验，不是独立完整Sanitizer；软件Tag不是硬件F1，F2缺芯片时只是研发方向。**
 
