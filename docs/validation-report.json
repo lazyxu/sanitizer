@@ -9,8 +9,8 @@
   "chapters": 23,
   "scenarios": 28,
   "unique_references": 44,
-  "tables": 82,
-  "fenced_blocks": 51,
+  "tables": 85,
+  "fenced_blocks": 52,
   "prior_document_sha256": "d373c9a6d4bb0dce6476f416b0a4dc7e76ea7606799306c249d8b7ac897e72a7",
   "baseline_commit": "198e82fad1d4273e3711ef15bb95ff25520b2d38",
   "checks": {
@@ -413,14 +413,16 @@
     }
   ],
   "not_performed": [
-    "No source code audit of project QEMU model/guest drivers",
-    "No compilation or execution of GPU sanitizer examples or compiler/KMD/UMD/QEMU implementations",
-    "No real GPU measurements, performance evaluation, paper benchmark reproduction",
-    "No actual modifications to GPU compiler, drivers or simulator source code; documentation only"
+    "No nvcc/hipcc actual compile in this runtime",
+    "No physical NVIDIA or AMD GPU detection",
+    "No GPU Runner registration or repository variables set",
+    "No GPU-powered workflow success claimed",
+    "No QEMU GPU ISA model execution",
+    "No compiler/driver implementation testing on user target GPU"
   ],
   "interpretation": "Document consistency and design review only; not a claim of sanitizer implementation correctness.",
   "sha256_note": "v1.5 validator records structural checks and exact GitHub blob hash once commit is read back; no real GPU instrumentation tests",
-  "github_blob_sha": null,
+  "github_blob_sha": "dc1351db4af36bf2fba74cf8e54f399c2f41e4c7",
   "v13_check_results": {
     "main_chapters": true,
     "cases": true,
@@ -446,5 +448,18 @@
     "gpu_ci": "not enabled or hardware-executed; no device results",
     "no_fake_cpu_asan": true,
     "guard_page": "GPU VMM MMU mapping, not CPU mprotect; page granularity, not arbitrary logical byte bounds"
-  }
+  },
+  "v15_check_results": {
+    "main_document_version": true,
+    "chapter_sequence": true,
+    "all_28_scenarios": true,
+    "reference_targets": true,
+    "internal_anchors": true,
+    "tables_consistent": true,
+    "code_fences_balanced": true,
+    "gpu_ci_workflow": true,
+    "gpu_docs": true,
+    "samples_all_pair_ids": true
+  },
+  "v15_status": "SOURCE_ADDED + CPU_STATIC_SUCCESS; GPU_HARDWARE_NOT_RUN (workflow jobs skipped until enabled)"
 }
