@@ -37,23 +37,19 @@ kernel void bad_bin(uint32_t* bins) {
 
 **哪里不对、应检测什么。** 原子操作触及 `[base+256, base+260)`，不在分配范围内；“多个线程更新不会丢失”与“地址合法”是不同条件。检查必须覆盖 atomic RMW、CAS 及目标特殊原子，而不能只匹配普通 load/store。CAS 即使比较失败，也执行了读取；其范围仍须检查，是否产生写事件则需按实际结果处理。访问宽度、对齐和作用域依据目标指令定义。[L05][N09]
 
-**实现方案与组件。** B对真实GPU的LLVM atomic/目标intrinsic插入完整范围检查，设备运行库查询shadow；UMD提供真实逻辑对象范围。C/E在机器码atomic前插入真实GPU检查指令并保留返回值、谓词和scope/order。D1若保存原对象bounds还可检测地址落入另一live对象。**cmodel只能运行以上插桩产物核对语义，不能用模型专属atomic回调作为产品检测路径。** 页内越界不一定触发F0 MMU fault，所有插桩都不得把应用原子拆成非原子读写。
 
 **修复、合法反例与预期报告。** 将下标限制在 `[0,64)`；多个线程合法执行 `atomic_add_u32(&bins[0],1)`，在该原子作用域覆盖这些线程且无混合非原子访问的前提下，不应报本例的空间错误或把同类原子冲突直接报成数据竞争。错误报告应为 `atomic out-of-bounds`，给出 4 B、偏移 256、对象大小 256 和 PC；仅报告“发生竞争”没有指出本例根因。
 
-## 生产方案与两类模型辅助验证职责
+## 实体GPU生产组件职责
 
-**本场景只能由真实GPU设备代码或者已实现的硬件检查机制提供产品保证；模拟器和QEMU不能单独增加真机检测能力。**
+**产品检测必须由实体GPU执行对应设备Checker或真实硬件机制，正式验收需要实卡设备报告。**
 
 | 角色 | 正确职责 |
 |---|---|
 | **真实GPU生产Checker** | 编译/运行时GPU检查ISA、GPU设备运行库、或受支持硬件MMU/Tag/Bounds；必须真机执行及报告 |
-| 独立功能级cmodel（验证） | 原子实际足迹、CAS成功/失败语义；用真实checker产物做语义预验证 |
-| **现有QEMU GPU ISA解释器（验证）** | GPU模型保持原子性；shadow/descriptor和权限可达；模型独有hook不得计GPU产品实现 |
 | KMD（生产） | 原子故障及映射；不能用原子指令本身证明地址正确；原接口满足契约时不新增代码 |
 
 ## 验收需要留下什么证据？
 
-在对应真实GPU上记录：1）硬件型号、驱动和CUDA/ROCm版本；2）编译命令、目标GPU架构及最终ISA访存；3）`--good`正常且无误报；4）`--bad`出现对应的**设备级**GPU检查器报告，或者明确归类为`UNSUPPORTED/NOT_DETECTED/PREREQUISITE_NOT_MET`；5）`results/<backend>/S21.*.log`日志及`summary.json`。Host API或模拟器独有检查不能计作GPU设备检测；硬件fault不能保证对象级边界精度。
 
 **当前状态：只有源码/文档及CPU静态检查证据，尚无实际GPU编译和sanitizer检出数据。** [GPU CI启用方法](../../docs/gpu-actions-ci.md)说明如何在可信master的NVIDIA/AMD GPU Runner中自动验证。
