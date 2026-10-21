@@ -17,7 +17,6 @@ python3 scripts/run_samples.py --backend rocm --case S15 --mode both --strict
 
 **预期含义：** `detect` 是厂商官方能力下的期望，不是本项目已检出；`conditional` 需要GPU架构/ISA/执行时序支持；`unsupported` 表示当前选定工具不能保证；`api` 是GPU API错误但不构成GPU kernel内部sanitizer命中；`clean` 是用于排除误报的合法操作。
 
-
 ## 真实场景、错误原因、可检测算法、修复对照及实现要求
 
 以下章节直接对应[主调研文档 §18.15](../../docs/llvm-gpu-sanitizer-research.md#case-s15)的正式原理与验收设计。**其中的CUDA风格伪代码和受控allocator不一定与本目录中可编译程序逐行相同**；两者须按相同违规语义而非源码文字对齐。实际运行前确认目标机器码保留相关访存，不可以假设未定义行为一定触发。
@@ -49,16 +48,13 @@ good_increment<<<2, 1>>>(x);              // 独立合法反例：完成后计�
 
 另保留普通读与原子写并发的混合访问错误，避免检查器只见到一端为atomic，就把同址的全部访问放行。
 
-## 生产方案与两类模型辅助验证职责
-
-**本场景只能由真实GPU设备代码或者已实现的硬件检查机制提供产品保证；模拟器和QEMU不能单独增加真机检测能力。**
+## 真实GPU生产职责
 
 | 角色 | 正确职责 |
 |---|---|
-| **真实GPU生产Checker** | 编译/运行时GPU检查ISA、GPU设备运行库、或受支持硬件MMU/Tag/Bounds；必须真机执行及报告 |
-| 独立功能级cmodel（验证） | atomic宽度、scope/order及冲突历史；用真实checker产物做语义预验证 |
-| **现有QEMU GPU ISA解释器（验证）** | GPU全grid语义与Guest提交一致，禁止检查器隐式串行化；模型独有hook不得计GPU产品实现 |
-| KMD（生产） | context/映射与外部同步；不能用每次DMA发生先后代替语言HB；原接口满足契约时不新增代码 |
+| **真实GPU检查／Host API** | 仅实际GPU设备指令或实体GPU硬件检查产生产品检测证据；Host API误用须另列 |
+| **Compiler／Device Runtime／UMD** | 维护GPU检查代码、对象与生命周期、报告和覆盖状态 |
+| **KMD（生产）** | context/映射与外部同步；不能用每次DMA发生先后代替语言HB；原接口满足契约时不新增代码 |
 
 ## 验收需要留下什么证据？
 
