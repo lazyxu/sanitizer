@@ -1,6 +1,6 @@
 # S01 工程实施指南：先看 NVIDIA、再看 AMD，最后比较其他方案
 
-**版本 1.8 · 2026-10-21 · 适用对象：目标实体GPU、LLVM Compiler/Device Runtime、UMD、KMD，以及实际需要的Firmware/RTL。**
+**版本 1.10 · 2026-10-21 · 适用对象：目标实体GPU、LLVM Compiler/Device Runtime、UMD、KMD，以及实际需要的Firmware/RTL。**
 
 > 本文是面向研发落地的**厂商方案优先**设计说明，不是某个闭源 GPU Sanitizer 的反编译说明。凡“厂商官方确认”的机制都给出来源与限长英文原文；凡没有公开具体实现的数据结构、ISA 注入方法或内核接口，均明确写作**本项目建议实现**，不冒充 NVIDIA/AMD 的私有实现。
 >
@@ -398,7 +398,44 @@ GpuPtr san_alloc(Context& ctx, uint64_t request, uint64_t alignment) {
 
 **最关键的错误：** 不可把物理映射4KiB当作应用请求64B。也不能让poison操作还没有完成，下一条用户Kernel就开始加载Shadow；GPU Host调用返回时间不等于设备事件生效时间。
 
-### 2.4 AMD 原生GPU ASan验证命令与条件
+### 2.4 无 XNACK 时，AMD 式 GPU ASan 还能实现吗？
+
+**先回答是与否**：
+
+- **直接使用 AMD ROCm 7.2.4 官方 GPU ASan：没有受支持的 `xnack+` / HMM 环境时，不能按官方流程获得设备插桩。** 官方[编译与运行要求](https://rocm.docs.amd.com/projects/llvm-project/en/docs-7.2.4/conceptual/using-gpu-sanitizer.html)明确说明，`xnack-` 目标可能警告并忽略设备 `-fsanitize=address` 插桩，程序能运行不意味着GPU访存受检查；只写 `HSA_XNACK=1` 也不会让不支持XNACK的芯片获得硬件功能。
+- **借鉴AMD Shadow算法，在自研LLVM GPU后端重新实现：可以不依赖XNACK。** 真实必需条件是最终GPU ISA能执行检查（或受控原对象Bounds比较），所用metadata/Report在设备GPUVA中合法可达，UMD/KMD能够在dispatch前建立映射、驻留和fence顺序，且有安全的错误报告/访存屏蔽或终止协议。必须自研Pass、设备库与运行时，而不是修改一个ROCm环境变量。
+
+| 无XNACK时的实现选择 | 必要的GPU/软件能力 | 可以提供的保证 | 代价与明确缺口 |
+|---|---|---|---|
+| **B2：预映射GPU Shadow＋Redzone（推荐）** | GPU能读取预驻留的Shadow BO；LLVM设备Load/Store插桩；UMD poison/发布fence | 声明支持的字节范围地址检查、poison期UAF | 显存/带宽与redzone开销；A→存活B可能漏；与官方ROCm运行库不同 |
+| **B2：分段/二级设备Shadow** | GPU可读取已驻留root/segment表，UMD可在dispatch前上传并固定表页 | 和所选shadow编码相同的地址级保证 | 多级GPU查询、额外元数据；表缺失=TOOL_FAILURE |
+| **B1：GPU Live Allocation区间表（下文原I）** | GPU能读不可变有序live对象descriptor；LLVM插GPU端区间查询 | 当前地址所在live allocation的范围有效性 | 无Shadow；有序查找较贵，仍可能漏A→B及复用旧裸指针 |
+| **D1：原对象Bounds软件比较** | LLVM保留可证明的original base/size并在设备寄存器/参数或GPU sidecar传播 | 在来源闭合范围内发现A→存活B | 不支持的指针来源/跨ABI段降级，非完整D2 |
+| **C：UMD机器码重写器** | 目标ISA可合法decode/patch/relocate，GPU stub/metadata可执行 | 可为不能重编译模块补特定设备访存检查 | 编译器可零改，但UMD重写成本高，不能凭裸地址恢复D1 |
+| **F0：GPU MMU Guard Page** | 实际芯片支持GPU VMM/权限fault | 只能捕获越入受保护页的访问 | **只是辅助机制，不是完整字节级Sanitizer路线** |
+| **F1/F2：硬件Tag/Bounds** | 真实芯片具有对应ISA/RTL/metadata/fault | 只在硬件实际声明的粒度/保证内有效 | 不存在这些功能时不能软件配置打开；转B/D软件方案 |
+
+~~~cpp
+// 无XNACK目标的能力协商：真实GPU运行的自研Device Checker，非官方ROCm开关。
+Mode choose_gpu_checker(TargetGPU gpu, ObjectRegistry registry, Module manifest) {
+    if (!gpu.can_execute_checked_isa) return UNSUPPORTED;
+    if (gpu.can_read_device_metadata && registry.shadow_pre_mapped
+        && registry.shadow_ready_fence) return B2_SHADOW;
+    if (gpu.can_read_device_metadata && registry.intervals_pre_mapped)
+        return B1_CURRENT_LIVE_INTERVAL;
+    if (manifest.provenance_complete && manifest.original_bounds_in_args_or_registers)
+        return D1_ORIGINAL_OBJECT_BOUNDS;
+    return UNSUPPORTED; // Host API拦截不能伪装成GPU内部访存检查。
+}
+~~~
+
+**组件级落地**：Compiler在实际GPU Load/Store前插入完整byte-footprint检查、保留active lane/mask、生成覆盖manifest并审核最终ISA；Device Runtime读取预映射Shadow/Descriptor或D1参数并写设备报告；UMD分配逻辑对象/Redzone、提交GPU metadata BO、在queue/fence上排序poison/unpoison/async free；KMD保证GPUVA映射、权限、实际完成/fault；Firmware/RTL仅按真实abort或新硬件要求修改。无GPU按需缺页时，**不得执行过程中临时期望Shadow由CPU补页**，未驻留直接TOOL_FAILURE或拒绝launch。
+
+**最窄的进一步退路**：即使没有一般的GPU动态元数据查表能力，若D1已经能将已知的original base/limit作为寄存器或Kernel实参送进GPU，仍可比较这些访问；但动态live对象、复杂指针load/store/alias和时间身份无法因此完整覆盖。没有GPU可执行检查指令或可靠失败协议则UNSUPPORTED。
+
+**怎么验证而不自欺**：在真实目标GPU执行S01合法`a[0]`/`a[15]`和非法`a[-1]`/`a[16]`，另测A→live B、shadow缺页、metadata OOM、report满、masked-off、跨queue更新和非法访问后的SIMT前进性。保留GPU最终ISA、模块build ID、PC/lane/宽度、原始report及无插桩/NOP/完整检查性能对照。无实际芯片执行=GPU_NOT_RUN。进一步逐组件实现见[AMD无硬件依赖实施指南](amd-gpu-asan-hardware-fallback.md)。
+
+### 2.5 AMD 官方GPU ASan验证命令与条件
 
 ~~~bash
 # 必须在真正支持该offload arch及XNACK的AMD设备上执行。
@@ -418,7 +455,7 @@ AMD官方文档明确要求 `--offload-arch=gfx...:xnack+`，并指出在 `xnack
 
 已知限制：有限Redzone会被wild访问跳过；Shadow状态若未正确维护可能误报/漏报；Private/stack设备地址空间并非天然全部覆盖，LDS/shared还有其降级处理。这些事实证明 **ASan不是KMD MMU检查，也不是完整来源/时间身份验证**。参考同一官方文档Known issues章节。
 
-### 2.5 AMD 式移植比 NVIDIA-R 更适合什么条件？
+### 2.6 AMD 式移植比 NVIDIA-R 更适合什么条件？
 
 你有**可修改的 LLVM 自研 GPU后端**，并希望先支持能重新编译的Kernel。此时复用公开LLVM ASan/AMDGPU机制，通常比从零建目标机器码完整rewriter更可控；UMD仍需实现目标GPU Shadow映射与设备库，不能直接编进CPU的compiler-rt就视为成功。NVIDIA-C方式更适合将来进一步补充原对象Bounds，而不需要替换ASan作为基础地址检查器。
 
