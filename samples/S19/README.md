@@ -49,19 +49,16 @@ __pipeline_wait_prior(0);                // 收尾等待不追溯修复过早读
 
 测试最终仍等待所有在途操作完成，以把过早读取与退出时资源生存期错误分开验证。
 
-## 生产方案与两类模型辅助验证职责
+## 实体GPU生产组件职责
 
-**本场景只能由真实GPU设备代码或者已实现的硬件检查机制提供产品保证；模拟器和QEMU不能单独增加真机检测能力。**
+**产品检测必须由实体GPU执行对应设备Checker或真实硬件机制，正式验收需要实卡设备报告。**
 
 | 角色 | 正确职责 |
 |---|---|
 | **真实GPU生产Checker** | 编译/运行时GPU检查ISA、GPU设备运行库、或受支持硬件MMU/Tag/Bounds；必须真机执行及报告 |
-| 独立功能级cmodel（验证） | copy group、完成、barrier phase与消费事件；用真实checker产物做语义预验证 |
-| **现有QEMU GPU ISA解释器（验证）** | GPU内部异步引擎与系统DMA事件分别接入；模型独有hook不得计GPU产品实现 |
 | KMD（生产） | 外部copy引擎完成只说明该引擎，不代替kernel内部wait语义；原接口满足契约时不新增代码 |
 
 ## 验收需要留下什么证据？
 
-在对应真实GPU上记录：1）硬件型号、驱动和CUDA/ROCm版本；2）编译命令、目标GPU架构及最终ISA访存；3）`--good`正常且无误报；4）`--bad`出现对应的**设备级**GPU检查器报告，或者明确归类为`UNSUPPORTED/NOT_DETECTED/PREREQUISITE_NOT_MET`；5）`results/<backend>/S19.*.log`日志及`summary.json`。Host API或模拟器独有检查不能计作GPU设备检测；硬件fault不能保证对象级边界精度。
 
 **当前状态：只有源码/文档及CPU静态检查证据，尚无实际GPU编译和sanitizer检出数据。** [GPU CI启用方法](../../docs/gpu-actions-ci.md)说明如何在可信master的NVIDIA/AMD GPU Runner中自动验证。
