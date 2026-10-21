@@ -213,7 +213,7 @@ load(old)  // 地址表看到 X 属于fresh，无法知道操作数来自old
 
 | 组件 | 默认责任 | 何时需要新增改动 | 不应下沉的工作 |
 |---|---|---|---|
-| UMD/host runtime | allocator hooks、VA aperture/metadata buffers、module patch、dispatch context、stream/event 生命周期、报告消费 | 六路线都需要相应子集 | 无须把全部算法塞进KMD |
+| UMD/host runtime | allocator hooks、VA aperture/metadata buffers、module patch、dispatch context、stream/event 生命周期、报告消费 | 五条真实GPU生产路线均需按各自契约复用对应子集 | 无须把全部算法塞进KMD |
 | Device runtime | checks、pointer metadata、ring report、失败触发 | B/C/D/E/F；A 可由host模型替代 | 不直接解析host DWARF或调用host allocator |
 | Firmware | 已有 trap/fault/context abort、队列错误 completion、保存最小故障上下文 | 现有异常无法安全中止dispatch/保留report；F新增tag/bounds fault | C++对象表、红区策略、符号化 |
 | KMD | 隔离、映射与驻留、context资源、安全的fault/abort出口 | VA reserve/sparse mapping/metadata residency受限；新增fault ABI；F tag context或迁移状态 | 每条用户load/store的软件检查，source allocation归因 |
