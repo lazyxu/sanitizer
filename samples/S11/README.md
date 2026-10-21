@@ -35,19 +35,17 @@ test_free_and_wait(alias);   // 错误：再次释放同一 allocation instance
 
 **哪里不对、怎样检。** 第二次调用试图再次结束同一对象的生命周期。**真实UMD allocator/driver的状态机**维护allocation ID、成功释放事件与tombstone，在调用底层释放前检查并报告`dead -> free`非法转移；设备侧allocator应有对应设备运行库插桩。模型重放可测试该状态机，但模型自身检测不构成产品方案。仅shadow poison不能检测没有后续访问的double free。[L01][N02]
 
-**组件观测。** compiler／deviceRT 为设备侧释放保留调用点并可靠发布状态，Host 释放则由 runtime 拦截；UMD 区分请求 ID、成功提交及退休完成，对嵌套回调去重；cmodel 独立检查状态序列。并发 free 还需在对象状态上执行一致的仲裁，不能让两个请求都基于旧 live 状态通过后才写 dead。
+**组件观测。** compiler／deviceRT 为设备侧释放保留调用点并可靠发布状态，Host 释放则由 runtime 拦截；UMD 区分请求 ID、成功提交及退休完成，对嵌套回调去重。并发 free 还需在对象状态上执行一致的仲裁，不能让两个请求都基于旧 live 状态通过后才写 dead。
 
 **合法反例、修复及报告。** 使用单一明确拥有者，清除所有需要失效的别名；只把 `p` 赋空并不能修复仍存活的 `alias`。第一次释放请求失败且对象仍 live 时，之后一次合法成功释放不应被报 double free。预期报告对象 ID、64 B 大小、allocation site、首次成功释放与第二次调用位置。若同 GPUVA 已创建新对象，应允许新指针正常释放；要阻止旧指针误释放新对象则需要 S09 的 D2 身份，不能仅凭地址历史断言 double free。
 
-## 生产方案与两类模型辅助验证职责
+## 实体GPU生产组件职责
 
-**模型及QEMU仅验证实际GPU设备检查产物/真实硬件机制，不可作为独立Sanitizer产品方案。**
+**只能由实体GPU实际执行设备检查器或已有硬件机制提供产品检测，实卡证据是验收依据。**
 
 | 角色 | 正确职责 |
 |---|---|
 | **真实GPU生产Checker** | Compiler/UMD生成并使GPU执行设备检查ISA；或实体GPU硬件检查单元/MMU触发，附真实设备报告 |
-| 独立功能级cmodel（验证） | 同一对象生命周期和释放事件去重；只用于预验证真实checker产物和oracle差分 |
-| **现有QEMU GPU ISA解释器（验证）** | 两次Guest释放与KMD资源引用、错误返回一致；不能用模型独有访存hook代替真实设备检查 |
 | KMD（生产） | 内核资源引用计数与拒绝非法句柄；不混同不同allocator的逻辑ID；已充分支持的接口不需改源码 |
 
 ## 验收需要留下什么证据？
