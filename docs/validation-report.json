@@ -1,9 +1,9 @@
 {
-  "status": "pass",
+  "status": "pass: document structure and eligibility only; hardware not executed",
   "document": "docs/llvm-gpu-sanitizer-research.md",
   "version": "1.7",
   "checked_on": "2026-10-21",
-  "bytes": 327716,
+  "bytes": 328129,
   "lines": 3330,
   "sha256": null,
   "chapters": 23,
@@ -21,9 +21,7 @@
     "explicit_anchor_uniqueness_and_internal_targets": "pass",
     "scenario_examples_repairs_and_reports": "pass; all 28 original scenarios preserved",
     "all_scenarios_mapped_to_validation_and_platform_matrices": "pass",
-    "all_six_routes_have_compiler_KMD_UMD_and_cmodel_QEMU_tables": "pass",
     "original_vendor_paper_and_memory_model_chapters": "unchanged from v1.1",
-    "baseline_cost_totals": "all six P+route core/test totals preserved",
     "conditional_KMD_QEMU_and_firmware_cost_dedup": "arithmetic and independent design review passed",
     "platform_detection_and_driver_contract_boundaries": "independently reviewed; three local issues corrected",
     "editorial_notes_and_transient_paths_absent": "pass",
@@ -31,30 +29,20 @@
     "project_qemu_isa_exists": "acknowledged from user; model code not inspected",
     "incremental_qemu_budget": "conditional, no full platform default charge",
     "markdown_links": "pass",
-    "references": "pass 40",
-    "scenarios": "pass 28"
+    "references": "pass 44",
+    "scenarios": "pass 28",
+    "current_product_route_set": "B/C/D/E/F only; model-only A retired",
+    "current_budget_summary": "pass: only B-F product route totals, historical estimates not measured",
+    "model_is_validation_only": "pass: model-only Host checker route removed; trace interface observes same GPU-device-checker ISA",
+    "compiler_runtime_contract": "pass: pure binary runtime route C does not require production Compiler source modification"
   },
   "estimate_arithmetic": {
-    "data": "docs/estimates-v1.2.json",
-    "root_checks": 163,
-    "independent_specialist_checks_reported": 171,
-    "scope": "engineering estimate consistency only, not implementation tests"
+    "data": "docs/estimates-v1.7.json",
+    "root_checks": null,
+    "independent_specialist_checks_reported": null,
+    "scope": "only current B-F route-key structure audited for v1.7; historic v1.2/v1.3 arithmetic no longer qualifies as a current certification; no SLOC or implementation testing"
   },
   "route_totals_core_test_combined": {
-    "A": {
-      "core": [
-        18,
-        38
-      ],
-      "test": [
-        16,
-        33
-      ],
-      "combined": [
-        34,
-        71
-      ]
-    },
     "B": {
       "core": [
         27,
@@ -422,7 +410,7 @@
   ],
   "interpretation": "Document consistency and design review only; not a claim of sanitizer implementation correctness.",
   "sha256_note": "v1.7 checked via GitHub blob SHA, no independent SHA256 hash recorded",
-  "github_blob_sha": "22f88b339331f69dceb6ff587919026de865cccc",
+  "github_blob_sha": "97cdeac39fdf937cc67cd4bbbdc05d3a6d133643",
   "v13_check_results": {
     "main_chapters": true,
     "cases": true,
@@ -598,7 +586,10 @@
       "retired_model_standalone_estimate_absent": true,
       "readmes_28_hardware_only_tested": true,
       "C_runtime_compiler_change_not_mandatory": true,
-      "KMD_actual_source_change_conditional": true
+      "KMD_actual_source_change_conditional": true,
+      "current_validation_report_has_no_retired_A": true,
+      "model_observation_non_intrusive": true,
+      "production_gpu_code_before_qemu_test": true
     },
     "validation_ci": {
       "workflow": "GPU sample static checks (CPU only, not GPU validation)",
@@ -606,7 +597,9 @@
       "run_url": "https://github.com/lazyxu/sanitizer/actions/runs/39569103042",
       "head_commit": "f46adbcbc539f6d0caa46f95ff5a4f1d730eab72",
       "checks": "Python/Bash, sample layout, synthetic device report tests, hardware-only documentation regression test",
-      "context": "This success proves only structure and simulated diagnostic classification. Not GPU hardware execution."
+      "context": "This success proves only structure and simulated diagnostic classification. Not GPU hardware execution.",
+      "last_verified_run_url": "https://github.com/lazyxu/sanitizer/actions/runs/39569103042",
+      "current_revision_run_status": "pending confirmation after document audit extension"
     },
     "hardware_ci": {
       "status": "SKIPPED, not performed",
@@ -615,6 +608,7 @@
       "real_gpu_detected_samples": 0,
       "real_gpu_tests_performed": 0
     },
-    "implementation_status": "DOCUMENT_AND_SAMPLE_AUDIT_ONLY; NO CUSTOM GPU SANITIZER IMPLEMENTATION"
-  }
+    "implementation_status": "DOC_AUDITED; MODEL_ONLY_PRODUCT_REMOVED; PHYSICAL_GPU_NOT_TESTED"
+  },
+  "v13_status": "archived historical evidence; not current hardware product approval"
 }
