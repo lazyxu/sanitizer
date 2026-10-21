@@ -16,7 +16,7 @@ NVIDIA_GPU = re.compile(
     r"(Invalid __global__|Invalid __shared__|Invalid __local__|"
     r"Potential (?:RAW|WAR|WAW)|Hazard (?:RAW|WAR|WAW)|Race reported|"
     r"Barrier error|Uninitialized __global__|Uninitialized __shared__|"
-    r"Leaked [0-9]+ bytes|ERROR SUMMARY:\s*[1-9][0-9]*\s+errors)", re.I)
+    r"Leaked [0-9]+ bytes)", re.I)
 # AMD GPU ASan 与普通 CPU ASan 的最直接区分依据。
 AMD_GPU = re.compile(r"ERROR:\s*AddressSanitizer:[^\n]*on amdgpu device\s+[0-9]+", re.I)
 
@@ -93,6 +93,9 @@ def classify(backend, expected, mode, rc, log):
         return "TIMEOUT"
     if rc == 77 or "SKIP:" in log:
         return "PREREQUISITE_NOT_MET"
+    # GPU API错误需要独立分类，即使Compute Sanitizer最后统计非零ERROR SUMMARY。
+    if expected == "api" and "GPU_API_ERROR:" in log:
+        return "GPU_API_ERROR_NOT_GPU_KERNEL_SANITIZER"
     detected = bool((NVIDIA_GPU if backend == "cuda" else AMD_GPU).search(log))
     if detected:
         return "DETECTED_GPU" if mode == "bad" else "FALSE_POSITIVE_OR_OTHER_ERROR"
