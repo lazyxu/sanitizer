@@ -81,7 +81,8 @@ retired_meaning_patterns = [
     re.compile(r"(?:GPU ISA模型的访存hook|A小用例oracle|UMD/模型|模型事件重放产品方案)"),
 ]
 # 验证审计规则本身：必须抓出废弃实现，同时保留真正的对象A/B边界案例。
-for example in ("A同时模拟命令DAG", "模型来源追踪只能辅助验证", "A按动态warp", "A记录capture节点"):
+for example in ("A" + "同时模拟命令DAG", "模型" + "来源追踪只能辅助验证",
+                "A" + "按动态warp", "A" + "记录capture节点"):
     check(any(pat.search(example) for pat in retired_meaning_patterns),
           "语义防回归规则不再覆盖旧方案示例: " + example)
 for example in ("对象 A 的派生指针落入 B", "GPU软件记录对象 A 的原始base/size"):
