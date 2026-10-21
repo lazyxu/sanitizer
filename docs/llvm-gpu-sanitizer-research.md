@@ -299,7 +299,7 @@
 
 公开结构 **SanitizerCallbackMemoryAccess** 提供 PC、地址、宽度、flags 等参数，官方列出1/2/4/8/16字节访问宽度；shared/local 指针在该回调中可表达为相应内存窗口的偏移。这证明指令宽度／空间分类是运行时工具的核心输入，但并不证明你能够原样移植 NVIDIA 的机器码 patch 实现。[N03]
 
-**自研落地对照：** UMD 在 module load/JIT 阶段选择 patch、记录原PC↔新PC及资源用量；Compiler/MC 提供自研 ISA decode/encode；KMD 复用正规可执行映射与调度接口，不应绕过代码安全策略；cmodel和已具有目标GPU ISA执行能力的QEMU全系统模型对 patch 前后的合法输入结果与错误PC作差分。
+**自研落地对照：** UMD 在 module load/JIT 阶段选择 patch、记录原PC↔新PC及资源用量；**UMD内部独立Runtime Binary Rewriter负责目标ISA decode/encode，也可只读复用现有Compiler/MC库，生产Compiler源码无需修改**；KMD复用正规可执行映射与调度接口，不应绕过代码安全策略；cmodel和已具有目标GPU ISA执行能力的QEMU全系统模型对 patch 前后的合法输入结果与错误PC作差分。
 
 #### 4.1.3 Racecheck、Initcheck、Synccheck 的内部语义差异
 
@@ -1219,6 +1219,8 @@ UMD 在模块加载或 JIT 产物生成后取得目标代码，解析指令与�
 
 ### 11.2 编译器、KMD、UMD支持与修改
 
+**NVIDIA官方手册对默认运行时工具明确说明：[Compute Sanitizer](https://docs.nvidia.com/compute-sanitizer/ComputeSanitizer/index.html#compilation-options)不需要特殊编译参数；设备Patch Callback可以用现有nvcc另编译工具模块，这不意味着原应用重编译或生产编译器要改动。完整纠正与实现方式见[S01运行时二进制插桩指南](S01-vendor-implementation-guide.md#121-不要求特殊编译到底意味着什么)。**
+
 **binary。** 
 
 | 路线 | 组件 | 必须支持的契约／交付物 | 是否必须新改代码及判断条件 |
@@ -2085,7 +2087,7 @@ __global__ void s01(uint32_t *a, bool tail) {
 | A0模型访问前oracle | 通用bounds条件＋LLVM目标ISA语义[L05]，本项目工程化 | Compiler可不插桩；KMD复用Guest提交/完成；UMD传64B实际逻辑长度 | 现有Global Store实际访存前hook、对象表和错误回传；**不重写GPU ISA解释器** |
 | B1编译插桩＋区间表 | LLVM访存插桩框架[L03]＋本项目live对象registry设计 | Compiler check/DeviceHelper；UMD不可变区间快照；KMD映射 | 执行真实插桩ISA、区间表可见性、报告 |
 | B2编译插桩＋Shadow | Google/LLVM ASan[L02]＋AMD GPU ASan[A01] | Compiler Pass/device库；UMD shadow/redzone/poison；KMD缺失映射/错误契约才补 | 执行设备shadow checker、接入Guest metadata映射和命令先后 |
-| C运行期patch | NVIDIA patch API[N03]的公开接口模式＋自研机器码重写 | Compiler/MC decoder/encoder；UMD patch/cache/PC map；KMD正常代码加载 | 原始/重写ISA的合法结果差分及异常PC复核 |
+| C运行期patch | NVIDIA patch API[N03]的公开接口模式＋自研机器码重写 | **生产Compiler零改动**；UMD内独立Binary Rewriter负责decoder/encoder、patch/cache、PC map；KMD正常代码加载 | 原始/重写ISA的合法结果差分及异常PC复核 |
 | D1原对象bounds | NVIDIA编译期fat bounds[N04]＋cuCatch[P01] | Compiler原指针root/companion；UMD参数sidecar；KMD复用 | 执行原对象check，QEMU访存oracle核对来源；跨live B仍检出 |
 | E编译＋patch | NVIDIA Hybrid[N02][N05]＋B/D/C融合 | Compiler manifest；UMD混合选择；KMD使用统一资源 | 检查跨模块模式切换、coverage与来源降级 |
 | F0/F1/F2 | GPUVM页保护[K01]／LLVM HWASan Tag[L04]／GPUArmor[P04] | F0映射；F1/F2需新的tag/bounds协议或硬件项目 | F0验现有GPU MMU；F1/F2新增硬件指令时才扩展模型语义 |

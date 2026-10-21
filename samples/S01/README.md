@@ -64,10 +64,12 @@ __global__ void s01(uint32_t *a, bool tail) {
 | A0模型访问前oracle | 通用bounds条件＋LLVM目标ISA语义[L05]，本项目工程化 | Compiler可不插桩；KMD复用Guest提交/完成；UMD传64B实际逻辑长度 | 现有Global Store实际访存前hook、对象表和错误回传；**不重写GPU ISA解释器** |
 | B1编译插桩＋区间表 | LLVM访存插桩框架[L03]＋本项目live对象registry设计 | Compiler check/DeviceHelper；UMD不可变区间快照；KMD映射 | 执行真实插桩ISA、区间表可见性、报告 |
 | B2编译插桩＋Shadow | Google/LLVM ASan[L02]＋AMD GPU ASan[A01] | Compiler Pass/device库；UMD shadow/redzone/poison；KMD缺失映射/错误契约才补 | 执行设备shadow checker、接入Guest metadata映射和命令先后 |
-| C运行期patch | NVIDIA patch API[N03]的公开接口模式＋自研机器码重写 | Compiler/MC decoder/encoder；UMD patch/cache/PC map；KMD正常代码加载 | 原始/重写ISA的合法结果差分及异常PC复核 |
+| C运行期patch | NVIDIA patch API[N03]的公开接口模式＋自研机器码重写 | **Compiler源码无需修改；UMD内独立Runtime Binary Rewriter**负责ISA decode/encode、patch/cache、PC map（可选复用现有MC库）；KMD正常代码加载 | 原始/重写ISA的合法结果差分及异常PC复核 |
 | D1原对象bounds | NVIDIA编译期fat bounds[N04]＋cuCatch[P01] | Compiler原指针root/companion；UMD参数sidecar；KMD复用 | 执行原对象check，QEMU访存oracle核对来源；跨live B仍检出 |
 | E编译＋patch | NVIDIA Hybrid[N02][N05]＋B/D/C融合 | Compiler manifest；UMD混合选择；KMD使用统一资源 | 检查跨模块模式切换、coverage与来源降级 |
 | F0/F1/F2 | GPUVM页保护[K01]／LLVM HWASan Tag[L04]／GPUArmor[P04] | F0映射；F1/F2需新的tag/bounds协议或硬件项目 | F0验现有GPU MMU；F1/F2新增硬件指令时才扩展模型语义 |
+
+**特别澄清：** NVIDIA-R纯运行时方案不要求修改生产编译器或重新编译用户Kernel；UMD中的Runtime Binary Rewriter可以独立提供解码、重新编码和检查注入。**用已有编译器编译工具的设备Patch模块，不属于修改编译器。** 见[S01厂商实施指南 §1.2.1](../../docs/S01-vendor-implementation-guide.md)。
 
 **建议最先提交的工作包：** 在现有QEMU GPU ISA执行器的`GLOBAL_STORE_U32`语义入口加`before_gpu_memory_effect`，向模型输入`Object{base=0x1000,size=64}`和可控redzone；运行合法`a[0]`、`a[15]`及非法`a[-1]`、`a[16]`四组并从Guest UMD接收源PC、lane、byte-width、object报告。随后才实现LLVM B2设备库与实际QEMU插桩产物，不能把模型A0正确等同于真机B2已完成。
 
