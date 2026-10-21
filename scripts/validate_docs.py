@@ -215,6 +215,14 @@ blob_sha = hashlib.sha1(
 ).hexdigest()
 check(report.get("main_document_blob_sha") == blob_sha,
       "审计报告引用的主稿SHA已过期")
+check(report.get("main_line_count") == len(main.splitlines()),
+      "审计报告引用的主稿行数已过期")
+check(report.get("amd_hardware_fallback", {}).get("document")
+      == "docs/amd-gpu-asan-hardware-fallback.md",
+      "报告中缺少AMD硬件依赖及软件替代路径审计")
+check(report.get("legacy_text_cleanup", {}).get("static_semantic_regression")
+      == "scripts/validate_docs.py",
+      "报告未登记历史方案语义防回归检查")
 check(report.get("product_routes") == ["B", "C", "D", "E", "F"],
       "审计报告产品路线不一致")
 check(report.get("physical_gpu_checker_result") == "GPU_NOT_RUN",
