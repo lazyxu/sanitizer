@@ -1,10 +1,10 @@
 # 自研 LLVM GPU 后端 Sanitizer 技术调研与实施方案
 
-**版本：1.3 · 资料核验日期：2026-10-21 · 文档语言：中文**
+**版本：1.4 · 资料核验日期：2026-10-21 · 文档语言：中文**
 
 **用途：技术立项、编译器／驱动／架构联合评审、研发任务拆分与预算讨论。**
 
-**1.3 版修订：** 用户明确确认 **QEMU 全系统平台现有可执行目标GPU ISA的执行模型（Q2）**；本版将其作为既有前提而非待建设能力，并按实际缺失接线重新解释预算。[友商及LLVM机制深挖](#vendor-deep-dive)逐一说明原理/代码入口/证据限制；[全部路线出处及融合矩阵](#route-provenance-matrix)明确借鉴、融合与本项目需自行实现的部分，保留28个详细实例。
+**1.4 版修订：** 已增加[双厂商GPU Docker构建与28场景实代码](../samples/README.md)，每个案例独立CUDA `cuda.cu`、AMD HIP `amd.hip.cpp` 与中文README；统一runner区分真实GPU报告、GPU API错误、CPU ASan、未检出/不支持。**既有1.3版**明确 用户明确确认 **QEMU 全系统平台现有可执行目标GPU ISA的执行模型（Q2）**；本版将其作为既有前提而非待建设能力，并按实际缺失接线重新解释预算。[友商及LLVM机制深挖](#vendor-deep-dive)逐一说明原理/代码入口/证据限制；[全部路线出处及融合矩阵](#route-provenance-matrix)明确借鉴、融合与本项目需自行实现的部分，保留28个详细实例。
 
 本文回答：在自研 GPU、LLVM 后端、KMD（Kernel-Mode Driver，内核态驱动）、UMD（User-Mode Driver，用户态驱动）及验证环境的边界下，怎样建设可用于真机调试的 sanitizer；不同路线能检测什么、需要修改哪些组件、投入多少、如何验证，以及什么情况下值得进一步投入二进制插桩或硬件支持。
 
@@ -39,7 +39,7 @@
 16. [组件改动与代码量估算](#component-estimates)
 17. 性能、显存和可观测性设计
 18. [检测场景与实例分析](#detection-scenarios)
-19. [验证基准与验收标准](#validation)
+19. [验证基准与验收标准](#validation)（含[可运行样例与结果口径](#sample-execution)）
 20. [分阶段研发计划和团队安排](#roadmap)
 21. 主要风险与决策条件
 22. [架构评审时应确认的项目参数](#platform-parameters)
@@ -1489,6 +1489,27 @@ E按共享对象表和设备检查库去重预算，不把B/C/D和QEMU解释器�
 | 必须修改什么 | 对缺失的新 ISA、metadata 状态、失效规则、异常／屏蔽行为修改模型；只是普通软件 helper 时应按 B/D 说明 | 修改设备模型与桥接，连接固件／KMD 的初始化、context、fault、reset；若模拟 cache，清楚声明其功能及一致性范围 |
 | 还需什么证据 | 功能模型可作为规则原型，不能替代校准后的时序模型与 RTL/DV | Q2 中 fault 正确不证明真实流水线、并发一致性、精准异常、面积或 slowdown；这些须由后续相应验证提供 |
 
+### 14.5a F0 GPU Guard Page 是真实GPU机制，但只能提供GPU页级保护
+
+**【官方事实】** NVIDIA CUDA Driver Virtual Memory Management [N10]提供 `cuMemAddressReserve`、`cuMemCreate`、`cuMemMap`、`cuMemSetAccess`；AMD HIP GPU VMM [A03]也提供对应的 `hipMemAddressReserve`、`hipMemCreate`、`hipMemMap`、`hipMemSetAccess`。这是GPUVA保留/页映射及GPU访问权限控制，**不是Host Linux `mprotect()`或CPU ASan**。GPU设备与驱动必须支持VMM；HIP文档要求先查询`hipDeviceAttributeVirtualMemoryManagementSupported`，同时按硬件allocation granularity对齐。[N10][A03]
+
+**具体布局：** 预留两个GPU页粒度区间，仅把第一段映射到真实device allocation并设置设备读写权限；第二段保持GPUVA已保留但未映射。将有效探针指针指向第一页最后4B，`p[0]`合法，`p[1]`落入下一未映射GPU页，可触发GPU MMU fault。注意：若用户只是向64B对象越界4B、但仍处于已映射GPU页，则页保护无法知道64B逻辑边界；这与B2 Shadow/Redzone或D1原对象bounds属于不同保证。
+
+~~~cpp
+// GPU VMM算法伪代码，完整CUDA和HIP可单独编译版本见samples/experiments
+reserve_gpu_va(2*gpu_page_granularity);
+map_only_first_gpu_page();      // 物理页及GPUVA映射
+set_gpu_access_first_page(RW);  // 真正赋予GPU访问权限
+uint32_t* last = first_page_end - 4;
+launch_gpu_kernel(last, /*bad=*/true); // GPU store到未映射的第二页
+// 可能产生GPU硬件fault；不保证Sanitizer精确归因到源码对象
+~~~
+
+**工程责任：** Compiler通常不需要IR插桩；UMD负责设备属性、逻辑放置与GPUVA预约/访问策略；KMD/硬件负责GPU MMU、页表、访问权限与fault归因；cmodel及**已存在GPU ISA执行器的QEMU全系统平台**要实现所需GPUVA/MMU访问语义与异常回传（已有时直接复用）。若GPU不具备VMM能力，必须明确UNSUPPORTED。非法访问可能导致context/device故障，样例默认不加入自动批量运行。
+
+**已加入的实际源码：** [CUDA GPU Guard Page](../samples/experiments/gpu-guard-page/gpu_guard_page.cu)、[AMD HIP GPU Guard Page](../samples/experiments/gpu-guard-page/gpu_guard_page.hip.cpp)和[中文说明](../samples/experiments/gpu-guard-page/README.md)。这是独立的F0页级实验；尚未在实际GPU编译/执行，不能宣称与S01字节级越界等价，也不能把单纯GPUVA硬件fault报告成CPU检测成果。
+
+
 ### 14.6 方案出处、融合与本项目原创工作
 
 **F并非单一厂商产品移植。** F0页保护源于GPUVM/页表和KMD映射规则[K01]；F1 Tag比较借鉴LLVM HWASan[L04]；F2对象Bounds与metadata缓存参考GPUArmor[P04]、cuCatch[P01]和NVIDIA原对象分析[N04]。这些算法均有前例；本项目的原创范围是实际GPU ISA/KMD/固件/RTL契约和一致性实现。
@@ -2757,6 +2778,52 @@ kernel void error_then_barrier(int32_t* p, int n) {
 
 <a id="validation"></a>
 
+<a id="sample-execution"></a>
+
+### 18.30 真实GPU工具样例与完整源代码索引（CUDA/AMD）
+
+**源码已提交，不等于全部成功检出。** 每个S01～S28单独包含CUDA/AMD HIP的完整`__global__` kernel与`main`、中文详细注释、`--good/--bad`模式及专属README，公共[样例README](../samples/README.md)包含两种Docker编译环境和一键运行命令。**受GPU硬件、编译器、厂商checker覆盖和真实执行路径限制，不能保证28项在两厂商全检出。**
+
+| 场景 | CUDA完整源码 | AMD HIP完整源码 | NVIDIA预期（未验证） | AMD预期（未验证） |
+|---|---|---|---|---|
+| [S01](../samples/S01/README.md) | [CUDA](../samples/S01/cuda.cu) | [AMD HIP](../samples/S01/amd.hip.cpp) | detect（memcheck） | detect（GPU ASan） |
+| [S02](../samples/S02/README.md) | [CUDA](../samples/S02/cuda.cu) | [AMD HIP](../samples/S02/amd.hip.cpp) | detect（memcheck） | detect（GPU ASan） |
+| [S03](../samples/S03/README.md) | [CUDA](../samples/S03/cuda.cu) | [AMD HIP](../samples/S03/amd.hip.cpp) | conditional（memcheck） | conditional（GPU ASan） |
+| [S04](../samples/S04/README.md) | [CUDA](../samples/S04/cuda.cu) | [AMD HIP](../samples/S04/amd.hip.cpp) | unsupported（memcheck） | unsupported（GPU ASan） |
+| [S05](../samples/S05/README.md) | [CUDA](../samples/S05/cuda.cu) | [AMD HIP](../samples/S05/amd.hip.cpp) | unsupported（memcheck） | unsupported（GPU ASan） |
+| [S06](../samples/S06/README.md) | [CUDA](../samples/S06/cuda.cu) | [AMD HIP](../samples/S06/amd.hip.cpp) | conditional（memcheck） | conditional（GPU ASan） |
+| [S07](../samples/S07/README.md) | [CUDA](../samples/S07/cuda.cu) | [AMD HIP](../samples/S07/amd.hip.cpp) | conditional（memcheck） | unsupported（GPU ASan） |
+| [S08](../samples/S08/README.md) | [CUDA](../samples/S08/cuda.cu) | [AMD HIP](../samples/S08/amd.hip.cpp) | conditional（memcheck） | conditional（GPU ASan） |
+| [S09](../samples/S09/README.md) | [CUDA](../samples/S09/cuda.cu) | [AMD HIP](../samples/S09/amd.hip.cpp) | unsupported（memcheck） | unsupported（GPU ASan） |
+| [S10](../samples/S10/README.md) | [CUDA](../samples/S10/cuda.cu) | [AMD HIP](../samples/S10/amd.hip.cpp) | api（memcheck） | api（GPU ASan） |
+| [S11](../samples/S11/README.md) | [CUDA](../samples/S11/cuda.cu) | [AMD HIP](../samples/S11/amd.hip.cpp) | api（memcheck） | api（GPU ASan） |
+| [S12](../samples/S12/README.md) | [CUDA](../samples/S12/cuda.cu) | [AMD HIP](../samples/S12/amd.hip.cpp) | conditional（memcheck） | unsupported（GPU ASan） |
+| [S13](../samples/S13/README.md) | [CUDA](../samples/S13/cuda.cu) | [AMD HIP](../samples/S13/amd.hip.cpp) | detect（initcheck） | unsupported（GPU ASan） |
+| [S14](../samples/S14/README.md) | [CUDA](../samples/S14/cuda.cu) | [AMD HIP](../samples/S14/amd.hip.cpp) | detect（racecheck） | unsupported（GPU ASan） |
+| [S15](../samples/S15/README.md) | [CUDA](../samples/S15/cuda.cu) | [AMD HIP](../samples/S15/amd.hip.cpp) | unsupported（racecheck） | unsupported（GPU ASan） |
+| [S16](../samples/S16/README.md) | [CUDA](../samples/S16/cuda.cu) | [AMD HIP](../samples/S16/amd.hip.cpp) | unsupported（racecheck） | unsupported（GPU ASan） |
+| [S17](../samples/S17/README.md) | [CUDA](../samples/S17/cuda.cu) | [AMD HIP](../samples/S17/amd.hip.cpp) | conditional（synccheck） | unsupported（GPU ASan） |
+| [S18](../samples/S18/README.md) | [CUDA](../samples/S18/cuda.cu) | [AMD HIP](../samples/S18/amd.hip.cpp) | conditional（synccheck） | unsupported（GPU ASan） |
+| [S19](../samples/S19/README.md) | [CUDA](../samples/S19/cuda.cu) | [AMD HIP](../samples/S19/amd.hip.cpp) | conditional（synccheck） | unsupported（GPU ASan） |
+| [S20](../samples/S20/README.md) | [CUDA](../samples/S20/cuda.cu) | [AMD HIP](../samples/S20/amd.hip.cpp) | conditional（memcheck） | unsupported（GPU ASan） |
+| [S21](../samples/S21/README.md) | [CUDA](../samples/S21/cuda.cu) | [AMD HIP](../samples/S21/amd.hip.cpp) | detect（memcheck） | conditional（GPU ASan） |
+| [S22](../samples/S22/README.md) | [CUDA](../samples/S22/cuda.cu) | [AMD HIP](../samples/S22/amd.hip.cpp) | clean（memcheck） | clean（GPU ASan） |
+| [S23](../samples/S23/README.md) | [CUDA](../samples/S23/cuda.cu) | [AMD HIP](../samples/S23/amd.hip.cpp) | conditional（memcheck） | unsupported（GPU ASan） |
+| [S24](../samples/S24/README.md) | [CUDA](../samples/S24/cuda.cu) | [AMD HIP](../samples/S24/amd.hip.cpp) | unsupported（memcheck） | unsupported（GPU ASan） |
+| [S25](../samples/S25/README.md) | [CUDA](../samples/S25/cuda.cu) | [AMD HIP](../samples/S25/amd.hip.cpp) | unsupported（memcheck） | unsupported（GPU ASan） |
+| [S26](../samples/S26/README.md) | [CUDA](../samples/S26/cuda.cu) | [AMD HIP](../samples/S26/amd.hip.cpp) | conditional（memcheck） | unsupported（GPU ASan） |
+| [S27](../samples/S27/README.md) | [CUDA](../samples/S27/cuda.cu) | [AMD HIP](../samples/S27/amd.hip.cpp) | conditional（memcheck） | unsupported（GPU ASan） |
+| [S28](../samples/S28/README.md) | [CUDA](../samples/S28/cuda.cu) | [AMD HIP](../samples/S28/amd.hip.cpp) | conditional（memcheck） | conditional（GPU ASan） |
+
+**类别：** `detect`＝基于厂商公开能力预计可以检出，实际尚无GPU日志；`conditional`＝需要目标opcode、时序或特定硬件支持；`unsupported`＝当前选定厂家工具不保证这种检查；`api`＝GPU Runtime API错误而非kernel指令Sanitizer；`clean`＝S22 Masked-off合法路径必须没有越界报告。S19 HIP源码是功能对照，不是与CUDA `cp.async`等价的指令级检测；S23只覆盖常量符号子情况，S26只给单编译单元示意，S28未实现Sanitizer内部OOM故障注入。这些缺口是明确标记的待实现验收范围，不应该隐藏。
+
+**一键运行：** 根目录`./scripts/setup-docker.sh cuda` 或在有受支持AMD GPU且`ROCM_ARCH=gfx...:xnack+`、`HSA_XNACK=1`时`./scripts/setup-docker.sh rocm`；进入容器后运行`./scripts/run-all.sh cuda`或`./scripts/run-all.sh rocm`。底层Python脚本可用`--case S01 --mode both --strict`只执行单例并强制校验预期；产生`results/{backend}/summary.json`和逐case原始日志。
+
+**结果不能作假：** NVIDIA需要Compute Sanitizer设备违规/竞争/初始化/同步/漏显存报告；AMD必须由设备ASan产生含`on amdgpu device N`标志的报告。AMDGPU ASan依赖 `-fsanitize=address -shared-libsan`、受支持`xnack+`目标及`/asan/libamdhip64.so`，只有Host ASan输出不算设备检出。构建/运行不满足条件时应明确返回失败或UNSUPPORTED，而不是自动降为CPU ASan。源码和Runner只完成结构与代码审查，**尚未在用户硬件执行；无真实GPU检测率或性能数据**。[N02][A01][N05]
+
+**危险故障**：S17/S18/S20/S27的bad默认被跳过，须额外`--allow-dangerous`并在隔离GPU环境运行；`--attempt-unsupported`仅用于观察工具没有承诺的错误，不得据此宣布检测支持。F0 GPU Guard Page也必须单独显式`--allow-fault`运行。
+
+
 ## 19. 验证基准与验收标准
 
 ### 19.1 分四层验证
@@ -2845,6 +2912,21 @@ GMSBench 中不同 checker 使用不同适用分母，HiRace 的 code/input 组�
 对两种方案只在相同输入、相同支持范围、相同并发模式下比较。超时不从总表消失；共同可完成子集可以提供单独表，但必须显示其占原始集合多少。
 
 误报和漏报调查应先缩小输入／opcode，再使用 cmodel、反汇编和时间线定位。不能仅因为“加同步后错误消失”就认定原检测器正确。
+
+### 19.6a Docker编译与GPU检测的证据分级
+
+| 阶段 | 完成判定 | 本轮状态 |
+|---|---|---|
+| SOURCE_ADDED | 已提供完整CUDA/HIP源码、中文注释、README和manifest | **已完成28×2，附F0双平台实验** |
+| STATIC_STRUCTURE_PASS | Python/Bash语法和目录清单、文档链接与分类一致 | 脚本/CI已编写；GitHub Actions须以实际运行结论为准 |
+| GPU_COMPILED | 在指定容器版本/目标架构上，nvcc和hipcc真实成功，未静默忽略GPU ASan | **尚未验证** |
+| GPU_DETECTED | 执行`--bad`后得到具备源PC/地址/设备身份的GPU检查报告 | **尚未验证** |
+| GOOD_NO_FALSE_POSITIVE | 同样架构上执行`--good`，无GPU sanitizer误报 | **尚未验证** |
+| UNSUPPORTED | 厂商checker不覆盖或ISA/Driver不支持，明确返回不支持 | 显式写在manifest，仍需针对平台核查 |
+| INTEGRATED_QEMU | 在项目已存在GPU ISA模型的QEMU Q2上实现模型检查器，Guest错误回传闭环 | **未实施（与CUDA/ROCm样例分开）** |
+
+**不得混淆容器镜像与目标GPU。** Docker仅准备NVCC、Compute Sanitizer或HIP+ASan runtime，不能在普通CPU宿主上完成GPU Kernel检测。CUDA编译无需`-fsanitize=address`（这会混入CPU ASan）；AMD HIP使用`-fsanitize=address`时也需验证设备目标和instrumented runtime，不能把CPU报告冒充GPU报告。每次实验保留GPU架构、驱动、镜像、编译参数、Sanitizer版本、log和受支持指令集合。
+
 
 ### 19.7 功能级cmodel、QEMU全系统与真机的分层验收
 
@@ -3110,6 +3192,22 @@ M1 是有意缩小的原型，不能把 M1 的周期或代码量当成第16章�
 **[Q04] QEMU. TCG Instruction Counting.** [官方文档](https://www.qemu.org/docs/master/devel/tcg-icount.html)。本次核验：指令计数与虚拟时间；明确不是cycle-accurate，限定system emulation，且与multi-threaded TCG不兼容。
 
 **[Q05] QEMU. Execution Record/Replay.** [官方文档](https://www.qemu.org/docs/master/devel/replay.html)。本次核验：icount依赖、非确定事件、虚拟设备确定性、异步bottom-half接入及状态保存／恢复要求；不证明外接GPU模型已自动满足这些要求。
+
+**[N10] NVIDIA. CUDA Driver API — Virtual Memory Management.**
+- [GPUVA保留/映射/权限官方API](https://docs.nvidia.com/cuda/archive/13.4.2/cuda-driver-api/cuda_driver_api/group__CUDA__VA.html)；2026-10-21核验。
+- 依据：`cuMemAddressReserve / cuMemCreate / cuMemMap / cuMemSetAccess / cuMemUnmap`，支持GPU页映射但不等于字节级逻辑对象Sanitizer。
+
+**[A03] AMD. HIP Runtime API — Virtual memory management.**
+- [官方GPU VMM文档](https://rocm.docs.amd.com/projects/HIP/en/latest/how-to/hip_runtime_api/memory_management/virtual_memory.html)；2026-10-21核验。
+- 依据：VMM支持属性、硬件granularity及`hipMemAddressReserve / hipMemCreate / hipMemMap / hipMemSetAccess`；属于GPUVA管理，不是CPU mprotect。
+
+**[C01] NVIDIA. CUDA Container Images — Supported tags.**
+- [官方镜像标签列表](https://gitlab.com/nvidia/container-images/cuda/blob/master/doc/supported-tags.md)；2026-10-21核验。
+- 样例默认使用`nvidia/cuda:13.1.2-devel-ubuntu24.04`，具体tag和宿主驱动匹配应现场核对；需要实际NVIDIA GPU。
+
+**[A04] AMD. Running ROCm Docker Containers.**
+- [ROCm官方Docker运行说明](https://rocm.docs.amd.com/projects/install-on-linux/en/docs-7.2.3/how-to/docker.html)；2026-10-21核验。
+- 使用官方dev-complete镜像、宿主`/dev/kfd`和`/dev/dri`；这只是容器条件，不保证目标GPU ASan支持。
 
 ### 23.2 原始论文与可复现材料
 
