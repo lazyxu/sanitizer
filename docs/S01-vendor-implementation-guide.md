@@ -19,7 +19,7 @@
 | [0x0ffc,0x1000) | Underflow | 对象头前 4 B |
 | [0x1040,0x1044) | Overflow | 对象尾后 4 B |
 
-基础 S01 的可验收能力是“已追踪对象在有效布局中的 Global 字节可访问性”。**当前 GPUVA 有效≠原对象合法**。如果 A 尾部刚好邻接存活的 B，裸地址查询可能找到 B 并通过；只有编译期保留 A 的原对象 Base/Bounds 才能提供更强保证（主报告 S04）。**不要把 Guard Page 的页级故障等同任意 4 B 对象越界。**
+基础 S01 的可验收能力是“已追踪对象在有效布局中的 Global 字节可访问性”。**当前 GPUVA 有效≠原对象合法**。如果 A 尾部刚好邻接存活的 B，裸地址查询可能找到 B 并通过；必须保留访问的预期原对象 A（例如编译期 Base/Bounds、独立模型的来源跟踪）才可提供更强保证（主报告 S04）；单纯根据当前地址查表不足。**不要把 Guard Page 的页级故障等同任意 4 B 对象越界。**
 
 访问完整区间的溢出安全判断：
 
@@ -327,6 +327,40 @@ SanVerdict check_shadow(const SanContext& ctx,
 | **KMD（按需）** | 复用已有GPUVM/BO/map/fence/fault/错误完成；缺少shadow VA预留/映射或终止路径时补正当接口 | Shadow和Report Buffer映射权限、提交/完成顺序、多context清理；不用要求KMD遍历每条Kernel访存 |
 | **功能级 cmodel** | 执行同一检查器设备指令；如要独立oracle，再加非shadow的区间检查 | Shadow读写可见性，用户store之前执行checker，访问宽度/active lane准确 |
 | **已有 QEMU GPU ISA执行器** | 使用现成目标ISA模型运行真正LLVM插桩产物，接Guest UMD Shadow资源与错误反馈 | 完整Guest→UMD→KMD→GPU Model→Report闭环，无需开发第二个ISA解释器 |
+
+#### 可从 LLVM Pass 真正着手的最小入口
+
+这份示例刻意把**目标选择**、**插桩调用**与**CFG改造**分开。只是API风格的工程骨架，不是可以直接放入LLVM树编译通过的完整Pass；具体API签名需以你采用的LLVM版本为准。重要的是实际Load/Store**只有检查成功时**才能执行，不能只在它之前调用一个void报告helper却放行原访存。
+
+~~~cpp
+// 工程骨架：在Function内部收集待修改指令，避免遍历期间改CFG失效。
+SmallVector<Instruction*> sites;
+for (Instruction& I : instructions(F)) {
+    if (is_device_sanitizer_helper(F) || is_internal_shadow_instruction(I))
+        continue;
+    if (isa<LoadInst>(I) || isa<StoreInst>(I)) sites.push_back(&I);
+}
+for (Instruction* I : sites) {
+    Value* ptr = get_memory_pointer_operand(*I);
+    Type* value_ty = get_memory_value_type(*I);
+    unsigned addr_space = cast<PointerType>(ptr->getType())->getAddressSpace();
+    if (!target_is_global_address_space(addr_space)) continue;
+
+    TypeSize bytes = DL.getTypeStoreSize(value_ty);
+    if (bytes.isScalable() || !supported_scalar_memory_access(*I)) {
+        emit_coverage_gap(*I); // 不支持的指令不能静默标记“已检查”
+        continue;
+    }
+    // 应把check编成真实的GPU设备端helper/inline检查。
+    Value* verdict = insert_device_check(*I, ptr, bytes.getFixedValue(),
+                                         get_original_pc_site_id(*I));
+    // 改写CFG，让旧访存只出现在verdict==VALID的路径。
+    // 不能让非法store在报告之后继续执行；合法lane必须保持原有barrier语义。
+    split_and_guard_memory_access(*I, verdict);
+}
+~~~
+
+建议首版只承诺普通非原子的Global Load/Store 1/2/4/8B，后续扩到宽向量、masked、atomic、memcpy/async与后端新增的ISA访存。结合目标反汇编审核最终 opcode 列表；LLVM IR已插桩不代表lowering后所有访存都在覆盖范围内。
 
 **UMD Redzone 分配伪代码：**
 
