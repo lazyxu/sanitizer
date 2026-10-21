@@ -1,5 +1,12 @@
 # GPU Sanitizer 研究进度
 
+## 2026-10-21 · v1.6 S01按厂商实现的工程拆解
+
+已提交独立[S01厂商优先实施指南](S01-vendor-implementation-guide.md)：按照NVIDIA默认运行时二进制插桩、CUDA13.1+编译期原对象Base/Bounds、AMD LLVM GPU ASan＋Shadow/Redzone三种公开实现路径展开，逐路径给出Compiler、KMD、UMD、功能级cmodel、已有QEMU GPU ISA模型的具体修改、核心伪代码与公开官方来源。然后单列模型原生oracle、实时对象区间表、真实GPUVA Guard Page、Tag、硬件Bounds和Hybrid，明确自研实现与厂商未公开内部机制不能混同。
+
+文档与原S01 CUDA/HIP样例README/主调研报告已互相链接。**当前仍只有厂商公开资料与架构设计；没有在用户自研GPU上实现或验证Sanitizer，也没有CUDA/AMD实卡检测通过证据。** 建议首个代码原型：直接复用已存在QEMU GPU ISA执行器的Global Store生效前hook，构造64B头/尾及合法对照；之后实现LLVM Shadow真机路径，最后追加原对象D1。
+
+
 ## 2026-10-21 · v1.5 新增真实GPU验证基础设施
 
 **完成：** 28组CUDA+HIP样例共56份独立源文件及中文README；NVIDIA/ROCm官方Docker镜像配置；GPU设备端Sanitizer Runner、28案例能力清单、GPU Guard Page CUDA/HIP实验；[GPU硬件工作流](../.github/workflows/gpu-hardware.yml)和[完整GPU Runner配置文档](gpu-actions-ci.md)。CPU静态CI增加合成GPU日志分类测试与Bash/Python校验，且已取得成功记录。

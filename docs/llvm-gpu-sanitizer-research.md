@@ -1,10 +1,10 @@
 # 自研 LLVM GPU 后端 Sanitizer 技术调研与实施方案
 
-**版本：1.5 · 资料核验日期：2026-10-21 · 文档语言：中文**
+**版本：1.6 · 资料核验日期：2026-10-21 · 文档语言：中文**
 
 **用途：技术立项、编译器／驱动／架构联合评审、研发任务拆分与预算讨论。**
 
-**1.5 版修订：** 在1.4样例/容器基础上新增[GitHub Actions GPU硬件验证](gpu-actions-ci.md)：按真实CUDA/ROCm GPU分别执行smoke、28例compile-only或安全全集，正确区分设备报告/API错误/CPU ASan/部分覆盖并上传日志；默认未启用GPU Runner，因此尚无真机验收。**1.4版原有内容：** 已增加[双厂商GPU Docker构建与28场景实代码](../samples/README.md)，每个案例独立CUDA `cuda.cu`、AMD HIP `amd.hip.cpp` 与中文README；统一runner区分真实GPU报告、GPU API错误、CPU ASan、未检出/不支持。**既有1.3版**明确 用户明确确认 **QEMU 全系统平台现有可执行目标GPU ISA的执行模型（Q2）**；本版将其作为既有前提而非待建设能力，并按实际缺失接线重新解释预算。[友商及LLVM机制深挖](#vendor-deep-dive)逐一说明原理/代码入口/证据限制；[全部路线出处及融合矩阵](#route-provenance-matrix)明确借鉴、融合与本项目需自行实现的部分，保留28个详细实例。
+**1.6 版新增 S01 厂商实现说明：** [独立指南](S01-vendor-implementation-guide.md)先剖析 NVIDIA 默认运行时二进制插桩与 CUDA13.1+ 编译期Base/Bounds，再剖析 AMDGPU/ROCm 的 LLVM ASan＋Shadow/Redzone，最后逐个比较 cmodel、区间表、GPU MMU Guard Page、Tag、硬件Bounds及Hybrid。每条路线均给出 Compiler、KMD、UMD、功能级cmodel、已有QEMU GPU ISA模型的明确修改和核心伪代码，附官方链接及短原文。v1.5 的56份CUDA/HIP样例与GPU Actions文档保持不变，真实GPU验收仍未完成。历史版本参见[修订记录](revision-history.md)。
 
 本文回答：在自研 GPU、LLVM 后端、KMD（Kernel-Mode Driver，内核态驱动）、UMD（User-Mode Driver，用户态驱动）及验证环境的边界下，怎样建设可用于真机调试的 sanitizer；不同路线能检测什么、需要修改哪些组件、投入多少、如何验证，以及什么情况下值得进一步投入二进制插桩或硬件支持。
 
@@ -38,7 +38,7 @@
 15. Initcheck、Racecheck 与 Synccheck 的独立设计
 16. [组件改动与代码量估算](#component-estimates)
 17. 性能、显存和可观测性设计
-18. [检测场景与实例分析](#detection-scenarios)
+18. [检测场景与实例分析](#detection-scenarios)（[S01按厂商实现指南](S01-vendor-implementation-guide.md)）
 19. [验证基准与验收标准](#validation)（含[可运行样例与结果口径](#sample-execution)）
 20. [分阶段研发计划和团队安排](#roadmap)
 21. 主要风险与决策条件
@@ -253,6 +253,8 @@
 **官方来源之间也有更新不同步。** NVIDIA 产品总览仍保留 initcheck 仅 global 的概括，而当前用户手册与 release notes 已列出 shared 支持；本报告按后两者的版本信息处理这一冲突。[N01][N02][N05]
 
 ## 4. 友商产品与上游实现：机制、实现接线及可复用边界
+
+**从实际编码角度阅读S01：** 先阅读[S01按厂商实现与组件改动的独立指南](S01-vendor-implementation-guide.md)，按 NVIDIA-R（二进制插桩）、NVIDIA-C（编译期bounds）、AMD LLVM Shadow 三种真实产品路径逐组件拆解，再用本章横向比较其可公开证实的机制和证据范围。
 
 <a id="vendor-deep-dive"></a>
 
@@ -2034,6 +2036,8 @@ S01～S12 除另行声明外，读入数据已初始化、输出对象独立有�
 <a id="case-s01"></a>
 
 ### 18.1 S01：Global 对象头部与尾部越界
+
+**建议先按厂商实施路径理解本例**：详见[S01：NVIDIA运行时与编译期Memcheck、AMD GPU ASan、其余方案的逐组件实施指南](S01-vendor-implementation-guide.md)。其中各路线分别说明为何检测本例、哪里可能漏检、五组件的代码与接口、核心伪代码和官方原文；本小节保留原来的错误代码、数学判断及验收描述。
 
 **前提与错误代码。** 受控夹具给 `a` 分配 64 B，即 16 个 `uint32_t`，首地址为 `0x1000`；前后各 16 B 是保留的不可访问区，不包含其他 live 对象。启动一个 32 线程 block，分别传入 `tail=false` 和 `tail=true`：
 

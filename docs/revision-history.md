@@ -1,5 +1,14 @@
 # 文稿修订记录
 
+## v1.6 · 2026-10-21
+
+1. 新增[独立 S01 按厂商实施指南](S01-vendor-implementation-guide.md)，而非用A/B/C抽象分类作首要目录：NVIDIA默认运行时二进制插桩与当前有效分配检查；NVIDIA CUDA13.1+编译期fat-pointer原对象bounds；AMD GPU ASan的LLVM插桩/Shadow/Redzone/设备运行库配合。
+2. 每条厂商路径列出具体运行链路、Compiler/MC、KMD、UMD、功能级cmodel和**已有QEMU GPU ISA执行模型**的具体改动，包含设备检查和UMD分配/模块加载伪代码、前提与漏检边界。
+3. 独立列出模型原生oracle、LLVM区间表、GPU页级Guard、Tag、硬件Bounds与Hybrid的实现分工，明确公开算法来源／厂商未知内部细节／针对自研GPU的原创工程接口。
+4. 每条路径链接官方手册、上游代码、限长英文原文摘录和设备验证命令，说明NVIDIA默认Memcheck不等于AMDGPU的经典1:8 Shadow布局；核对XNACK+及device ASan运行库要求。
+5. 在主研究报告第4章与§18.1、项目README、S01样例README增加导航；28场景、全部CUDA/HIP样例和现有GPU Actions保持不变。**新增内容是设计/文档，不是sanitizer实现或真机运行验收。**
+
+
 ## v1.5 · 2026-10-21
 
 1. 在master增加`docker/Dockerfile.cuda`、`Dockerfile.rocm`与`scripts/setup-docker.sh`，采用已确认存在的CUDA 13.1.2/ROCm 7.2.4官方开发镜像。宿主必须真实提供GPU/驱动，不能用CPU sanitizer代替。

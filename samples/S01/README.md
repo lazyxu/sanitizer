@@ -1,5 +1,18 @@
 # S01：Global对象头尾越界
 
+## 从厂商实际实现理解 S01（优先阅读）
+
+**[S01 厂商优先的完整实施指南](../../docs/S01-vendor-implementation-guide.md)**：
+
+| 实际参考路线 | CUDA/AMDGPU现有机制 | 自研组件重点 |
+|---|---|---|
+| NVIDIA默认运行时Memcheck | 对已编译GPU二进制的访存点运行时插桩、检查当前有效分配；某些邻接live对象场景可漏检 | UMD机器码patch和对象registry；Compiler提供MC指令语义；KMD提供正常映射/完成 |
+| NVIDIA CUDA13.1+编译期Memcheck | Base-and-Bounds/fat pointer来源分析，运行时与GPU设备检查协同；未知来源降级 | Compiler SSA provenance与GPU检查库；UMD Kernel参数对象sidecar |
+| AMD ROCm GPU ASan | LLVM访存插桩＋Shadow Memory＋Redzone/Poison＋ASan运行库 | Compiler LLVM Pass与设备checker；UMD shadow与对象生命周期；KMD按缺口改 |
+| 其他GPU方案 | cmodel原生检查、区间表、GPU MMU Guard Page、Tag和硬件Bounds | 按厂商未提供的检测保证及项目GPU硬件能力选择 |
+
+**已有QEMU全系统平台能执行目标GPU ISA**：验证不需要重做ISA执行器，只需按所选检测器增加实际GPU访存前观察、对象/Shadow、Guest UMD/KMD错误回传（已有接口可复用）。下文保留完整CUDA/HIP源码运行方式、原S01代码与数学判定，详细各组件代码和官方出处以独立指南为准。
+
 ## 可编译设备代码与一键运行
 
 **这是一对独立的真实 GPU 源程序，不是CPU ASan演示。** [CUDA完整源码](cuda.cu)和[AMD HIP完整源码](amd.hip.cpp)分别具有设备kernel、Host入口和中文注释。运行时使用 `--good` 合法对照与 `--bad` 故障/边界场景；以GPU最终实际访存、设备sanitizer报告与原始日志作为验收证据。

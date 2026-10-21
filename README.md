@@ -2,7 +2,7 @@
 
 本仓库保存面向自研GPU和LLVM后端的sanitizer技术调研与架构实施建议。生产软件按**编译器、KMD（Kernel-Mode Driver，内核态驱动）、UMD（User-Mode Driver，用户态驱动）**分工；功能级cmodel与基于QEMU的全系统虚拟平台分别分析。
 
-**当前版本1.5（2026-10-21）：已加入56份 CUDA/AMD HIP 样例源码、Docker 环境、GPU-only 检测运行器和可选的 NVIDIA/AMD GitHub Actions GPU 硬件验收。CPU 静态 CI 有成功记录；真正GPU工作流目前未启用、未取得GPU验收记录。**
+**当前版本1.6（2026-10-21）：增加 S01「NVIDIA、AMD、其他方案」的厂商优先工程实施指南。既有56份 CUDA/HIP 样例与两厂商 GPU CI 不变；GPU 硬件检测尚无实际验收记录。**
 
 ## 阅读入口
 
@@ -13,10 +13,15 @@
 - [功能级cmodel／QEMU能力边界](docs/llvm-gpu-sanitizer-research.md#model-platforms)与[全系统接入](docs/llvm-gpu-sanitizer-research.md#qemu-integration)：区分GPU执行、模型检查、Guest驱动路径和真机直通。
 - 逐路线双平台分析：[A cmodel](docs/llvm-gpu-sanitizer-research.md#route-a-platforms)、[B shadow](docs/llvm-gpu-sanitizer-research.md#route-b-platforms)、[C binary](docs/llvm-gpu-sanitizer-research.md#route-c-platforms)、[D bounds／identity](docs/llvm-gpu-sanitizer-research.md#route-d-platforms)、[E hybrid](docs/llvm-gpu-sanitizer-research.md#route-e-platforms)、[F hardware](docs/llvm-gpu-sanitizer-research.md#route-f-platforms)。各路线正文也有三组件支持与修改表。
 - [工程量估算](docs/llvm-gpu-sanitizer-research.md#component-estimates)与[本项目QEMU已确认事实和预算数据](docs/estimates-v1.3.json)：核心／手写测试分开；三组件、cmodel、条件KMD缺口及QEMU接入分别计算。
+- **[S01：NVIDIA/AMD/其他方案，逐组件实施指南](docs/S01-vendor-implementation-guide.md)**：区分 NVIDIA 运行时二进制插桩和 CUDA13.1+ 编译期Base/Bounds，AMD LLVM+Shadow/Redzone，逐个给出 Compiler/KMD/UMD/cmodel/现有QEMU模型改动与核心伪代码，并附厂商官方原文。
 - [S01七条具体机制与平台落地](docs/llvm-gpu-sanitizer-research.md#case-s01)：模型oracle、区间表、Shadow、二进制patch、原对象bounds、hybrid、硬件辅助。
 - [检测场景与实例分析](docs/llvm-gpu-sanitizer-research.md#detection-scenarios)：S01～S28逐例说明错误位置、检测方案、组件配合、修复／合法对照、报告与限制；[逐场景KMD和平台对应表](docs/llvm-gpu-sanitizer-research.md#scenario-platforms)补充每例的执行与观测条件。
 - [验证基准与验收矩阵](docs/llvm-gpu-sanitizer-research.md#validation)、[研究进度](docs/research-progress.md)、[修订记录](docs/revision-history.md)、[文稿验证记录](docs/validation-report.json)。
 - [归档研究笔记](docs/research-notes/)：架构、论文及友商资料的过程记录与来源链接。
+
+## v1.6 厂商优先的 S01 研发路线
+
+新版不再把 S01 首先列成抽象的 A/B/C；优先讲 NVIDIA 默认运行时补丁、NVIDIA 编译期原对象分析和 AMDGPU LLVM ASan，再讨论模型oracle、区间表、GPU Guard Page、Tag、硬件Bounds和Hybrid。推荐以**已有QEMU GPU ISA解释器的独立oracle**验证S01，再实施**借鉴AMD/LLVM的设备Shadow**，最后补充**NVIDIA式编译期原对象Bounds**；只有闭源覆盖缺口值得投入时才建设运行时机器码patch框架。详见[独立S01实施指南](docs/S01-vendor-implementation-guide.md)。
 
 ## 新增：真实 GPU Docker + GitHub Actions 验证
 
