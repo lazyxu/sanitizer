@@ -1,5 +1,8 @@
 # 自研 LLVM GPU sanitizer：架构与工程量工作笔记
 
+> **2026-10-21产品准入修正：本项目仅保留B/C/D/E/F这些检查逻辑能够在实体GPU执行或由真实硬件实施的产品候选。旧“模型内直接检测”路线已撤销；cmodel/QEMU只能用来验证真实GPU检查指令或模拟真实硬件语义，不再单独报价为产品检测器。**
+> **纯C运行时二进制插桩不要求修改生产Compiler；ISA Decoder/Encoder/重写工具由UMD独立Runtime Binary Rewriter维护，可选只读复用MC。归档中原C Compiler栏是历史交付包，不等于编译器强制修改。**
+
 > **研究过程记录，非最终规范。** 本笔记保存早期调研内容，可能包含未更新的候选结论。正式判断以[主稿](../llvm-gpu-sanitizer-research.md)为准。
 
 > 本文件是给主文档作者的中间研究笔记；所有架构取舍与 kLOC 均为工程判断，不能表述为 LLVM、AMD、NVIDIA 或其他厂商的现成实现规模。研究日期：2026-10-20。公开 LLVM 文档是滚动版，真正实施前必须冻结自研 fork 的 commit 并逐项确认。
@@ -17,27 +20,21 @@
 
 纯地址表、shadow 与 cmodel 的物理访问可见性都不会自动产生第 3/4 层。一个内存事务访问了合法页，并不证明它没有跨越 C/C++ 数组、slab 子分配或 stack object 的边界。子对象边界又比 allocation bounds 更严格，须有前端或显式 API 提供语义，不能从地址反推。
 
-## 2. 六路线的组件修改面
+## 2. 真实GPU可部署的五类方案：组件修改面
 
 | 路线 | 主要检测位置与新增工作 | 能力边界 | 适合用途 |
 |---|---|---|---|
-| A cmodel | 在 ISA architectural memory issue/commit、异步 copy、DMA、共享/私有存储接口加入 tap；使用分配生命周期及可选对象描述符；host 侧即时报告 | 能观察运行过的模型路径和真实 mask；若只有地址事件，复用后 UAF、跨 live object 跳跃、未知子分配仍漏检；取决于 cmodel 对实际硬件的忠实度 | bring-up、指令语义与 sanitizer 差分基准、低频难复现问题 |
 | B LLVM ASan 式 shadow | IR 内存访问插桩、target address-space/mask lowering、device shadow 查询、UMD poison/unpoison 与 redzone/quarantine | 基于 addressability；不保证任意跨对象跳跃或地址复用后的旧指针；共享/私有空间不能照搬 global 线性映射 | 有源码的日常测试主线、较低 ABI 改动 |
 | C runtime binary patching | 模块装载时 decode、插入 check、寄存器/谓词保存、代码重定位与 PC 映射；独立 code cache；host patch policy | 可覆盖无源码二进制的已支持 ISA 访存，但没法恢复被丢失的 source object 与 pointer provenance；不能把“不认识的 opcode”视为已覆盖 | 第三方库、JIT 产物、无法重编译模块的补洞 |
 | D object bounds + temporal provenance | 指针 identity/epoch 与 bounds 的编译器传播；pointer shadow 或变更指针表示；跨 call/memory/atomic/ABI 的一致性 | 支持链路内可以识别跨 live object 与复用后旧指针；整数伪造、外部 ABI、未知布局必须有严格语义或公开降级 | 精度需求高、可控制编译闭包的模块 |
 | E hybrid | 本预算定义为 B 主线 + D 受控模块 + C 有限 fallback，公共生命周期、报告与 coverage manifest；cmodel 做对应语义验证 | 每条访问必须标明当前保证等级；C fallback 不获得 D 的身份能力；不允许模式切换时静默“重新赋予当前对象身份” | 可持续产品路线，逐步把高价值链路升级为 D |
 | F hardware assisted | 若 ISA 已有 tag/bounds 支持：编译器 emit、allocator/tag lifecycle、UMD context、异常上报、cmodel 模型；若没有则另有硬件项目 | 随机小 tag 存在碰撞；capability/descriptor 精度由 ISA 决定；raw/untagged/DMA 路径仍可能绕过 | 下一代架构协同或已有硬件能力的使能 |
 
-### A：cmodel 的 tap 应接在哪里
+### C路线职责纠正（纯Runtime不要求修改Compiler）
 
-至少需要两个层次，不能只拦截 host 上模拟显存的 `read/write`：
+旧预算表按“Compiler/Device RT/UMD”交付包分组，其中C的Compiler 0–2 kLOC和Device RT 6–11 kLOC只表述历史归属，不表示生产编译器必须修改。**纯运行时路径实际Compiler源码改动=0**，目标ISA decode/encode、分支重定位、opcode语义、Patch Stub生成和资源重算均可在UMD独立Runtime Binary Rewriter中实现；已有MC库只可选复用，不能作为强制前提。预算的重新归属见[正式§16.5a](../llvm-gpu-sanitizer-research.md)和[纯runtime责任表](../estimates-v1.6.1-runtime-C.json)。
 
-- **语义请求入口**：保留原指令 PC、逻辑 lane、地址空间、逐元素地址、元素宽度、lane predicate、vector mask、byte enable、atomic opcode/order/scope。应在合并请求/coalescing 之前保留线程来源，但不要把随后发现被体系结构取消的推测访问当成提交错误。
-- **实际事务与完成入口**：覆盖拆分事务、异步 copy 目的写入、DMA、纹理/图像或专用 load/store、shared/private 实际映射；记录 issue/complete ID、队列依赖、提交/取消状态。需要与语义请求关联，避免每个 cache refill 都重复计作用户 load。
-
-生命周期 tap：host alloc/suballoc/free、device malloc/free、global module load/unload、workgroup shared 起止、private frame 起止。仅得到 UMD 大块 allocation 时，slab 内 17 字节子对象边界不可见；需要 custom allocator annotation、编译器对象清单，或在 cmodel 上额外做指针数据流追踪。后者已经接近 D 的运行时版本，不能声称 A 成本不变。
-
-cmodel 可安全停止整个模型并留存全部状态，因此报告/终止容易；但若 cmodel 将所有操作串行化、统一了缓存可见性或未实现某条异步路径，就不能证明硬件并发无误。建议 A 的验收目标是对“已建模指令与生命周期”的明确覆盖率。
+**模型辅助测试边界：** cmodel已有GPU ISA执行能力可验证B/C/D/E设备检查指令，但模型独立的指令访存观察/安全判断不会运行在真机。有关模拟器事件tap的历史文字已撤下；调试人员如需检查模型正确性可按[正式§9](../llvm-gpu-sanitizer-research.md#hardware-deployment-gate)使用参考oracle，不能将它列为产品候选。
 
 ### B：ASan 式 shadow 的实际移植点
 
@@ -47,7 +44,7 @@ cmodel 可安全停止整个模型并留存全部状态，因此报告/终止容
 
 ### C：runtime patching 的工程重点
 
-建议第一版在模块载入/JIT finalize 时生成独立 instrumented code object，在派发前完成切换；原始模块保留。不要在线改写正在执行的 kernel。缓存 key 包含原始 binary hash、ISA/stepping、插桩 ABI、coverage policy 和 patcher 版本。
+**生产Compiler保持零改动**；UMD内Runtime Binary Rewriter在模块载入/JIT finalize时生成独立instrumented code object，在派发前完成切换；原始模块保留。不要在线改写正在执行的 kernel。缓存 key 包含原始 binary hash、ISA/stepping、插桩 ABI、coverage policy 和 patcher 版本。
 
 patcher 要维护 opcode 分类表、访存宽度及地址计算、原条件码/执行 mask、scratch register 分配、call/return 与 branch relocation、跳转表、PC-relative 常量、indirect targets、代码 alignment/branch range、scoreboard/wait/dependency、spill 区安全性，以及原 PC↔新 PC 双向映射。错误保存/恢复 EXEC、SCC/VCC 或目标等价状态会引入难以察觉的语义变化。
 
@@ -223,7 +220,7 @@ load(old)  // 地址表看到 X 属于fresh，无法知道操作数来自old
 | KMD | 隔离、映射与驻留、context资源、安全的fault/abort出口 | VA reserve/sparse mapping/metadata residency受限；新增fault ABI；F tag context或迁移状态 | 每条用户load/store的软件检查，source allocation归因 |
 | RTL/微架构 | 既有 ISA/异常行为 | F若缺tag/bounds检验、metadata cache、异常精度、DMA覆盖，需要架构/RTL/DV项目 | 不能把完整hardware effort折算进软件kLOC |
 
-A–E 的成本基线假定现有公开 UMD/KMD 接口已满足缓冲区与可靠失败协议，因此不把 KMD/FW 强制写成必改。F 的软件预算是假定所需硬件能力已经存在；缺失能力必须单独过 architecture/RTL/DV gate、另估人月和硅片时间。
+B–E 的成本基线假定现有公开 UMD/KMD 接口已满足缓冲区与可靠失败协议，因此不把 KMD/FW 强制写成必改。F 的软件预算是假定所需硬件能力已经存在；缺失能力必须单独过 architecture/RTL/DV gate、另估人月和硅片时间。
 
 ## 10. 工程量：公共底座 P + 路线增量
 
@@ -246,7 +243,6 @@ A–E 的成本基线假定现有公开 UMD/KMD 接口已满足缓冲区与可�
 
 | 路线 | Compiler | Device RT | Host RT + UMD | cmodel | Tooling | Δ核心合计 |
 |---|---:|---:|---:|---:|---:|---:|
-| A | 1–2 | 0–1 | 1–3 | 6–12 | 1–3 | **9–21** |
 | B | 7–13 | 5–9 | 4–8 | 1–3 | 1–3 | **18–36** |
 | C | 0–2 | 6–11 | 14–26 | 2–5 | 3–6 | **25–50** |
 | D | 18–34 | 10–20 | 7–14 | 3–7 | 3–6 | **41–81** |
@@ -257,7 +253,6 @@ A–E 的成本基线假定现有公开 UMD/KMD 接口已满足缓冲区与可�
 
 | 路线 | Compiler | Device RT | Host RT + UMD | cmodel | Tooling | Δ测试合计 |
 |---|---:|---:|---:|---:|---:|---:|
-| A | 1–2 | 0–1 | 1–3 | 5–10 | 1–3 | **8–19** |
 | B | 6–11 | 4–7 | 3–6 | 1–3 | 1–3 | **15–30** |
 | C | 0–2 | 5–9 | 12–23 | 2–5 | 3–5 | **22–44** |
 | D | 15–29 | 8–16 | 6–12 | 3–7 | 3–5 | **35–69** |
@@ -268,7 +263,6 @@ A–E 的成本基线假定现有公开 UMD/KMD 接口已满足缓冲区与可�
 
 | 方案 | 计算式 | 核心 kLOC | 手写测试 kLOC |
 |---|---|---:|---:|
-| A | P + ΔA | **18–38** | **16–33** |
 | B | P + ΔB | **27–53** | **23–44** |
 | C | P + ΔC | **34–67** | **30–58** |
 | D | P + ΔD | **50–98** | **43–83** |
@@ -291,13 +285,12 @@ E = P + 完整B增量 + B基础上D的独有部分 + C fallback子集 + 跨模�
 
 ### 10.6 估算敏感项与单列项目
 
-- A 最敏感于 cmodel 是否有统一访存入口、正确的mask/异步completion和allocation provenance hook。
 - B 最敏感于 shadow VA/驻留、stack/private/shared、target memory intrinsics、pass后新增访问；受控 global-only PoC远小于此工程区间。
 - C 最敏感于ISA可变编码、寄存器/谓词保存、重定位、间接目标、多种code object及JIT同步。
 - D 最大项是端到端身份传播和atomic/外部ABI；若要求所有C/C++整数别名与外部二进制仍精准，这个有限支持矩阵估计不成立。
 - E 需要额外接口契约与模式验证，复用不是零集成成本。
 - F 要单列ISA规格、RTL、微架构性能、DV与异常精度、DMA覆盖、FW/KMD启用工作。不存在硬件时，不能使用“软件30–60kLOC”作为总项目报价。
-- FW/KMD缺失可靠dispatch abort或稀疏metadata mapping时，对A–E也构成单列gate。本笔记不提供伪精确的软件LOC替代硬件/驱动项目量。
+- FW/KMD缺失可靠dispatch abort或稀疏metadata mapping时，对B–E也构成单列gate。本笔记不提供伪精确的软件LOC替代硬件/驱动项目量。
 
 ## 11. 必须进入验收套件的反例
 
