@@ -40,7 +40,7 @@ surface_store_u32(surface, x_byte=64*4, y=0, value=7, mode=TRAP);
 
 **哪里不对、应检测什么。** A 的地址可能已映射且在 allocation 内，但写权限不允许。B 不能只检查底层 pitch allocation：行尾 padding 即使在物理分配内，也未必是合法像素。检查应理解维度、格式、坐标单位、mip/layer 和边界模式。PTX 对 surface 的边界处理提供明确模式；目标 ISA 的合法 clamp/zero 等行为必须按其语义处理，不能把所有超出原始坐标范围的操作都报为非法访存。[N09]
 
-**实现方案与组件。** A 按资源描述符和权限在模型入口检查。Compiler＋UMD＋device runtime 可提供资源类插桩：加载时登记只读符号，创建资源时登记格式、维度与权限，在 texture/surface intrinsic 前检查参数。C/E 若覆盖资源 opcode，可查询同一描述符；只实现线性地址 shadow 的 B 不能自动获得这项能力。D 可以为显式资源 view 保留逻辑边界；F 的权限或坐标 fault 可作为硬件信号，但报告工具仍需关联资源 ID 和源码。
+**实现方案与组件。** GPU设备检查器在实际资源访存ISA前检查资源描述符和权限。Compiler＋UMD＋device runtime 可提供资源类插桩：加载时登记只读符号，创建资源时登记格式、维度与权限，在 texture/surface intrinsic 前检查参数。C/E 若覆盖资源 opcode，可查询同一描述符；只实现线性地址 shadow 的 B 不能自动获得这项能力。D 可以为显式资源 view 保留逻辑边界；F 的权限或坐标 fault 可作为硬件信号，但报告工具仍需关联资源 ID 和源码。
 
 **修复、合法反例与预期报告。** A 应写可写对象或使用允许的 Host 更新接口；B 改为合法像素坐标。另设采用规定 clamp 模式的越界采样作为合法反例：它可以返回边界像素，不应报告通用 OOB；如果应用要求更严格的逻辑坐标，需作为独立约束声明。预期报告分别为 `write-to-read-only` 与 `surface-coordinate-out-of-range`，包含资源格式、坐标、单位和模式。资源 opcode 不受支持时必须显示覆盖缺口。
 
