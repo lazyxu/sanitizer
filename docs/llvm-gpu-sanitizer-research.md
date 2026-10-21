@@ -1,12 +1,12 @@
 # 自研 LLVM GPU 后端 Sanitizer 技术调研与实施方案
 
-**版本：1.7 · 资料核验日期：2026-10-21 · 文档语言：中文**
+**版本：1.10 · 资料核验日期：2026-10-21 · 文档语言：中文**
 
 **用途：技术立项、编译器／驱动／架构联合评审、研发任务拆分与预算讨论。**
 
 **1.6.1 重要澄清：NVIDIA-R类纯运行时二进制插桩不需要修改生产Compiler或重编译应用；目标ISA解码／重新编码工具由UMD侧独立Runtime Binary Rewriter实现，可选复用既有MC库。此前把编译器和工具链复用混为一谈，现已纠正。**
 
-**v1.9 更新：** 已增加AMD逐组件硬件依赖及无专用功能时的可部署软件替代指南，并对主稿、S01～S28的废弃实现描述加严CI审计。**v1.8 说明：** 只保留B/C/D/E/F五条真实GPU可部署候选，另附[逐组件关键修改代码与表格](real-gpu-components-implementation.md)；S01厂商比较、28组CUDA/HIP两平台样例及实卡CI继续保留，目标自研GPU尚未完成真实硬件验收。
+**v1.10 补充：** 对无XNACK区分官方ROCm GPU ASan不可直接设备插桩与自研GPU预映射Shadow/B1区间表/D1来源Bounds可实现路径；**I归B1变体，G/F0只作辅助页保护，T/F1与H/F2需要真实芯片，E是混合集成而非新的检查算法**。S01主指南给出了明确依赖/降级/验收表。**v1.9 更新：** 已增加AMD逐组件硬件依赖及无专用功能时的可部署软件替代指南，并对主稿、S01～S28的废弃实现描述加严CI审计。**v1.8 说明：** 只保留B/C/D/E/F五条真实GPU可部署候选，另附[逐组件关键修改代码与表格](real-gpu-components-implementation.md)；S01厂商比较、28组CUDA/HIP两平台样例及实卡CI继续保留，目标自研GPU尚未完成真实硬件验收。
 
 本文回答：在自研 GPU、LLVM 后端、KMD（Kernel-Mode Driver，内核态驱动）、UMD（User-Mode Driver，用户态驱动）及验证环境的边界下，怎样建设可用于真机调试的 sanitizer；不同路线能检测什么、需要修改哪些组件、投入多少、如何验证，以及什么情况下值得进一步投入二进制插桩或硬件支持。
 
@@ -428,8 +428,8 @@ ASM／特殊设备指令可能在IR pass后出现，必须用目标后端的指�
 | C：运行时二进制插桩 | NVIDIA Patching API [N03]；BARRACUDA [P02] 作为研究对照 | **公开patch入口模式＋自研ISA重写器**；具体rewriter属自主实现 | Decode/CFG/encode/relocation/资源重算/原PC映射/patch cache | “复制到了NVIDIA未公开的二进制引擎” |
 | D1：原对象base/bounds | NVIDIA编译期memcheck [N02][N04]＋cuCatch [P01] | **公开编译期fat-pointer理念融合＋自研SSA/ABI传播** | GEP/phi/select/调用参数root、sidecar与unknown降级 | “仅按当前地址查表就是provenance” |
 | D2：指针时间身份 | cuCatch tag/meta思路[P01]＋LLVM HWASan tag[L04] | **公开时间安全思路融合＋针对本项目的强身份协议** | epoch随指针load/store/copy/atomic一致传播，复用与回收协议 | “分配表多一个generation就能检出旧裸指针” |
-| E：编译＋binary混合 | NVIDIA hybrid instrumentation [N02][N05] | **厂商公开产品策略＋B/D/C多机制融合＋自研ABI/manifest** | 模块能力选择、拒绝不兼容、不同保证级别与跨模块来源降级 | “不同模块混用自动等于所有函数被检测” |
-| F0：Guard Page | Linux GPUVM/页表映射 [K01]及目标MMU原理 | **通用映射保护的工程应用** | 页对齐placement、guard map与fault attribution | “页级保护检测任意4B对象内越界” |
+| E：编译＋binary混合（集成策略，非独立检查算法） | NVIDIA hybrid instrumentation [N02][N05] | **厂商公开产品策略＋B/D/C多机制融合＋自研ABI/manifest** | 模块能力选择、拒绝不兼容、不同保证级别与跨模块来源降级 | “不同模块混用自动等于所有函数被检测” |
+| F0：Guard Page **辅助机制（不是独立完整方案）** | Linux GPUVM/页表映射 [K01]及目标MMU原理 | **通用GPU页级映射保护** | 页对齐placement、guard map与fault attribution；可做硬件故障链路验证 | “页级保护检测任意4B对象内越界”或“F0单独等于完整S01” |
 | F1：Tag Compare | LLVM HWASan [L04] | **公开tag算法＋目标ISA/tag存储适配** | tag表示/碰撞/short granule、空转与失效/异常 | “任何tag匹配均证明原对象bounds正确” |
 | F2：硬件Bounds／MLB | GPUArmor [P04]＋cuCatch/NVIDIA对象bounds [P01][N04] | **论文研究结构启发＋独立自研ISA/RTL/driver契约** | metadata cache、一致性、fault时序、RTL/DV | “软件原型性能就是芯片最终开销” |
 | I1 Initcheck | NVIDIA initcheck [N02]＋Intel device MSan [I01] | **分离未写过bitmap与值级定义性传播的融合设计** | byte definedness/copy/async时序；完整值级MSan另立 | “bitmap checker就是MSan” |
@@ -915,30 +915,32 @@ VFIO文档将设备访问、I/O地址映射及中断等接口分开，并在示�
 
 ### 9.1 必须由实体GPU作出访问检查判定
 
-B、C、D、E 的设备检查代码必须存在于真实GPU执行的ISA路径并在实际访问之前生效；F 的页保护或 tag/bounds 则必须由实体GPU的MMU/Tag/Bounds硬件支持。Host侧仅收到API报错、编译器生成了IR call或设备映射成功，均不代表已实现GPU访问Sanitizer。
+B、C、D、E 的设备检查代码必须存在于真实GPU执行的ISA路径并在实际访问之前生效；**F若要作为独立的对象检查硬件候选，必须有实体GPU真实Tag/Bounds能力（F1/F2）**。GPU MMU Guard Page（F0）只算辅助页保护或故障验证，不能单独满足字节级S01。Host侧仅收到API报错、编译器生成了IR call或设备映射成功，均不代表已实现GPU访问Sanitizer。
 
 ### 9.2 五条正式候选及边界
 
 | 路线 | 真机生效位置 | 必要条件 | 不可宣称 |
 |---|---|---|---|
-| B | LLVM最终ISA插入的Shadow检查 + 设备检查库 | Metadata可被GPU读取、UMD异步poison正确 | 分配内所有子对象与复用后裸指针均强检出 |
+| B | LLVM最终ISA插入的B2 Shadow/Redzone或B1当前Live区间查询 + GPU设备检查库 | Metadata可被GPU读取、预映射/驻留与UMD异步发布正确；**XNACK不是自研B算法的必要硬件功能** | B1/B2已自动提供D1原对象来源或D2同VA复用旧指针检测 |
 | C | UMD重写后在GPU上执行的Binary和检查stub | 目标ISA解码/重写透明、代码正式加载 | 所有未知opcode或闭源模块都得到覆盖 |
 | D | GPU设备代码的原对象Bounds和可选完整指针身份传播 | D1来源保留、D2身份跨ABI/存取一致 | 仅从当前GPUVA反查可判复用后旧指针 |
-| E | 按模块执行已插桩/已改写GPU检查代码 | 统一ABI、检查等级和覆盖缺口可见 | 混用模块自动具有最强保证 |
-| F | **实体GPU现有或另行交付的硬件检查能力** | GPU MMU Guard Page或真正Tag/Bounds扩展 | F0页保护等同字节级对象边界；未来硬件已存在 |
+| E（集成策略） | 按模块执行B/D/C已插桩/已改写GPU检查代码 | B/D/C已有真正GPU checker；统一ABI、检查等级和覆盖缺口可见 | 混用模块自动具有最强保证，或E本身新增了访存检测算法 |
+| F | **实体GPU现有或另行交付的Tag/Bounds对象检查硬件能力** | 必须有实际F1/F2硬件ISA/元数据/失效与故障契约；F0只作为辅助页保护 | F0页保护等同字节级对象边界；把没有硬件的F1/F2列为已具备 |
+
+**分类补充**：I并非新增路线，而是B1区间表数据结构；G/F0页故障实验不成为可选的完整S01检测方案；Tag软件比较不等于硬件F1，F2缺芯片应列未来硬件研发，E混合是集成包装。关于无XNACK时官方与自研的不同可行性及实现代码，详见[S01 §2.4与§3](S01-vendor-implementation-guide.md)。
 
 ### 9.3 研发与验收顺序
 
 先确定Compiler、UMD和KMD的生产资源契约及元数据ABI；随后交付真实GPU可执行的B Global load/store Shadow检查、报告与可靠失败路径，在实体GPU上用S01错误及合法对照验收。D1再补原对象Bounds，D2按必要的指针身份闭合度独立验收；对现成二进制/JIT有明确缺口时才引入C/E；F以实际芯片支持和收益数据决定是否立项。参见[逐组件实现与验收表](real-gpu-components-implementation.md#11-bf-的选择与组件总结)。
-## 10. 路线 B：LLVM ASan 式影子内存
+## 10. 路线 B：LLVM编译期地址检查（B2 Shadow / B1 当前Live区间）
 
 ### 10.1 原理
 
 将 LLVM 访存检查与设备 shadow 查询结合；allocator 根据对象的创建和释放顺序维护可访问状态，设备端记录违规访问。基础目标是 M1/M2/M6 和在 poison 窗口内的 M5，随后扩展 shared/private 及初始化检查。
 
-这条路线和 ASan 算法同源，但自研目标必须自己确定 GPUVA 映射、页表管理、设备 runtime、错误终止及地址空间支持。[L01][L02][L03]
+B2与经典ASan Shadow/Redzone算法同源；**B1（原方案I）则使用GPU设备端有序Live Allocation区间表，属于同一编译期地址检查路线的无Shadow实现选项，不是AMD官方产品同款算法，也不是D1原对象来源检查**。B1和B2仅利用当前地址可访问性，可能放过A→live B；D1必须传original base/size，D2还需旧指针epoch。自研目标必须自己确定GPUVA映射、设备metadata/Runtime、错误终止及地址空间支持。[L01][L02][L03]
 
-### 10.2 Shadow 的三种实现选择
+### 10.2 B2 Shadow的三种布局选择及B1替代
 
 | 选择 | 前提 | 优点 | 主要成本 |
 |---|---|---|---|
@@ -946,7 +948,7 @@ B、C、D、E 的设备检查代码必须存在于真实GPU执行的ISA路径并
 | 多级稀疏 shadow | 驱动可按需建页表，runtime 可安全查表 | 不必连续保留全部 shadow | 额外访存、缺页／缺表策略、并发创建 |
 | 按 allocation 的 shadow | 已有可靠对象定位或区域索引 | 仅为实际对象分配状态 | 每次定位对象的成本，wild pointer 处理 |
 
-没有设备缺页能力并不排除 B：可以由 UMD 在公开 allocation 时提前分配／初始化对应 shadow，再把依赖排入 queue。不得让检查器首次访问一个尚未映射的 shadow 页时自己 fault。
+没有设备缺页能力或XNACK并不排除自研B：可以由UMD在公开allocation时提前分配、预映射、驻留和初始化Shadow/descriptor，再把依赖排入GPU queue。不得等到GPU第一次读取未映射的shadow页时再期望CPU换页。**没有连续Shadow窗口但GPU能读取预映射区间表时选B1，代价是每次访存GPU上查当前Live对象；不带provenance时不能提升为D1**。只有寄存器/参数可携带已知base/limit而没有动态metadata表时，受控D1比较还可能成立，但不代表完整B2。
 
 ### 10.3 编译器改动
 
@@ -1211,7 +1213,7 @@ else { declare_partial_coverage(); reject_if_required(); }
 
 E按共享对象表和设备检查库去重预算，不把B/C/D公共模块重复计费。
 
-## 14. 路线 F：硬件辅助
+## 14. 路线 F：有真实Tag/Bounds硬件时的条件性检查（F0页保护仅辅助）
 
 ### 14.1 可选硬件方向
 
@@ -1220,7 +1222,7 @@ E按共享对象表和设备检查库去重预算，不把B/C/D公共模块重�
 | Tag compare | pointer tag、memory tag、同步 fault／屏蔽语义 | tag 分配、传播、清除／重用 | 通常有碰撞与粒度边界 |
 | Bounds check 指令 | metadata handle／base-size 检查、准确错误 PC | 对象分析、descriptor 管理 | 无正确来源仍无法证明原对象 bounds |
 | Metadata cache／MLB | per-SM 缓存、失效和一致性协议 | profile、lookup、free 生命周期 | cache 大小和工作集有关 |
-| Watchpoint／保护页 | 地址范围、权限及 fault 归因 | GPUVA 管理、guard page | 粒度较粗，无法替代对象级检查 |
+| Watchpoint／保护页（F0辅助） | 地址范围、权限及fault归因 | GPUVA管理、guard page | **页粒度，不能作为独立完整字节级对象Sanitizer** |
 | 同步事件 trace | barrier／atomic／queue 事件输出 | race/sync 分析、流量控制 | 全访存 trace 的带宽可能不可接受 |
 
 ### 14.2 编译器、KMD、UMD及硬件支持
@@ -1247,11 +1249,11 @@ E按共享对象表和设备检查库去重预算，不把B/C/D公共模块重�
 
 ### 14.4 预算解释
 
-第16章P＋F生产基础软件核心约23–46 kLOC、测试约22–42 kLOC；前提是所需硬件能力**已经存在或另有交付，相关KMD基础契约也可复用**。KMD新增使能按真实驱动契约缺口另计。缺少这些能力时，不能用这张软件表报价完整 F。ISA／RTL／DV／固件的新增工作必须另行立项。
+第16章P＋F生产基础软件核心约23–46 kLOC、测试约22–42 kLOC；前提是用于对象检查的**F1 Tag或F2 Bounds硬件已经存在或另有交付，相关KMD基础契约也可复用**。单有F0页保护不能适用P＋F完整产品预算。KMD新增使能按真实驱动契约缺口另计。缺少这些能力时，不能用这张软件表报价完整 F。ISA／RTL／DV／固件的新增工作必须另行立项。
 
 <a id="route-f-platforms"></a>
 
-### 14.5 F0 GPU Guard Page 是真实GPU机制，但只能提供GPU页级保护
+### 14.5 F0 GPU Guard Page：辅助保护和KMD故障实验，不作为独立完整路线
 
 **【官方事实】** NVIDIA CUDA Driver Virtual Memory Management [N10]提供 `cuMemAddressReserve`、`cuMemCreate`、`cuMemMap`、`cuMemSetAccess`；AMD HIP GPU VMM [A03]也提供对应的 `hipMemAddressReserve`、`hipMemCreate`、`hipMemMap`、`hipMemSetAccess`。这是GPUVA保留/页映射及GPU访问权限控制，**不是Host Linux `mprotect()`或CPU ASan**。GPU设备与驱动必须支持VMM；HIP文档要求先查询`hipDeviceAttributeVirtualMemoryManagementSupported`，同时按硬件allocation granularity对齐。[N10][A03]
 
@@ -1270,6 +1272,8 @@ launch_gpu_kernel(last, /*bad=*/true); // GPU store到未映射的第二页
 **工程责任：** Compiler通常不需要IR插桩；UMD负责设备属性、逻辑放置与GPUVA预约/访问策略；KMD/硬件负责GPU MMU、页表、访问权限与fault归因。若GPU不具备VMM能力，必须明确UNSUPPORTED。非法访问可能导致context/device故障，样例默认不加入自动批量运行。
 
 **已加入的实际源码：** [CUDA GPU Guard Page](../samples/experiments/gpu-guard-page/gpu_guard_page.cu)、[AMD HIP GPU Guard Page](../samples/experiments/gpu-guard-page/gpu_guard_page.hip.cpp)和[中文说明](../samples/experiments/gpu-guard-page/README.md)。这是独立的F0页级实验；尚未在实际GPU编译/执行，不能宣称与S01字节级越界等价，也不能把单纯GPUVA硬件fault报告成CPU检测成果。
+
+**产品边界**：F0是已具备GPU VMM硬件时的资源隔离/页fault机制和辅助实验，**不作为独立完整方案**；只有真实芯片F1/F2特性和全链路资源/故障协议存在时才考虑F作为硬件检测候选。F1有tag碰撞/granule内越界缺口，必须单列覆盖等级，不等于严格4B S01。
 
 ### 14.6 方案出处、融合与本项目新增工作
 
@@ -1542,7 +1546,7 @@ K-F只为未具备的真实驱动状态契约计费。F基础预算已包含UMD�
 | P＋C | 31–60 | 27–51 | 58–111 | 成熟目标ISA decoder/encoder和合法patch装载 |
 | P＋D | 46–89 | 39–74 | 85–163 | D1/D2保留各自来源和ABI前提 |
 | P＋E | 69–132 | 59–113 | 128–245 | B/D/C受控子集去重，模式兼容 |
-| P＋F | 23–46 | 22–42 | 45–88 | **实体硬件检查能力已存在**；否则单独估算 |
+| P＋F | 23–46 | 22–42 | 45–88 | **实体F1/F2 Tag/Bounds对象检查硬件已存在**；F0页保护本身不满足完整S01；芯片新增另估算 |
 
 组合公式为“所选P＋路线生产软件区间＋**经源码审计证明确实缺失**的KMD契约包＋可选额外checker区间＋另行立项的Firmware/RTL/DV”。不得直接叠加多个P；同一映射、报告、对象表、终止代码只计一次。详见[生产预算JSON](estimates-v1.8.json)与[逐组件源码入口](real-gpu-components-implementation.md)。
 ### 16.10 将区间转为项目预算与算术校验
