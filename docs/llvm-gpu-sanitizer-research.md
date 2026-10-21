@@ -775,6 +775,26 @@ KVM 的 Guest CPU 加速方式与 Q1／Q2／Q3 的 GPU 接入方式应分开记�
 
 类似地，在 Guest OS 内核启用 KASAN，可以用于 KMD 的内核内存错误测试；它不自动为 GPU kernel 的 lane、对象边界与时间身份插桩。三类工具可以协同使用，报告应注明发现的是 Host 模型错误、Guest KMD 错误，还是目标 GPU 程序错误。
 
+#### 7.7.6 现有QEMU GPU ISA执行器的最小Sanitizer接入示例
+
+**当前已有的能力：QEMU全系统平台能执行目标GPU ISA（用户确认）；需要实现的是Sanitizer事件/元数据/错误接口，而非重写GPU ISA模拟器。** 目标ISA访存是否经过独立功能级cmodel、能否区分active lane、每个opcode的实际字节范围、GPUVA转换及异步完成，仍要到源码核查。
+
+~~~cpp
+// 伪接口：安装在现有GPU ISA解释器的内存语义真正生效之前。
+struct GpuAccess {
+    uint64_t context_id, launch_id, original_pc, gpuva;
+    uint32_t block_id, lane_id, bytes, byte_enable;
+    uint32_t addr_space, kind, opcode;
+};
+SanVerdict before_gpu_memory_effect(
+    const GpuAccess& access,
+    const AllocationSnapshot& objects);
+~~~
+
+最小链路：现有ISA解释器执行Global Store→只在`active_lane && active_element`时形成实际访存事件→从Guest UMD/分配事件取得对象requested_size与身份→模型A0独立检查或执行B的设备shadow helper→生成GPU PC、lane、对象/地址/宽度和失败状态→通过既有QEMU设备完成/fault接口反馈Guest KMD与UMD。若前置检查返回非法，模型按所选策略阻止原始store生效。单纯观察Host DMA或CPU TCG访存不够。
+
+**独立性要求：** QEMU GPU执行器若与功能级cmodel共用同一套代码，仍可验证多出的Guest驱动链路，但不能把两种启动方式视为两个独立ISA oracle；应另外用不同实现的区间参考检查器核对。
+
 ## 8. 跨组件公共架构与接口
 
 ### 8.1 三组件协作架构
@@ -1037,6 +1057,18 @@ VFIO文档将设备访问、I/O地址映射及中断等接口分开，并在示�
 | Q-U6：race 重现与 HB | cmodel／Q2：冲突访存，对照正确 scope／order／barrier 的同步；用受控调度或已接入 replay 复现 | 分别验执行可重现和 GPU HB 判断；Host TCG trace、icount 或单次串行顺序不能替代 GPU HB |
 | Q-U7：F 触发与 fault 处理 | Q1 注入 fault，Q2 由新增 tag／bounds 语义实际触发，Q3 在有相应硬件后重复；对照合法 tag／bounds | Q1 验接收处理，Q2 验模型规则触发，Q3 验真实设备路径；三种证据分别记录，不能互换 |
 
+#### 8.8.5 项目现有QEMU（Q2）的改动盘点
+
+| 已知或待查事项 | 状态与具体任务 |
+|---|---|
+| 可执行目标GPU ISA模型 | **已存在，无需重写。** 定位访存及barrier/atomic/async语义入口 |
+| 现有QEMU与独立功能级cmodel关系 | 尚不明确；核对是否同一个执行器/共享模拟代码，避免重复开发及伪独立验证 |
+| Guest GPUVA/MMU与对象长度 | 尚未核验；确认GPUVA→Guest物理地址、BO、逻辑请求长度和子分配信息都能关联 |
+| Guest UMD/KMD与错误回传 | 尚未核验；为Sanitizer增加完成前报告、fault/context关联与缓冲资源失败分类 |
+| S01第一批验收 | 在既有GPU ISA执行器上跑合法首/末元素、头/尾越界、masked-off无效lane，并核对Guest报告 |
+
+**没有读取目标QEMU实际源码，不把以上“待查”冒称为“尚未实现”。** 下列预算只计确认缺失的事件钩子、报告桥或Guest集成；不按从零建设Q2平台收费。
+
 ## 9. 路线 A：cmodel 检测
 
 ### 9.1 原理和适用目标
@@ -1082,6 +1114,22 @@ VFIO文档将设备访问、I/O地址映射及中断等接口分开，并在示�
 | 能检测什么 | A0：已实现空间的实际范围、对齐、有效性／初始化；A1：追加对象布局；A2：在传播闭合范围追加来源判断；具体 checker 分别启用 | Q2 可获得同等模型检查能力，并关联 Guest UMD／KMD 的实际执行；Q0/Q1 无 kernel 检测，Q3 不自动提供模型观测 |
 | 必须修改什么 | 修改模型的实际访存、寄存器／内存身份及所需同步入口；A1/A2 不能只加最终地址日志 | 增加目标设备前端、cmodel 桥接、Guest 生命周期与诊断协议；是否改 QEMU 核心按接口缺口判断 |
 | 其他组件支持 | A0 可不要求应用重编译；A1 需 compiler map；A2 需明确来源输入和传播；runtime／UMD 提供对象与异步事件 | KMD 提供映射、完成、fault/context 信息；若现有硬件 ABI 足够可复用驱动，缺失信息通过明确接口补齐 |
+
+### 9.6 方案出处、融合与本项目原创工作
+
+**出处：** A是通用地址范围数学＋LLVM/目标ISA语义[L05][L06]，不是某个厂商独占产品；QEMU设备模型设计参考[Q01][Q03]。本项目的实现是**既有cmodel/QEMU GPU ISA执行器＋独立oracle＋Guest分配事件/错误回传**的工程融合。
+
+**组件：** Compiler的A0可不改；A1需布局/PC sidecar；KMD独立模型时可不改，Guest系统路径须复用映射/完成；UMD提供用户requested_size和生命周期；cmodel加访问前检查；**已有QEMU GPU执行器**添加相同语义观测点但不重写解释器。独立oracle最好不同于设备检查库以避免自证。
+
+~~~cpp
+if (active_lane && effective_global_store) {
+    verdict = oracle.check(actual_gpuva, actual_byte_width, objects);
+    if (verdict != VALID) { report(original_pc, lane, verdict); suppress_store(); }
+    else perform_original_store();
+}
+~~~
+
+S01可检出红区头/尾越界；只有实际地址时，地址落到另一live对象仍会降级，不能声称具有D1原对象bounds。
 
 ## 10. 路线 B：LLVM ASan 式影子内存
 
@@ -1140,6 +1188,23 @@ VFIO文档将设备访问、I/O地址映射及中断等接口分开，并在示�
 | GPU 执行核心是否要改 | 若已支持产物全部 ISA／空间／同步，执行核心可不改；缺失语义才补实现。要做独立区间／有效性 oracle 时另改模型 | Q2 复用该核心，但需接通 Guest 内的 shadow 分配、映射、poison 命令、生效顺序及启动 ABI；TCG 插件不替代这些工作 |
 | 其他组件支持 | compiler pass、device helper、UMD 生命周期及 shadow 服务、报告通道 | 复用KMD现有映射、完成和所选错误策略所需的终止／回传契约，仅在相应契约不足时补接口；精确故障信息按硬件与驱动实际能力声明；区分应用与检查器自身访存 |
 
+### 10.7 方案出处、融合与本项目原创工作
+
+**出处：** B2主要借鉴Google/LLVM ASan 1:8 Shadow/Redzone[L01][L02]及AMD GPU ASan的compiler/device runtime联动[A01]；异构Host/Device资源分工可参照Intel Unified Runtime [I01][I03]。**原创工程适配：** 目标GPUVA→shadow映射、UMD顺序poison、SIMT报错/停止、KMD映射、目标ISA最终访存覆盖。
+
+**组件：** Compiler新增pass＋GPU设备库；KMD仅补缺失GPUVA/完成/所选终止契约；UMD新增DebugAllocator、ShadowManager、ReportDecoder；cmodel运行真实插桩代码并可另做oracle；**QEMU既有GPU ISA模型**执行同一check设备指令、增补shadow映射和Guest对象事件，不再开发GPU ISA解释器。
+
+~~~cpp
+SanVerdict check(GpuVa a, Bytes n) {
+    if (!shadow_ready_for_all_touched_granules(a,n)) return TOOL_FAILURE;
+    for (auto g : touched_granules(a,n))
+        if (!all_requested_bytes_unpoisoned(g,a,n)) return OOB;
+    return VALID;
+}
+~~~
+
+B1的sorted live-object interval查找是另一个**本项目简化原型**，借鉴LLVM插桩组织但**不声称是AMD的Shadow实现**，只能保证当前地址有效性。
+
 ## 11. 路线 C：运行时二进制插桩
 
 ### 11.1 原理和前提
@@ -1182,6 +1247,21 @@ UMD 在模块加载或 JIT 产物生成后取得目标代码，解析指令与�
 | 能检测什么 | 执行已正确重写的代码并报告所选检查错误；可对合法程序做原始／patch 后语义差分 | Q2 可覆盖 Guest 模块加载、patch、资源声明到实际执行；Q3 运行真机 C；Q1 不验证 GPU 指令重写后的真实语义 |
 | GPU 执行核心是否要改 | 产物只用现有完整支持的 ISA 时可不改；独立核对访存、mask、barrier 或异常时加观察接口 | 增加 loader／设备模型集成，保证提交的是实际 patch 代码及匹配的资源描述；QEMU 的 CPU TCG 不是目标 GPU binary rewriter |
 | 其他组件支持 | 目标解码／编码、CFG 与 relocation、stub ABI、寄存器保存、资源重算、原／新 PC map | UMD／JIT／patch cache／模块生命周期必须走实际路径；KMD／固件提供所需的正式代码加载、执行权限及错误处理契约，调试或专用patch接口仅在实现实际依赖时要求；未知编码明确拒绝或降级 |
+
+### 11.6 方案出处、融合与本项目原创工作
+
+**出处：** C借鉴NVIDIA公开Patching API的指令级callback模式[N03]及BARRACUDA的历史事件采集设计[P02]；**自研具体rewriter**（decode/encode、重定位、谓词、资源重算、PC-map/cache）不是NVIDIA未公开实现的复制品。C本身只决定如何采集检查点，实际判定还需B1/B2/D元数据。
+
+**组件：** Compiler/MC提供目标ISA编码与指令语义，KMD复用正规的代码映射/资源审计，UMD在module load/JIT patch并计算新资源；cmodel比较原代码与patch代码合法路径；**已有QEMU GPU ISA执行器**运行重写后二进制并检查predicate和barrier一致性，无需新建执行器。
+
+~~~cpp
+for (Instruction i : decode(module)) {
+    if (is_supported_global_access(i)) emit_guarded_check(i.predicate, i.width);
+    else if (might_access_memory(i)) record_partial_coverage(i.pc);
+    emit_relocated_instruction(i);
+}
+fixup_branches_registers_scratch_and_pc_maps();
+~~~
 
 ## 12. 路线 D：对象边界与时间身份传播
 
@@ -1272,6 +1352,21 @@ cuCatch 中 BST 是 **Base and Size Table**，GPUArmor 的 BST 则可以指 **Bi
 | GPU 执行核心是否要改 | 执行既有 ISA 的 metadata/check 代码可不改核心；独立 D1/D2 oracle 则要增加寄存器、内存槽、spill／reload、memcpy、atomic 等身份跟踪 | 需要把 Guest 中的对象 ID／epoch、参数 sidecar、设备分配及实际生效时序送到 Q2；QEMU 页表或分配表不能代替指针自身身份 |
 | 其他组件支持 | compiler provenance 分析／传播、device metadata runtime、UMD 描述符、跨函数／模块 ABI | KMD 管理的页映射不能单独推导 UMD 子对象或语言级 provenance；外部裸指针和不受控 writer 必须标记 unknown／覆盖缺口 |
 
+### 12.9 方案出处、融合与本项目原创工作
+
+**出处：** D1借鉴NVIDIA编译期Memcheck的base/bounds[N02][N04]及cuCatch[P01]；D2借鉴cuCatch的时间元数据和LLVM HWASan tag/L04的研究机制。**融合与自研部分：** SSA对象来源、Kernel参数sidecar、跨call/phi/select/存储的companion metadata以及atomic pointer一致发布，属于目标ABI自主设计，不宣称学术首创。
+
+**组件：** Compiler传播原对象及指针身份；KMD保留映射/队列契约但不会替UMD恢复pointer来源；UMD登记base/size/object_id/epoch；cmodel加独立身份oracle；**QEMU已有ISA执行器**执行device descriptor访问，并核对Guest sidecar→实际访存的原对象匹配。
+
+~~~cpp
+Meta expected = pointer_metadata_for_actual_operand();
+if (!expected.known) record_unknown_provenance(site);
+else if (!within(addr,width,expected.original_base,expected.original_size))
+    report_original_object_oob(site,expected.object_id,addr);
+~~~
+
+D2只有“当前对象表含generation”仍不足以分辨同GPUVA旧裸指针，必须传播指针预期身份。
+
 ## 13. 路线 E：编译插桩与运行时补充的混合方案
 
 ### 13.1 推荐的组合形态
@@ -1332,6 +1427,20 @@ UMD 依据这些字段选择原代码、已插桩代码、patch 后代码或拒�
 | GPU 执行核心是否要改 | 合法产物全部落在现有 ISA 能力内时可不改；跨模式独立 oracle 或缺失语义另改 | 接通统一对象／queue 服务、manifest、runtime ABI、代码版本与覆盖报告；不能因接入全系统就为 fallback 恢复已丢失的来源 |
 | 其他组件支持 | compiler manifest、UMD patch 选择和避免重复插桩、共享 device runtime、边界摘要 | Guest 驱动及诊断服务保留 module／dispatch／checker 标识；资源失败和拒绝加载必须可见 |
 
+### 13.6 方案出处、融合与本项目原创工作
+
+**出处：** E采用NVIDIA hybrid instrumentation的产品策略[N02][N05]，融合B2＋D1＋受控C fallback。**本项目原创工程**是Sanitizer ABI版本、module manifest、patch/compiled选择、按模块/地址空间的覆盖等级和unknown来源降级协议；不能假设不同模块混用等于同模块未插桩函数自动补全。
+
+**组件：** Compiler产出检查能力manifest；KMD复用现有代码映射/完成契约；UMD选择编译插桩或patch并共享Shadow/对象表；cmodel对跨模式边界做差分；**QEMU已有GPU ISA执行器**运行两种模块并反馈覆盖，不能作为另一个重写器。
+
+~~~cpp
+if (manifest.compiled_and_abi_compatible) load_as_is();
+else if (binary_is_patchable) load(patch_and_verify(binary));
+else { declare_partial_coverage(); reject_if_required(); }
+~~~
+
+E按共享对象表和设备检查库去重预算，不把B/C/D和QEMU解释器重计。
+
 ## 14. 路线 F：硬件辅助
 
 ### 14.1 可选硬件方向
@@ -1379,6 +1488,18 @@ UMD 依据这些字段选择原代码、已插桩代码、patch 后代码或拒�
 | 能检测什么 | 新增模型后验证 tag compare、bounds 指令、保护或 fault 的功能规则 | Q2 验证功能规则与 Guest 驱动交互；Q1 注入 fault 只验证处理；Q3 需要真实硬件已经提供相应能力 |
 | 必须修改什么 | 对缺失的新 ISA、metadata 状态、失效规则、异常／屏蔽行为修改模型；只是普通软件 helper 时应按 B/D 说明 | 修改设备模型与桥接，连接固件／KMD 的初始化、context、fault、reset；若模拟 cache，清楚声明其功能及一致性范围 |
 | 还需什么证据 | 功能模型可作为规则原型，不能替代校准后的时序模型与 RTL/DV | Q2 中 fault 正确不证明真实流水线、并发一致性、精准异常、面积或 slowdown；这些须由后续相应验证提供 |
+
+### 14.6 方案出处、融合与本项目原创工作
+
+**F并非单一厂商产品移植。** F0页保护源于GPUVM/页表和KMD映射规则[K01]；F1 Tag比较借鉴LLVM HWASan[L04]；F2对象Bounds与metadata缓存参考GPUArmor[P04]、cuCatch[P01]和NVIDIA原对象分析[N04]。这些算法均有前例；本项目的原创范围是实际GPU ISA/KMD/固件/RTL契约和一致性实现。
+
+| 子方案 | Compiler / KMD / UMD | **已有QEMU GPU ISA模型** |
+|---|---|---|
+| F0 Guard page | Compiler不必插桩；KMD/UMD安排受控页映射和fault | 验证现有MMU fault语义；若模型未实现该规则才增补 |
+| F1 Tag | Compiler传tag；UMD分配/退休；KMD/硬件提供tag存储/异常 | 增加新的tag指令或tag校验语义，**不能假定现有ISA执行器已有未来新指令** |
+| F2 Bounds/MLB | Compiler提供原对象；UMD维护descriptor；KMD、硬件/RTL实现check与一致性 | 增加bounds新ISA/metadata状态语义，进行功能而非时序验收 |
+
+S01优先B2，若没有硬件新能力不为单次4B越界改动芯片；F0的页粒度不能等同精确对象边界。
 
 ## 15. Initcheck、Racecheck 与 Synccheck 的独立设计
 
@@ -1454,6 +1575,12 @@ async copy 在**完成且满足可见性条件**时才对依赖读取构成定�
 KMD能力充分时可以复用现有接口，无需为三个checker分别增加重复ioctl。每个checker应独立开关、单独统计性能与覆盖；共用事件格式也不能把I1、R1、S1归并成一种shadow检查。硬件错误回传与Linux驱动的取消／重置语义应按实际实现核对。[K01][K02]
 
 <a id="component-estimates"></a>
+
+### 15.7 Init/Race/Sync各自来源与本项目原创边界
+
+- **I1 Initcheck：** 检查目标来自NVIDIA initcheck[N02]及Intel device MSan[I01]；本项目实现逐字节已写状态、copy/async完成更新，**不把位图误称完整值级MSan**。
+- **R1 Racecheck：** NVIDIA shared hazard检测[N02]＋BARRACUDA的HB[P02]＋HiRace层次FSM[P03]＋SuperCollider重复观测[P08]作为可选研究机制；本项目按目标ISA真实scope/barrier和调度语义自行选择、适配和验收，不把概率观察当确定性race-free。
+- **S1 Synccheck：** 借鉴NVIDIA工具的barrier/sync分类[N02]；具体参与mask、phase/token、GPU指令级容错和报告是目标ISA的自主状态机。现有QEMU GPU模型可扩充同步入口，若复用cmodel则仍需独立oracle。
 
 ## 16. 组件改动与代码量估算
 
@@ -2722,7 +2849,7 @@ QEMU与独立cmodel复用相同GPU模型时，系统接入路径得到更多验�
 | M5 生态补充 | E中binary fallback与JIT/外部库 | 4–6人 | 10–18周 | 混合边界无静默漏检 |
 | M6 硬件研究 | profile＋cmodel／时序模型＋ISA/DV方案 | 跨架构团队 | 单独排期 | 与软件基线的同口径收益 |
 
-M1 是有意缩小的原型，不能把 M1 的周期或代码量当成第16章完整 P＋B 的承诺。M3和M4部分工作可并行，但公共元数据和ABI需要稳定版本。若Q2尚未具备，先独立完成第16章的平台基础包；上表原有日历区间没有隐含包含从零建设QEMU GPU全系统平台的工期。
+M1 是有意缩小的原型，不能把 M1 的周期或代码量当成第16章完整 P＋B 的承诺。M3和M4部分工作可并行，但公共元数据和ABI需要稳定版本。本项目已有可执行目标GPU ISA的QEMU全系统平台，M1可以直接在Q2运行S01正反例；只需按缺失项补Sanitizer访存钩子、元数据和报告接口，不安排从零建设GPU ISA模型。第16章旧Q2基础成本属于条件情景，不能默认整包追加。
 
 ### 20.2 团队职责建议
 
