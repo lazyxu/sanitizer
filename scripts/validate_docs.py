@@ -4,6 +4,7 @@
 该脚本只检查仓库文本与预算索引一致性，绝不运行或声称GPU检测。
 """
 from __future__ import annotations
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -103,6 +104,21 @@ require(report.get("checks", {}).get("all_six_routes_have_compiler_KMD_UMD_and_c
         "验证报告不得继续把已撤销的六路线标记为pass")
 require("six" not in str(report.get("checks", {}).get("baseline_cost_totals", "")).lower(),
         "旧六路线估算不能充作当前产品验证")
+require("all_six_routes_have_compiler_KMD_UMD_and_cmodel_QEMU_tables" not in report.get("checks", {}),
+        "已撤销的六路线成功标记必须从验证报告移除")
+require(report.get("checks", {}).get("current_product_route_set", "").startswith("B/C/D/E/F"),
+        "验证报告必须明确当前只有B/C/D/E/F产品路线")
+require(report.get("v17_hardware_deployability_audit", {}).get("active_product_routes")
+        == ["B", "C", "D", "E", "F"],
+        "当前验证报告中的GPU产品路线应与真实硬件准入一致")
+# Git存储的是“blob <UTF8字节数>\0 + 文件字节”的SHA-1，
+# 校验验证报告引用的确实是这次构建的主报告，而不是旧版本的成功结论。
+main_bytes = main.encode("utf-8")
+git_blob = hashlib.sha1(
+    f"blob {len(main_bytes)}\0".encode("ascii") + main_bytes
+).hexdigest()
+require(report.get("github_blob_sha") == git_blob,
+        "验证报告必须指向当前主报告的Git blob SHA，不能沿用旧版本检查记录")
 
 require("| A cmodel |" not in archive and "### A：cmodel" not in archive,
         "归档架构不得仍把模型检查列为产品方案或独立章节")
