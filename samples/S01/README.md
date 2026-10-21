@@ -11,7 +11,7 @@
 | AMD ROCm GPU ASan | LLVM访存插桩＋Shadow Memory＋Redzone/Poison＋ASan运行库 | Compiler LLVM Pass与设备checker；UMD shadow与对象生命周期；KMD按缺口改 |
 | 其他GPU方案 |**GPU设备可执行**的区间表插桩、GPU MMU Guard Page、已具备的Tag/Bounds硬件| 按厂商未提供的检测保证及项目GPU硬件能力选择 |
 
-下文保留完整CUDA/HIP源码运行方式、原S01代码与数学判定，详细各组件代码和官方出处以独立指南为准。
+下文保留完整CUDA/HIP源码运行方式、原S01代码与数学判定，详细组件代码及官方出处以独立指南为准。
 
 ## 可编译设备代码与一键运行
 
@@ -36,7 +36,7 @@ python3 scripts/run_samples.py --backend rocm --case S01 --mode both --strict
 
 ### 18.1 S01：Global 对象头部与尾部越界
 
-**建议先按厂商实施路径理解本例**：详见[S01：NVIDIA运行时与编译期Memcheck、AMD GPU ASan、其余方案的逐组件实施指南](S01-vendor-implementation-guide.md)。其中各路线分别说明为何检测本例、哪里可能漏检、五组件的代码与接口、核心伪代码和官方原文；本小节保留原来的错误代码、数学判断及验收描述。
+**建议先按厂商实施路径理解本例**：详见[S01：NVIDIA运行时与编译期Memcheck、AMD GPU ASan、其余方案的逐组件实施指南](../../docs/S01-vendor-implementation-guide.md)。其中各路线分别说明为何检测本例、哪里可能漏检、五组件的代码与接口、核心伪代码和官方原文；本小节保留原来的错误代码、数学判断及验收描述。
 
 **前提与错误代码。** 受控夹具给 `a` 分配 64 B，即 16 个 `uint32_t`，首地址为 `0x1000`；前后各 16 B 是保留的不可访问区，不包含其他 live 对象。启动一个 32 线程 block，分别传入 `tail=false` 和 `tail=true`：
 
@@ -50,7 +50,7 @@ __global__ void s01(uint32_t *a, bool tail) {
 // 独立运行：s01<<<1,32>>>(a, false); s01<<<1,32>>>(a, true);
 ~~~
 
-**哪里不对、怎样检。** 合法字节区间只有`[0x1000,0x1040)`；两次4B写分别落在尾后和头前。**真实GPU B方案**在应用store前查询已poison的Redzone，或**真实GPU C方案**使用已插桩的设备区间检查；两者都需UMD发布逻辑长度并检查完整访问范围，不能仅靠已映射GPU页。D1编译期设备检查器若保留原对象bounds也能检出。模型只负责验证同一GPU检查器而不能代替它。[L02][L05]
+**哪里不对、怎样检。** 合法字节区间只有`[0x1000,0x1040)`；两次4B写分别落在尾后和头前。**真实GPU B方案**在应用store前查询已poison的Redzone，或**真实GPU C方案**使用已插桩的设备区间检查；两者都需UMD发布逻辑长度并检查完整访问范围，不能仅靠已映射GPU页。D1编译期设备检查器若保留原对象bounds也能检出。[L02][L05]
 
 **组件观测。** compiler 保留 store 的谓词、4 B 宽度和源位置；deviceRT 在执行写之前检查，不能让其他 31 个未执行线程产生报告；UMD 提供逻辑长度 64 B，而非把 allocator 的对齐补齐长度当对象长度；
 
