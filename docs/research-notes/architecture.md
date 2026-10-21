@@ -32,7 +32,7 @@
 
 ### C路线职责纠正（纯Runtime不要求修改Compiler）
 
-旧预算表按“Compiler/Device RT/UMD”交付包分组，其中C的Compiler 0–2 kLOC和Device RT 6–11 kLOC只表述历史归属，不表示生产编译器必须修改。**纯运行时路径实际Compiler源码改动=0**，目标ISA decode/encode、分支重定位、opcode语义、Patch Stub生成和资源重算均可在UMD独立Runtime Binary Rewriter中实现；已有MC库只可选复用，不能作为强制前提。预算的重新归属见[正式§16.5a](../llvm-gpu-sanitizer-research.md)和[纯runtime责任表](../estimates-v1.6.1-runtime-C.json)。
+旧预算表按“Compiler/Device RT/UMD”交付包分组，其中C的Compiler 0–2 kLOC和Device RT 6–11 kLOC只表述历史归属，不表示生产编译器必须修改。**纯运行时路径实际Compiler源码改动=0**，目标ISA decode/encode、分支重定位、opcode语义、Patch Stub生成和资源重算均可在UMD独立Runtime Binary Rewriter中实现；已有MC库只可选复用，不能作为强制前提。预算的重新归属见[正式§16.5a](../llvm-gpu-sanitizer-research.md)和[v1.8生产成本归属](../estimates-v1.8.json)。
 
 
 ### B：ASan 式 shadow 的实际移植点
