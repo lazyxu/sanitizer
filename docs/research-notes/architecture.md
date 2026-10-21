@@ -1,15 +1,15 @@
 # 自研 LLVM GPU sanitizer：架构与工程量工作笔记
 
-> **2026-10-21产品准入修正：本项目仅保留B/C/D/E/F这些检查逻辑能够在实体GPU执行或由真实硬件实施的产品候选。旧“模型内直接检测”路线已撤销；cmodel/QEMU只能用来验证真实GPU检查指令或模拟真实硬件语义，不再单独报价为产品检测器。**
+> **2026-10-21：产品候选只保留B/C/D/E/F，均须实际在实体GPU执行对应检查代码或由其硬件保护单元执行。**
 > **纯C运行时二进制插桩不要求修改生产Compiler；ISA Decoder/Encoder/重写工具由UMD独立Runtime Binary Rewriter维护，可选只读复用MC。归档中原C Compiler栏是历史交付包，不等于编译器强制修改。**
 
-> **研究过程记录，非最终规范。** 本笔记保存早期调研内容，可能包含未更新的候选结论。正式判断以[主稿](../llvm-gpu-sanitizer-research.md)为准。
+> **研究过程记录，非最终规范。** 工程建议以[主稿](../llvm-gpu-sanitizer-research.md)和[逐组件实施规格](../real-gpu-component-implementation.md)为准。
 
 > 本文件是给主文档作者的中间研究笔记；所有架构取舍与 kLOC 均为工程判断，不能表述为 LLVM、AMD、NVIDIA 或其他厂商的现成实现规模。研究日期：2026-10-20。公开 LLVM 文档是滚动版，真正实施前必须冻结自研 fork 的 commit 并逐项确认。
 
 ## 1. 范围、前提与必须保留的结论
 
-估算前提：已有能运行内核的 LLVM backend、assembler/disassembler、目标 ELF/代码对象装载、device call ABI、UMD 内存与队列管理、可修改的功能 cmodel、基本调试信息和自动化测试基础设施；sanitizer 本身从零开始。重点是 GPU 内存空间的空间与生命周期错误。数据竞争、未初始化读、同步合法性可共享事件，但其检测算法不是 ASan 的免费附带功能，须另立预算。
+估算前提：已有能运行内核的LLVM后端、assembler/disassembler、ELF/代码对象装载、Device ABI、UMD及KMD内存/队列管理、目标GPU实卡及基本自动化测试基础设施。Sanitizer尚待自研，Init/Race/Sync作为独立检查器另列工程量。
 
 可用能力应分四层，不可把它们统称为“全内存安全”：
 
@@ -18,7 +18,7 @@
 3. **对象 bounds**：这次访问是否仍在产生此指针的原对象允许范围内；跳到另一个 live object 也可被判错。
 4. **temporal provenance**：指针所携带的 allocation identity/epoch 是否仍匹配其原对象；必须能识别同地址复用。
 
-纯地址表、shadow 与 cmodel 的物理访问可见性都不会自动产生第 3/4 层。一个内存事务访问了合法页，并不证明它没有跨越 C/C++ 数组、slab 子分配或 stack object 的边界。子对象边界又比 allocation bounds 更严格，须有前端或显式 API 提供语义，不能从地址反推。
+纯地址表或Shadow仅回答地址当前是否有效，不能自动产生原对象Bounds及完整时间身份。一个内存事务访问了合法页，并不证明它没有跨越 C/C++ 数组、slab 子分配或 stack object 的边界。子对象边界又比 allocation bounds 更严格，须有前端或显式 API 提供语义，不能从地址反推。
 
 ## 2. 真实GPU可部署的五类方案：组件修改面
 
@@ -27,14 +27,13 @@
 | B LLVM ASan 式 shadow | IR 内存访问插桩、target address-space/mask lowering、device shadow 查询、UMD poison/unpoison 与 redzone/quarantine | 基于 addressability；不保证任意跨对象跳跃或地址复用后的旧指针；共享/私有空间不能照搬 global 线性映射 | 有源码的日常测试主线、较低 ABI 改动 |
 | C runtime binary patching | 模块装载时 decode、插入 check、寄存器/谓词保存、代码重定位与 PC 映射；独立 code cache；host patch policy | 可覆盖无源码二进制的已支持 ISA 访存，但没法恢复被丢失的 source object 与 pointer provenance；不能把“不认识的 opcode”视为已覆盖 | 第三方库、JIT 产物、无法重编译模块的补洞 |
 | D object bounds + temporal provenance | 指针 identity/epoch 与 bounds 的编译器传播；pointer shadow 或变更指针表示；跨 call/memory/atomic/ABI 的一致性 | 支持链路内可以识别跨 live object 与复用后旧指针；整数伪造、外部 ABI、未知布局必须有严格语义或公开降级 | 精度需求高、可控制编译闭包的模块 |
-| E hybrid | 本预算定义为 B 主线 + D 受控模块 + C 有限 fallback，公共生命周期、报告与 coverage manifest；cmodel 做对应语义验证 | 每条访问必须标明当前保证等级；C fallback 不获得 D 的身份能力；不允许模式切换时静默“重新赋予当前对象身份” | 可持续产品路线，逐步把高价值链路升级为 D |
-| F hardware assisted | 若 ISA 已有 tag/bounds 支持：编译器 emit、allocator/tag lifecycle、UMD context、异常上报、cmodel 模型；若没有则另有硬件项目 | 随机小 tag 存在碰撞；capability/descriptor 精度由 ISA 决定；raw/untagged/DMA 路径仍可能绕过 | 下一代架构协同或已有硬件能力的使能 |
+| E hybrid | 本预算定义为 B 主线 + D 受控模块 + C 有限 fallback，公共生命周期、报告与 coverage manifest | 每条访问必须标明当前保证等级；C fallback 不获得 D 的身份能力；不允许模式切换时静默“重新赋予当前对象身份” | 可持续产品路线，逐步把高价值链路升级为 D |
+| F hardware assisted | 若 ISA 已有 tag/bounds 支持：编译器 emit、allocator/tag lifecycle、UMD context、异常上报；若没有则另有硬件项目 | 随机小 tag 存在碰撞；capability/descriptor 精度由 ISA 决定；raw/untagged/DMA 路径仍可能绕过 | 下一代架构协同或已有硬件能力的使能 |
 
 ### C路线职责纠正（纯Runtime不要求修改Compiler）
 
-旧预算表按“Compiler/Device RT/UMD”交付包分组，其中C的Compiler 0–2 kLOC和Device RT 6–11 kLOC只表述历史归属，不表示生产编译器必须修改。**纯运行时路径实际Compiler源码改动=0**，目标ISA decode/encode、分支重定位、opcode语义、Patch Stub生成和资源重算均可在UMD独立Runtime Binary Rewriter中实现；已有MC库只可选复用，不能作为强制前提。预算的重新归属见[正式§16.5a](../llvm-gpu-sanitizer-research.md)和[纯runtime责任表](../estimates-v1.6.1-runtime-C.json)。
+旧预算表按“Compiler/Device RT/UMD”交付包分组，其中C的Compiler 0–2 kLOC和Device RT 6–11 kLOC只表述历史归属，不表示生产编译器必须修改。**纯运行时路径实际Compiler源码改动=0**，目标ISA decode/encode、分支重定位、opcode语义、Patch Stub生成和资源重算均可在UMD独立Runtime Binary Rewriter中实现；已有MC库只可选复用，不能作为强制前提。预算的重新归属见[当前生产组件预算](../estimates-v1.7.json)。
 
-**模型辅助测试边界：** cmodel已有GPU ISA执行能力可验证B/C/D/E设备检查指令，但模型独立的指令访存观察/安全判断不会运行在真机。有关模拟器事件tap的历史文字已撤下；调试人员如需检查模型正确性可按[正式§9](../llvm-gpu-sanitizer-research.md#hardware-deployment-gate)使用参考oracle，不能将它列为产品候选。
 
 ### B：ASan 式 shadow 的实际移植点
 
@@ -98,7 +97,7 @@ HWASan 设计文档讨论 tag granule、short granules 及随机碰撞。t 位�
 
 没有普适的“唯一正确 pass 时点”。建议内存检查靠近完成常规优化之后、关键 target lowering 之前；D 的身份传播则需要更早与优化交互。用 target late audit 判定每条最终 memory instruction 来自已验证源访问、sanitizer 自身可信访问、编译器管理 backing-storage，还是未覆盖。对新增 spill 的 backing range 检查有价值，但不等价于恢复所有 source stack object redzone。
 
-内部 metadata/report/shadow 访问须标记并排除递归插桩；其边界也需用独立单元测试和 cmodel 验证。不能将任意带 `nosanitize` 标记的未知用户访问当成已检测。
+内部 metadata/report/shadow 访问须标记并排除递归插桩；其边界也需用独立单元测试和实际GPU样例检验。不能将任意带 `nosanitize` 标记的未知用户访问当成已检测。
 
 加入检查会改变函数 memory effects、speculation 与 alias 假设，必须重算或失效相关分析属性。新加控制流不得破坏 convergence token/target reconvergence 约束。仅标 `convergent` 并不提供内存 fence 或 control barrier，LLVM 官方语义明确区分它们，见 R7。
 
@@ -222,75 +221,19 @@ load(old)  // 地址表看到 X 属于fresh，无法知道操作数来自old
 
 B–E 的成本基线假定现有公开 UMD/KMD 接口已满足缓冲区与可靠失败协议，因此不把 KMD/FW 强制写成必改。F 的软件预算是假定所需硬件能力已经存在；缺失能力必须单独过 architecture/RTL/DV gate、另估人月和硅片时间。
 
-## 10. 工程量：公共底座 P + 路线增量
+## 10. 工程量：真实GPU生产软件估算
 
-单位为 **手写、去重 kLOC（千行）**。核心统计新增及实质修改代码，排除注释/空行/生成文件/第三方依赖搬运；测试统计手写 test/harness/fixture generator，不按生成测试用例展开。范围是可内测、具有明确支持矩阵的工程版本，不是极简 PoC，也不是覆盖多代 ISA/所有语言 ABI 的商业成熟产品。区间不是测量结果，项目首次完成 vertical slice 后应重估。核心与测试不互相混算。
+完整现行预算见[生产组件预算](../estimates-v1.7.json)及[主稿§16](../llvm-gpu-sanitizer-research.md#component-estimates)，以下均为设计估算而非实测。
 
-### 10.1 公共底座 P（仅计一次）
+| 生产路线 | 包含公共P的核心kLOC | 手写测试kLOC | 前提 |
+|---|---:|---:|---|
+| B | 25–48 | 21–39 | LLVM GPU插桩、Shadow及UMD真实资源协议 |
+| C | 31–60 | 27–51 | **纯运行时生产Compiler修改0**，设备Patch及ISA工具由UMD交付 |
+| D | 46–89 | 39–74 | D1 Bounds及受控D2身份传播边界明确 |
+| E | 69–132 | 59–113 | 已按共享B/D/C增量去重 |
+| F | 23–46 | 22–42 | 对应实体GPU MMU/Tag/Bounds硬件能力已存在 |
 
-统一 allocation/suballocation lifecycle schema、报告与 context ABI、UMD 事件发布骨架、基础 cmodel adapter、host symbolizer/coverage manifest、共享测试 harness。
-
-| 组件 | 核心 kLOC | 手写测试 kLOC |
-|---|---:|---:|
-| Compiler | 1–2 | 1–2 |
-| Device runtime | 1–2 | 1–2 |
-| Host runtime + UMD | 4–7 | 3–5 |
-| cmodel | 1–2 | 1–2 |
-| Tooling/reporting | 2–4 | 2–3 |
-| **P 总计** | **9–17** | **8–14** |
-
-### 10.2 每路线相对于 P 的核心增量
-
-| 路线 | Compiler | Device RT | Host RT + UMD | cmodel | Tooling | Δ核心合计 |
-|---|---:|---:|---:|---:|---:|---:|
-| B | 7–13 | 5–9 | 4–8 | 1–3 | 1–3 | **18–36** |
-| C | 0–2 | 6–11 | 14–26 | 2–5 | 3–6 | **25–50** |
-| D | 18–34 | 10–20 | 7–14 | 3–7 | 3–6 | **41–81** |
-| E（已去重，见下一节） | 23–44 | 17–32 | 16–31 | 6–12 | 5–10 | **67–129** |
-| F（已有所需硬件） | 5–10 | 4–8 | 4–8 | 6–12 | 2–5 | **21–43** |
-
-### 10.3 每路线相对于 P 的手写测试增量
-
-| 路线 | Compiler | Device RT | Host RT + UMD | cmodel | Tooling | Δ测试合计 |
-|---|---:|---:|---:|---:|---:|---:|
-| B | 6–11 | 4–7 | 3–6 | 1–3 | 1–3 | **15–30** |
-| C | 0–2 | 5–9 | 12–23 | 2–5 | 3–5 | **22–44** |
-| D | 15–29 | 8–16 | 6–12 | 3–7 | 3–5 | **35–69** |
-| E（已去重） | 19–36 | 14–27 | 14–28 | 6–12 | 5–10 | **58–113** |
-| F（已有所需硬件） | 5–10 | 4–8 | 4–8 | 6–12 | 2–4 | **21–42** |
-
-### 10.4 从已有 GPU 栈、sanitizer 从零的总计
-
-| 方案 | 计算式 | 核心 kLOC | 手写测试 kLOC |
-|---|---|---:|---:|
-| B | P + ΔB | **27–53** | **23–44** |
-| C | P + ΔC | **34–67** | **30–58** |
-| D | P + ΔD | **50–98** | **43–83** |
-| E | P + 已去重的组合增量 | **76–146** | **66–127** |
-| F | P + ΔF，软件使能部分 | **30–60** | **29–56** |
-
-这些是替代/组合路线的预算，不可相加得到项目总量。P只算一次；E已经包含它需要的B、D与C工作，不得再加B/C/D总量。
-
-### 10.5 E 的可算术复核拆分
-
-E = P + 完整B增量 + B基础上D的独有部分 + C fallback子集 + 跨模式integration。D的共享地址检查、shadow lookup框架、allocator/reporting接口不重复计；C仅支持选定访存opcode及已知代码对象格式，不含完整C兼容面。D精准能力限于metadata传播闭合的模块与接口，C fallback仍是addressability级。
-
-| E项 | Compiler核心/测试 | Device RT核心/测试 | Host+UMD核心/测试 | cmodel核心/测试 | Tooling核心/测试 | 核心合计 | 测试合计 |
-|---|---|---|---|---|---|---:|---:|
-| B完整增量 | 7–13 / 6–11 | 5–9 / 4–7 | 4–8 / 3–6 | 1–3 / 1–3 | 1–3 / 1–3 | 18–36 | 15–30 |
-| D独有新增 | 14–26 / 11–20 | 8–15 / 6–12 | 4–8 / 4–8 | 2–4 / 2–4 | 1–2 / 1–2 | 29–55 | 24–46 |
-| C fallback子集 | 0–1 / 0–1 | 2–4 / 2–4 | 6–11 / 5–10 | 1–2 / 1–2 | 1–2 / 1–2 | 10–20 | 9–19 |
-| 跨模式integration | 2–4 / 2–4 | 2–4 / 2–4 | 2–4 / 2–4 | 2–3 / 2–3 | 2–3 / 2–3 | 10–18 | 10–18 |
-| **E增量合计** | **23–44 / 19–36** | **17–32 / 14–27** | **16–31 / 14–28** | **6–12 / 6–12** | **5–10 / 5–10** | **67–129** | **58–113** |
-
-### 10.6 估算敏感项与单列项目
-
-- B 最敏感于 shadow VA/驻留、stack/private/shared、target memory intrinsics、pass后新增访问；受控 global-only PoC远小于此工程区间。
-- C 最敏感于ISA可变编码、寄存器/谓词保存、重定位、间接目标、多种code object及JIT同步。
-- D 最大项是端到端身份传播和atomic/外部ABI；若要求所有C/C++整数别名与外部二进制仍精准，这个有限支持矩阵估计不成立。
-- E 需要额外接口契约与模式验证，复用不是零集成成本。
-- F 要单列ISA规格、RTL、微架构性能、DV与异常精度、DMA覆盖、FW/KMD启用工作。不存在硬件时，不能使用“软件30–60kLOC”作为总项目报价。
-- FW/KMD缺失可靠dispatch abort或稀疏metadata mapping时，对B–E也构成单列gate。本笔记不提供伪精确的软件LOC替代硬件/驱动项目量。
+公共P只计一次。KMD已满足真实GPUVA、完成、fault、abort和代码映射时新增源码可以为0；缺失接口单独计算K-M/K-E/K-A/K-X/K-F条件包。不存在的芯片Tag/Bounds硬件必须另立ISA/RTL/DV/固件项目，不属于软件预算。
 
 ## 11. 必须进入验收套件的反例
 
@@ -310,7 +253,7 @@ E = P + 完整B增量 + B基础上D的独有部分 + C fallback子集 + 跨模�
 | inline asm/未知opcode/外部ABI无metadata | coverage manifest必须显示未覆盖/降级，严格模式按策略拒绝 |
 | binary relocation导致长跳、间接call、原PC归因 | patch后程序有效输入结果保持一致，报告指回原模块 |
 
-测试层次：IR lit/FileCheck验证结构与属性但不能替代语义；MIR/MC验证最终指令与状态保存；host runtime生命周期状态机与故障注入；cmodel逐事件oracle；硬件正负例与性能/occupancy/显存变化。不同支持层级用同一失败类别和期望范围，允许优化后的site合并，不用机械比较所有trace顺序。
+测试层次：IR lit/FileCheck验证结构与属性但不能替代语义；MIR/MC验证最终指令与状态保存；host runtime生命周期状态机与故障注入；目标真实GPU设备执行；硬件正负例与性能/occupancy/显存变化。不同支持层级用同一失败类别和期望范围，允许优化后的site合并，不用机械比较所有trace顺序。
 
 ## 12. 原始来源
 
