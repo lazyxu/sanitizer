@@ -18,7 +18,7 @@ python3 scripts/run_samples.py --backend rocm --case S28 --mode both --strict
 **预期含义：** `detect` 是厂商官方能力下的期望，不是本项目已检出；`conditional` 需要GPU架构/ISA/执行时序支持；`unsupported` 表示当前选定工具不能保证；`api` 是GPU API错误但不构成GPU kernel内部sanitizer命中；`clean` 是用于排除误报的合法操作。
 
 
-**当前实验子范围限制：** 目前只模拟大量GPU访问违规，尚未注入Sanitizer内部metadata OOM与日志缓冲耗尽。
+**当前实验子范围限制：** 当前仅提供大量GPU违规访问的测试源码；尚未实卡执行，也没有注入Sanitizer内部metadata OOM与日志缓冲耗尽。
 
 ## 真实场景、错误原因、可检测算法、修复对照及实现要求
 

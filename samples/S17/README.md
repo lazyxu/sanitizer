@@ -41,7 +41,7 @@ while (!__mbarrier_test_wait(&b, t1)) {}
 __mbarrier_test_wait(&b, t0);             // BAD②：token早于立即前一phase
 ~~~
 
-**实现路线与观测点。** A在同步指令执行处维护barrier身份、期望计数、live参与者、到达集合和完整phase；同时建等待依赖，区分循环等待证据与单纯超时。E由Compiler/C记录初始化、arrive/wait/drop、mask和退出事件，Device runtime维护同步状态，UMD提供block维度；F若能导出硬件barrier状态，可补充缺失参与证据，但仍需软件归因。
+**实现路线与观测点。** 真实GPU Synccheck在同步指令执行处维护barrier身份、期望计数、live参与者、到达集合和完整phase；同时建等待依赖，区分循环等待证据与单纯超时。E由Compiler/C记录初始化、arrive/wait/drop、mask和退出事件，Device runtime维护同步状态，UMD提供block维度；F若能导出硬件barrier状态，可补充缺失参与证据，但仍需软件归因。
 
 **修复、报告与边界。** 用例①把完整block barrier移到全员必经位置，或采用语义匹配的子组同步；用例②只使用当前或立即前一phase的有效token。报告barrier PC/ID、期望／实际参与集合、等待链或token/current phase。[N08] 不将普通barrier之前的任意return一概判错，退出线程必须按目标规范处理。NVIDIA当前synccheck的错误类、架构适用范围和barrier跟踪容量只是产品对照；自研“完整参与集合及phase验证”是目标能力。仅超时或缺失退出观测时，结论必须保留为疑似阻塞／覆盖不足。[N02]
 

@@ -1,5 +1,5 @@
 {
-  "version": "1.8",
+  "version": "1.9",
   "as_of": "2026-10-21",
   "scope": "repository document and structural evidence only",
   "status": "DOCUMENT_REVIEW; PHYSICAL_GPU_NOT_RUN",
@@ -7,7 +7,7 @@
   "physical_gpu_checker_result": "GPU_NOT_RUN",
   "real_gpu_performance": "NOT_MEASURED",
   "document": "docs/llvm-gpu-sanitizer-research.md",
-  "main_document_blob_sha": "cd8fcce3b6ffd8cbf7e5f7a2e39cc4ccf559d4f1",
+  "main_document_blob_sha": "9fb6f1254e2662d863642907b86763cb6bc7ff8a",
   "main_line_count": 2973,
   "chapter_count": 23,
   "scenarios_count": 28,
@@ -148,7 +148,18 @@
   "KMD_increment_condition": "only proven missing production contracts",
   "C_runtime_compiler_source_changes_possible": 0,
   "F_hardware_caveat": "actual GPU silicon must implement feature, otherwise unsupported",
-  "CI_results": "NOT_RUN_THIS_REPORT",
+  "CI_results": "PENDING_BRANCH_STATIC_CI",
   "claimed_real_gpu_detection": false,
-  "report_meaning": "structural validation evidence, not running code on any target GPU"
+  "report_meaning": "structural validation evidence, not running code on any target GPU",
+  "legacy_text_cleanup": {
+    "status": "SCHEME_A_AND_MODEL_SUPPORT_DESCRIPTIONS_REMOVED",
+    "scope": "main research, affected samples, implementation comparisons",
+    "static_semantic_regression": "scripts/validate_docs.py"
+  },
+  "amd_hardware_fallback": {
+    "document": "docs/amd-gpu-asan-hardware-fallback.md",
+    "status": "DESIGN_ONLY",
+    "hardware_requirements": "official ROCm XNACK/HMM distinct from self-hosted GPU-resident Shadow/Bounds",
+    "implementation_status": "NOT_IMPLEMENTED_OR_INSPECTED"
+  }
 }

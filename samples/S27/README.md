@@ -40,7 +40,7 @@ cudaGraphLaunch(exec, s);                 // BAD：replay 2仍访问旧p
 cudaStreamSynchronize(s);
 ~~~
 
-**实现路线与观测点。** A记录capture节点、每次执行实例、对象创建/释放和节点实际访存；模型若只有VA表也会漏同VA复用，因此必须保留被捕获参数的原身份。E＋D2由runtime为节点参数建立identity sidecar，replay生成新的execution/launch ID，Compiler传播对象ID/epoch至使用点；不能在每次launch按当前VA表重新“认领”新对象。C可补充设备访问，但裸地址补丁无法自行恢复丢失来源。[N03]
+**实现路线与观测点。** UMD记录capture节点、每次执行实例及对象创建/释放，GPU设备检查器记录每次实际访存；仅依赖当前VA表也会漏同VA复用，因此必须保留被捕获参数的原身份。E＋D2由runtime为节点参数建立identity sidecar，replay生成新的execution/launch ID，Compiler传播对象ID/epoch至使用点；不能在每次launch按当前VA表重新“认领”新对象。C可补充设备访问，但裸地址补丁无法自行恢复丢失来源。[N03]
 
 **修复、报告与边界。** 让p存活至所有replay完成，或在受支持更新入口同时替换节点指针和身份。连续合法replay应具有不同执行ID、相同仍live对象epoch；graph内alloc/free节点每次建立新的分配生存期时，才生成相应新allocation epoch，不能机械地按replay全量换epoch。[N08] 报告graph/exec/replay/node ID、旧对象与free位置、若复用则给当前对象身份。B在地址仍poison时可报UAF，复用unpoison后可能漏；未跟踪节点参数更新、间接指针或device-side graph launch时须降级，不能假定每个设备发起replay都有Host回调。[N03]
 

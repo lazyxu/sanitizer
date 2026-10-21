@@ -2,13 +2,13 @@
 
 ## 当前结论
 
-**v1.8文档和工程伪代码已整理；目标自研GPU软件实现与真实芯片验收仍未完成。** 已明确五条实际可部署的B/C/D/E/F方案、三生产软件责任包、GPU Device Runtime实际执行位置，以及需要另行交付的Firmware/RTL条件。
+**v1.9旧方案文字清理和AMD缺硬件替代指南已提交；v1.8工程伪代码已整理；目标自研GPU软件实现与真实芯片验收仍未完成。** 已明确五条实际可部署的B/C/D/E/F方案、三生产软件责任包、GPU Device Runtime实际执行位置，以及需要另行交付的Firmware/RTL条件。
 
 | 事项 | 当前状态 | 证据/后续任务 |
 |---|---|---|
 | B～F产品准入定义 | 文档已完成 | [研究主稿](llvm-gpu-sanitizer-research.md)第9章 |
 | 逐组件修改位置与关键伪代码 | 文档已完成 | [实现指南](real-gpu-components-implementation.md)覆盖Compiler、Device Runtime、UMD、KMD、Firmware、RTL和CI |
-| S01 NVIDIA/AMD/自研差异比较 | 已更新 | [S01指南](S01-vendor-implementation-guide.md)，全程要求真实GPU执行 |
+| S01 NVIDIA/AMD/自研差异比较 | 已更新 | [S01指南](S01-vendor-implementation-guide.md)与[AMD硬件依赖及替代实现指南](amd-gpu-asan-hardware-fallback.md)，明确XNACK/HMM与自研设备Shadow的不同前提 |
 | 28组S01～S28错误与合法对照 | 已有源码和README | 实际厂商GPU编译/检出结果须运行后再更新 |
 | B/C/D/E/F生产软件预算 | 已重算 | [v1.8预算](estimates-v1.8.json)；未测量目标GPU源码 |
 | LLVM真实设备Sanitizer Pass与设备库 | **未实施** | 首先产生目标ISA检查指令和支持清单 |
@@ -17,6 +17,12 @@
 | 实体GPU S01正反例与性能基线 | **GPU_NOT_RUN** | 实卡核对设备PC、线程、地址、报告、终止与性能 |
 | Firmware/RTL新能力 | **按目标硬件条件决定** | F0真实MMU现状；F1/F2缺少硅片功能则UNSUPPORTED |
 | GitHub GPU CI | 工作流/样例入口已有 | 未有目标GPU实卡结果；其他厂商Runner须实际配置 |
+
+## 本次补充
+
+- 清理主研究和S01～S28已废弃的检查实现描述，仅保留真正GPU检查器及Host/驱动职责；对象A/B案例保留。
+- AMD当前官方GPU ASan所需XNACK/HMM与自研GPU通过显式设备Shadow/区间表和软件Bounds替代之间的适用边界，见[逐组件及缺硬件替代指南](amd-gpu-asan-hardware-fallback.md)。
+- 静态CI增加语义防回归；仍不包含目标自研GPU产品代码或实卡运行记录。
 
 ## 下一实施顺序
 

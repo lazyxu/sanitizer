@@ -6,7 +6,7 @@
 
 **1.6.1 重要澄清：NVIDIA-R类纯运行时二进制插桩不需要修改生产Compiler或重编译应用；目标ISA解码／重新编码工具由UMD侧独立Runtime Binary Rewriter实现，可选复用既有MC库。此前把编译器和工具链复用混为一谈，现已纠正。**
 
-**v1.8 说明：** 只保留B/C/D/E/F五条真实GPU可部署候选，另附[逐组件关键修改代码与表格](real-gpu-components-implementation.md)；S01厂商比较、28组双平台样例及实卡CI继续保留，目标自研GPU尚未完成真实硬件验收。
+**v1.9 更新：** 已增加AMD逐组件硬件依赖及无专用功能时的可部署软件替代指南，并对主稿、S01～S28的废弃实现描述加严CI审计。**v1.8 说明：** 只保留B/C/D/E/F五条真实GPU可部署候选，另附[逐组件关键修改代码与表格](real-gpu-components-implementation.md)；S01厂商比较、28组CUDA/HIP两平台样例及实卡CI继续保留，目标自研GPU尚未完成真实硬件验收。
 
 本文回答：在自研 GPU、LLVM 后端、KMD（Kernel-Mode Driver，内核态驱动）、UMD（User-Mode Driver，用户态驱动）及验证环境的边界下，怎样建设可用于真机调试的 sanitizer；不同路线能检测什么、需要修改哪些组件、投入多少、如何验证，以及什么情况下值得进一步投入二进制插桩或硬件支持。
 
@@ -107,7 +107,7 @@
 
 **建设动因与问题边界。** 自研 GPU 的调试需要回答：某次访问是否违反对象边界、生命周期或同步约定；违规发生在哪个 kernel、指令和线程；相关资源由谁创建、释放和传入。仅验证 kernel 能编译、执行并给出预期数值，无法同时回答这些问题。**【工程建议】** 应把 sanitizer 建设为贯通编译器及设备检查库、KMD、UMD及诊断工具的动态检查能力，使应用与基础软件团队可以围绕同一份证据定位问题。
 
-**【官方事实】** NVIDIA 将内存访问、初始化、竞争和同步检查分为不同工具，且区分能够归因到指令及线程的精确访问错误与归因能力有限的硬件异常。[N02] **【工程建议】** 本项目应沿用这种能力拆分，避免用一个“支持 sanitizer”的标签掩盖不同保证。下述风险属于立项需要验证的场景，不表示用户平台已经存在相应缺陷；实际 ISA、执行模型、故障精度和工作负载仍待确认。
+**【官方事实】** NVIDIA 将内存访问、初始化、竞争和同步检查分为不同工具，且区分能够归因到指令及线程的精确访问错误与归因能力有限的硬件异常。[N02] **【工程建议】** 本项目应沿用这种能力拆分，避免用一个“支持 sanitizer”的标签掩盖不同保证。下述风险属于立项需要验证的场景，不表示用户平台已经存在相应缺陷；实际 ISA、GPU执行语义、故障精度和工作负载仍待确认。
 
 **为何偶发输出错误或延迟 fault 不足以定位根因。** 设 kernel A 的一次错误写入破坏了随后被 kernel B 使用的索引：可见症状可能是 B 的错误结果，也可能是 B 再次访存时的 fault。若 Host 在后续同步点才收到异常，报错 API 也未必对应最初的错误写入。这是需要用事件关联解决的工程场景，不能据此预设本平台的异常传递机制。反之，错误地址若仍处于已映射内存，甚至落入另一个存活分配，程序可能继续运行；NVIDIA 手册明确说明相邻分配之间的越界可能逃过基础地址检查。[N02] 因此，诊断应尽量在违规操作处留下证据，并关联后续症状；“最早被观察到的错误”仍不等于已证明是唯一根因。
 
@@ -158,7 +158,7 @@
 | M5 | 分别覆盖未复用窗口 UAF 与地址复用后旧指针 | B 路线声明 poison 窗口；D2 在身份传播闭合范围区分同地址新旧指针 |
 | M6 | 检查 invalid free、double free 与约定观察点的泄漏 | 正确识别 allocator、所有权和对象状态，不误报仍被合法持有的资源 |
 | I1 | 按已支持空间追踪内存初始化 | 部分写、copy／memset／异步完成的正反例通过；不宣称值级 MSan |
-| R1 | 在声明的内存与同步模型内识别冲突访问 | 无序冲突被报告，合法同步对照通过；概率方案另报重复试验结果 |
+| R1 | 在明确声明支持的GPU内存与同步语义内识别冲突访问 | 无序冲突被报告，合法同步对照通过；概率方案另报重复试验结果 |
 | S1 | 检查参与 mask、到达集合、phase 与作用域 | 非法同步被诊断；合法子组与目标允许的退出方式通过 |
 | A1 | 检查 API、资源身份与异步依赖关系 | 同队列和跨队列生命周期正反例通过；Host 提交顺序不替代设备依赖 |
 
@@ -180,7 +180,7 @@
 
 **非目标与完成标准。** 首版不承诺任意第三方 ABI 的完整时间安全、全值级 MSan、通用跨 CPU/GPU TSan、所有输入与调度的安全证明，也不承担恶意 kernel 隔离、芯片全面正确性验证或生产环境近零开销承诺。每项限制应出现在支持矩阵和用户报告中。
 
-按第19章验收：声明支持且确实触发的确定性错误集应全部出现预期诊断；合法反例集无已知误报；unsupported、超时及工具失败单列；概率检测另设统计口径。每类场景应具备“错误实例—合法对照—触发条件—预期证据—适用路线—漏检边界”，并由独立 oracle 与真机证据逐步确认。研发阶段的交付物包括版本化协议、实现与测试、命令和输入 hash、原始性能数据、安装／CI 指南及已知限制；完成一个最小演示不能替代这些证据。
+按第19章验收：声明支持且确实触发的确定性错误集应全部出现预期诊断；合法反例集无已知误报；unsupported、超时及工具失败单列；概率检测另设统计口径。每类场景应具备“错误实例—合法对照—触发条件—预期证据—适用路线—漏检边界”，并由确定性测试预期与真机原始报告逐步核对。研发阶段的交付物包括版本化协议、实现与测试、命令和输入 hash、原始性能数据、安装／CI 指南及已知限制；完成一个最小演示不能替代这些证据。
 
 ### 2.3 本报告采用的项目假设
 
@@ -308,6 +308,8 @@
 NVIDIA release notes 同时公开混合插桩、HMM、共享变量间越界、特殊指令及资源变化的限制。特别是 **不同 compilation unit 混合可行，不代表同一 module 中未插桩函数会被自动补齐**。我们的 module manifest 必须以支持的检查点为单位输出覆盖，不允许“无报错＝完全通过”。[N05]
 
 ### 4.2 AMD ROCm GPU AddressSanitizer：LLVM IR 检查＋Shadow／Redzone＋异构 Runtime
+
+**逐组件实施与缺硬件替代：** 参见[AMD GPU ASan硬件依赖与软件后备方案](amd-gpu-asan-hardware-fallback.md)，将AMD官方XNACK/HMM支持条件与自研GPU可采用的预映射设备Shadow、B1区间检查、D1/D2显式身份软件实现严格区分。
 
 **官方实现形态**与B路线最接近。 [AMD Using the AddressSanitizer on a GPU](https://rocm.docs.amd.com/projects/llvm-project/en/docs-7.2.4/conceptual/using-gpu-sanitizer.html) 描述编译侧插桩、compiler-rt/ASan库改造和运行时元数据；其原文有：
 
@@ -749,7 +751,7 @@ struct ObjectDesc {
 | free request／free begin／retire complete | runtime／UMD | 对象身份、命令位置、生效边界、完成证据 | quarantine、时间检查、元数据回收 |
 | map／unmap／import／alias | UMD逻辑登记＋KMD资源映射契约 | 规范对象、BO/映射身份、权限、device/context | 地址解析与peer检查 |
 | job submit／complete／fault | UMD命令关联＋KMD/设备完成源 | job/queue ID、依赖、完成状态、原始fault信息 | 生命周期、错误归因、资源回收 |
-| abort／reset／context destroy | KMD及设备/固件；UMD消费 | 终止范围、完成/失败状态、受影响任务 | 错误协议、模型与真机对照 |
+| abort／reset／context destroy | KMD及设备/固件；UMD消费 | 终止范围、完成/失败状态、受影响任务 | 真实GPU报告写入、设备完成与受控终止 |
 | copy／memset submit／complete | runtime／copy engine 接口 | 源目标范围、顺序、定义性 | init、生命周期 |
 | barrier／fence／atomic | 插桩 | scope、ordering、参与集合、phase | race／sync 分析 |
 | module load／unload／JIT | loader | build ID、ABI、覆盖位图、code map | 混合模式与符号化 |
@@ -826,7 +828,7 @@ stateDiagram-v2
 | KMD | 提交、完成与故障接口 | 作业提交结果、依赖和完成证据；按平台能力与固件／硬件协作处理fault、abort、reset及context状态，并回传错误 | 完成fence不等于每条GPU访存轨迹；存在reset不等于存在细粒度dispatch abort或可恢复lane异常 |
 | UMD | Host runtime／API拦截／allocator适配 | 记录应用分配和子分配的语义、生存期、调用点、graph及queue依赖；关联成功／失败结果并去重 | 用户API返回、提交成功和设备完成是不同事件；底层驱动不知道的池内分配须由allocator提供 |
 | UMD | 用户态驱动／loader／JIT／patch管理 | 准备shadow与descriptor等资源，排入正确依赖；管理模块manifest、参数sidecar、代码patch、资源声明与缓存；调用KMD契约 | API拦截本身不能观察kernel内部每次访存；当前GPUVA反查不能恢复历史指针身份 |
-| UMD | 报告、符号化与CLI | 汇合编译器的PC／源码map、device检查记录、对象／队列语义及KMD故障；显示覆盖、资源失败和执行终态 | 空日志、未发生GPU fault、模型测试通过均不能单独等同于检查通过 |
+| UMD | 报告、符号化与CLI | 汇合编译器的PC／源码map、device检查记录、对象／队列语义及KMD故障；显示覆盖、资源失败和执行终态 | 空日志、未发生GPU fault或CPU静态通过均不能单独等同于检查通过 |
 
 **官方依据及适用边界。** DRM GPUVM文档把GPUVA映射与其backing GEM对象联系起来；GEM本身不理解缓冲内容，设备特定操作仍需驱动接口。[K01] DRM的reset约定由KMD判断和执行复位、上送fence／context错误，UMD检查提交结果并向应用报告。[K02] 据此，本报告把底层映射和故障契约归KMD，把应用对象语义及诊断归用户态；这是对自研架构的设计建议，不要求采用DRM类名或相同ioctl。
 
@@ -842,11 +844,11 @@ stateDiagram-v2
 | 事件／信息 | 语义生产方 | 可确认结果的来源与边界 | 主要消费方 |
 |---|---|---|---|
 | 应用allocation、池内suballocation、view创建 | 对应Host allocator／框架接口；设备allocator由device检查库接入 | 该allocator的成功结果和对象生命周期；KMD仅补充其backing BO／映射关系，通常看不到未上报的池内切分 | UMD对象服务、编译器device检查库 |
-| BO创建及GPUVA map／unmap／权限变更 | UMD发起请求；KMD实施相应特权操作 | KMD／设备定义的生效与失败结果；异步接口须保留关联完成或依赖证据，不能把请求字段当已生效状态 | UMD映射表、shadow布局、fault归因、模型输入适配 |
+| BO创建及GPUVA map／unmap／权限变更 | UMD发起请求；KMD实施相应特权操作 | KMD／设备定义的生效与失败结果；异步接口须保留关联完成或依赖证据，不能把请求字段当已生效状态 | UMD映射表、shadow布局和真实设备fault归因 |
 | free请求、应用对象失效、底层资源退休 | allocator定义应用生存期；UMD把相关动作接入命令顺序 | 失效点按API／执行侧协议确定；KMD完成证据可证明相关作业／映射操作退休，却不能自动给出池内对象free的精确开始时刻 | poison／unpoison、D2身份退休、quarantine与元数据回收 |
 | launch／graph节点／提交与完成 | UMD提供应用launch和每次graph执行实例；KMD处理底层提交 | 接受／拒绝取自KMD，硬件执行完成由其回传；应用launch与底层作业可为一对多，必须保留关联 | 生命周期和HB分析、device context、报告 |
-| 每条实际GPU访存及mask、宽度、线程 | B/D的设备插桩、C的patch stub、F实际硬件事件；A的模型语义入口 | 真机事件来自实际执行；模型事件只对其建模执行有效。KMD通常仅观测触发fault等有限异常，不生产常规全访存流 | 地址／bounds／identity检查器、init／race引擎 |
-| barrier／atomic／async copy及可见性 | GPU实际执行事件；UMD补充queue／event／copy命令 | 需要对应scope、order、phase与完成关系；KMD提供相关提交／完成契约，CPU时间戳不能替代HB | race／sync／init引擎与独立模型 |
+| 每条实际GPU访存及mask、宽度、线程 | B/D的设备插桩、C的patch stub、F实际硬件事件；B/D/C的真实设备检查入口 | 真机访存证据必须来自实际设备执行。KMD通常仅观测触发fault等有限异常，不生产常规全访存流 | 地址／bounds／identity检查器、init／race引擎 |
+| barrier／atomic／async copy及可见性 | GPU实际执行事件；UMD补充queue／event／copy命令 | 需要对应scope、order、phase与完成关系；KMD提供相关提交／完成契约，CPU时间戳不能替代HB | 真实GPU Race／Sync／Init检查器 |
 | fault、abort、reset及执行终态 | 设备／固件触发，KMD接收、控制并回传；UMD也可请求所支持的终止动作 | 保留实际终止范围、context状态、完成错误与报告可读性；只有硬件或驱动提供时才声明精确fault PC／地址 | UMD错误动作和报告、CI终态、资源回收 |
 | 模块覆盖、原始PC与patch后PC | 编译器生成初始manifest／debug map；UMD loader／patch器补充运行版本 | 以实际加载并执行的代码hash、ISA和ABI版本关联；不能仅靠源文件名 | device记录解析、覆盖报告 |
 
@@ -860,8 +862,8 @@ Linux GPU调度器的`cancel_job`回调针对尚未经`run_job`执行的作业�
 
 | 待确认契约 | 何时构成缺口 | 需要留下的验收证据 | 影响路线 |
 |---|---|---|---|
-| GPUVA／BO布局与权限 | shadow／descriptor／日志不能按所选方案安全映射；映射失败或异步生效不可查询／排序 | 正常映射、容量不足、冲突及失败路径；访问前初始化完成；unmap／重映射与仍在执行作业的依赖结果 | B～F；A驱动集成 |
-| BO、映射与应用对象关联 | 导入、别名或池内子分配被重复登记／错误合并；句柄复用使不同实例混淆 | 一个BO多映射、重复import、同VA重用、失败分配及独立子分配的对象账本；核对父子和别名关系 | B～F；A输入协议 |
+| GPUVA／BO布局与权限 | shadow／descriptor／日志不能按所选方案安全映射；映射失败或异步生效不可查询／排序 | 正常映射、容量不足、冲突及失败路径；访问前初始化完成；unmap／重映射与仍在执行作业的依赖结果 | B～F |
+| BO、映射与应用对象关联 | 导入、别名或池内子分配被重复登记／错误合并；句柄复用使不同实例混淆 | 一个BO多映射、重复import、同VA重用、失败分配及独立子分配的对象账本；核对父子和别名关系 | B～F |
 | 提交与完成状态 | 提交失败记成成功，错误fence被当正常完成，reset后的context仍被当有效 | 接受、拒绝、正常完成和错误完成分别可观测；launch到作业映射可追踪；reset状态沿KMD→UMD→应用一致上送 | 所有实际驱动路径 |
 | 释放／元数据退休顺序 | free按Host返回立即生效，或完成后仍有检查器／报告读取被提前回收 | 受控同queue前置访问、跨queue等待、缺依赖反例、同VA复用；同时检查应用对象失效与元数据可回收边界 | B、D、E及F生命周期 |
 | 运行中停止／恢复 | 检查失败后继续会破坏同步或状态，却没有经过验证的终止策略 | 在访存检查失败、部分lane已到barrier、日志／metadata不足等情形下，验证所宣称dispatch／context／全GPU终止范围、终态、报告保留及资源可回收性；说明无辜context是否受影响 | 依赖该失败策略的B～F |
@@ -884,7 +886,6 @@ VFIO文档将设备访问、I/O地址映射及中断等接口分开，并在示�
 
 **地址归一化应保留证据。** 只有存在经过验证的映射关系时，才将不同地址域的访问归一到同一规范对象与偏移。若外部导入接口不能提供足够的来源关联，应标记关联未知并降低跨域检测保证。FD、GEM handle、裸GPUVA或当前物理页号均不宜单独充当全局不可复用的allocation identity。
 
-**虚拟化路径按实际部署填写。** 设备透传时，guest厂商KMD与Host VFIO／IOMMU内核路径的职责不同；不能默认Host还运行同一块设备的原生厂商KMD。虚拟GPU后端若调用Host原生GPU，则guest KMD、后端协议及Host KMD均属于实际路径。纯用户态CPU仿真没有guest内核，不能据此声称验过guest KMD。每种路径仍需分别说明哪一个执行引擎真正执行GPU ISA、在哪一层产生访存检查事件。
 
 #### 逐路线表的阅读口径
 
@@ -1392,7 +1393,7 @@ KMD 的“0”表示不新增该组件代码，不表示接口免于验证。调
 | B | KMD | 0 | 0 | 复用现有 GPUVA/映射、完成、错误回传及所选终止策略的契约；不足时按实际缺口选 K-M/K-E/K-A。 | 新增 KMD 测试为 0；对既有契约的端到端用例包含在 UMD/设备运行测试。 |
 | B | UMD | 5–11 | 4–9 | shadow 资源、poison/unpoison 排序、context/JIT 链接、池分配及 CLI 覆盖/资源不足报告。 | 异步 alloc/free、shadow 可见性、映射失败、卸载回收、日志满和合法别名。 |
 | C | **历史Compiler交付包（非编译器源码必改）** | 6–13 | 5–11 | 该分组中主要是GPU设备Patch stub和可选MC适配，**不表示生产Compiler必须修改**；纯runtime时可全部由UMD/运行时工具交付。 | Patch透明性、寄存器/谓词恢复、地址宽度和原子语义；不重计已有解码器。 |
-| C | KMD | 0 | 0 | 复用已有正规代码加载/执行、映射、完成及所选终止契约；调试接口仅在实现依赖时要求，缺口按需选 K-M/K-E/K-A/K-X。 | 新增 KMD 测试为 0；代码生命周期和故障归因的集成测试计在 UMD/模型。 |
+| C | KMD | 0 | 0 | 复用已有正规代码加载/执行、映射、完成及所选终止契约；调试接口仅在实现依赖时要求，缺口按需选 K-M/K-E/K-A/K-X。 | 新增 KMD 测试为 0；代码生命周期和故障归因的集成测试计在 UMD/设备集成测试。 |
 | C | UMD | 17–32 | 15–28 | 运行时重写、CFG/branch relocation、资源重算、patch cache、JIT/unload；CLI 恢复原 PC。 | 分支/调用/常量区重定位、并发加载、缓存版本、拒绝未知编码、资源声明及异常路径。 |
 
 **C（NVIDIA-R）务必区分“交付包归属”与“生产Compiler源码修改”。** 设备Patch是GPU执行的代码，可用未经修改的现有目标编译器构建工具CUBIN/Device Library；机器码decode/re-encode/CFG/resource修正由UMD Runtime Binary Rewriter实现。**纯runtime C实际修改生产Compiler源码可以为0**。原表把GPU设备Patch库及可选MC适配统计在历史Compiler包，不能将6–13 kLOC解读为“必须修改LLVM后端”。按照实际负责人重分类时，应把此份工作迁入UMD或独立运行时工具责任包，不能在两边重复收费。单一访存事件采集不等于完整race/sync分析；I1/S1/R1 按 §16.7 选定的工作包补充。
@@ -1404,7 +1405,7 @@ KMD 的“0”表示不新增该组件代码，不表示接口免于验证。调
 | 路线 | 责任包 | 新增核心 kLOC | 新增手写测试 kLOC | 核心工作范围 | 测试工作范围 |
 | --- | --- | --- | --- | --- | --- |
 | D | Compiler | 28–54 | 23–45 | Pass/后端传播 bounds/identity、指针 load/store/copy/atomic 和受控 ABI；设备 descriptor/pointer-shadow 协议。 | phi/select、spill/reload、部分 copy、值-身份原子配对、ABA、unknown 来源及受控跨函数边界。 |
-| D | KMD | 0 | 0 | 复用已有 metadata 映射、context 隔离、完成及所选终止契约；不足时按需选 K-M/K-E/K-A。 | 新增 KMD 测试为 0；metadata 生存期与地址复用验证计入 UMD/模型。 |
+| D | KMD | 0 | 0 | 复用已有 metadata 映射、context 隔离、完成及所选终止契约；不足时按需选 K-M/K-E/K-A。 | 新增 KMD 测试为 0；metadata 生存期与地址复用验证计入 UMD/设备集成测试。 |
 | D | UMD | 10–20 | 9–17 | 对象 ID/epoch、参数 sidecar、外部对象注册、能力协商、metadata 退休与 CLI 保证等级。 | 参数布局、epoch 复用、并发退休、未插桩 writer 边界和跨模块协商。 |
 | E | Compiler | 40–76 | 33–63 | B 全量＋D 独有部分＋C stub 子集和模式边界；共享检查 ABI、manifest 和 descriptor。 | 模式间值/身份流转、重复插桩防护、版本协商、provenance 降级及元数据一致性。 |
 | E | KMD | 0 | 0 | 共享 B/D/C 所需契约并集；不足时选 K-M/K-E/K-A/K-X，每包只计一次。 | 新增 KMD 测试为 0；跨模式集成验证已在 E 的 UMD/设备运行测试去重。 |
@@ -1529,7 +1530,7 @@ K-F只为未具备的真实驱动状态契约计费。F基础预算已包含UMD�
 | GPUVA/metadata 映射契约可通过既有设施有限扩展 | 采用 K-M | 采用 K-M | 若没有可行地址空间/页表或权限机制，先做可行性原型；不能默认 K-M 能新建整套 GPUVM。 |
 | 多 GPU/IPC/外部导入为首版硬需求 | 单独分解 | 单独分解 | 规范对象身份、别名、一致性和跨设备时序；现有 API 规模与保证未确定，不给统一追加数。 |
 | F 需要新硬件或大幅新增固件 | 不纳入软件表 | 不纳入软件表 | ISA/RTL/DV/性能模型/硅片和超出接线范围的固件另立计划。 |
-| 完整D2时间身份、值级MSan或通用跨CPU/GPU TSan | 单独设计 | 单独设计 | 必须设计真正能在GPU执行的检查代码，不得以模型观察代替；具体语义另外评审。 |
+| 完整D2时间身份、值级MSan或通用跨CPU/GPU TSan | 单独设计 | 单独设计 | 必须设计真正能在GPU执行的检查代码，不得以Host事件记录代替；具体语义另外评审。 |
 
 ### 16.9 只统计真实GPU产品组件与条件KMD缺口
 
@@ -1546,7 +1547,7 @@ K-F只为未具备的真实驱动状态契约计费。F基础预算已包含UMD�
 组合公式为“所选P＋路线生产软件区间＋**经源码审计证明确实缺失**的KMD契约包＋可选额外checker区间＋另行立项的Firmware/RTL/DV”。不得直接叠加多个P；同一映射、报告、对象表、终止代码只计一次。详见[生产预算JSON](estimates-v1.8.json)与[逐组件源码入口](real-gpu-components-implementation.md)。
 ### 16.10 将区间转为项目预算与算术校验
 
-建议以两周左右技术摸底收集 opcode/访存类型、kernel 与 allocator/API 数量、已支持的 patch 模式、module ABI 数量、现有 KMD 契约、模型与真机差异，以及**既有Q2 GPU ISA模型的访存hook和Guest系统接线现状**（不再摸底Q2是否存在）；Q3另按实际情况判断。先做可运行的最小链路，再按“接口、算法、失败路径、兼容、验证”建立工作包和责任人；人月需要结合团队经验与审查/验证成本估计，不用统一的每天写多少行换算。
+建议以两周左右技术摸底收集 opcode/访存类型、kernel 与 allocator/API 数量、已支持的 patch 模式、module ABI 数量、现有 KMD 契约、实际设备与编译产物差异，以及**目标实体GPU实际ISA、元数据访问、完成和fault接口的代码级契约**。先做可运行的最小链路，再按“接口、算法、失败路径、兼容、验证”建立工作包和责任人；人月需要结合团队经验与审查/验证成本估计，不用统一的每天写多少行换算。
 
 本章数值的复核规则为：
 
@@ -1693,7 +1694,7 @@ __global__ void s01(uint32_t *a, bool tail) {
 // 独立运行：s01<<<1,32>>>(a, false); s01<<<1,32>>>(a, true);
 ~~~
 
-**哪里不对、怎样检。** 合法字节区间只有`[0x1000,0x1040)`；两次4B写分别落在尾后和头前。**真实GPU B方案**在应用store前查询已poison的Redzone，或**真实GPU C方案**使用已插桩的设备区间检查；两者都需UMD发布逻辑长度并检查完整访问范围，不能仅靠已映射GPU页。D1编译期设备检查器若保留原对象bounds也能检出。模型只负责验证同一GPU检查器而不能代替它。[L02][L05]
+**哪里不对、怎样检。** 合法字节区间只有`[0x1000,0x1040)`；两次4B写分别落在尾后和头前。**真实GPU B方案**在应用store前查询已poison的Redzone，或**真实GPU C方案**使用已插桩的设备区间检查；两者都需UMD发布逻辑长度并检查完整访问范围，不能仅靠已映射GPU页。D1编译期设备检查器若保留原对象bounds也能检出。[L02][L05]
 
 **组件观测。** compiler 保留 store 的谓词、4 B 宽度和源位置；deviceRT 在执行写之前检查，不能让其他 31 个未执行线程产生报告；UMD 提供逻辑长度 64 B，而非把 allocator 的对齐补齐长度当对象长度。
 
@@ -1771,7 +1772,7 @@ __global__ void s04(uint32_t *a, uint32_t *out) {
 // s04<<<1,32>>>(a, out);  // 读取宽度 4 B
 ~~~
 
-**哪里不对、怎样检。** 目标四字节可访问，不代表从 A 推导的访问合法；应使用指针携带的 A 边界判断偏移 72。**真实GPU D1编译期来源插桩**沿`a`计算传播原对象A的base/size，再由设备检查器报偏移72超出64B。需要明确支持的参数/寄存器/指针传播闭包；只有当前地址有效性检查的B/C不能保证检出这个A→live B变体。模型来源追踪只能辅助验证D1，而不是另一条生产检测路线。[P01][N04]
+**哪里不对、怎样检。** 目标四字节可访问，不代表从 A 推导的访问合法；应使用指针携带的 A 边界判断偏移 72。**真实GPU D1编译期来源插桩**沿`a`计算传播原对象A的base/size，再由设备检查器报偏移72超出64B。需要明确支持的参数/寄存器/指针传播闭包；只有当前地址有效性检查的B/C不能保证检出这个A→live B变体。[P01][N04]
 
 **组件观测。** compiler 为 `a` 保留 A 的身份，不能在最终地址上反查到 B 后覆盖它；deviceRT 查询预期对象 A；UMD 发布 A／B 两份不同描述符和参数 sidecar。若 E 的 fallback 仅剩裸地址，应降级保证并计数。
 
@@ -1886,7 +1887,7 @@ require(test_is_dead_and_not_reused(p));
 read_first<<<1,32,0,stream>>>(old, out);
 ~~~
 
-**哪里不对、怎样检。** 地址可能仍映射，但对象生存期已结束。B 在退休命令真正生效后 poison，对旧范围读做检查；**真实GPU C的运行时补丁/UMD对象账本**可以保留已退休对象Tombstone，并将生命周期状态作为设备检查输入；C必须真的在访问前执行设备检查，而不能只在模型里判断。这里尚无新对象占用该地址，因此“当前地址已 dead”足以判错；不能由此推导已具备 S09 的复用后时间安全。[L02]
+**哪里不对、怎样检。** 地址可能仍映射，但对象生存期已结束。B 在退休命令真正生效后 poison，对旧范围读做检查；**真实GPU C的运行时补丁/UMD对象账本**可以保留已退休对象Tombstone，并将生命周期状态作为设备检查输入；C必须真的在访问前执行设备检查，而不能只在Host侧判断。这里尚无新对象占用该地址，因此“当前地址已 dead”足以判错；不能由此推导已具备 S09 的复用后时间安全。[L02]
 
 **组件观测。** compiler 保留旧指针的实际 load；deviceRT 保证 poison 与后续访问具有正确可见顺序；UMD 提供 free 请求、完成事件及禁止复用条件。测试启动前必须核对 dead 状态，不能靠一次 sleep 猜测。
 
@@ -1959,7 +1960,7 @@ test_free_and_wait(p);       // 第一次合法释放，状态变为 dead
 test_free_and_wait(alias);   // 错误：再次释放同一 allocation instance
 ~~~
 
-**哪里不对、怎样检。** 第二次调用试图再次结束同一对象的生命周期。**真实UMD allocator/driver的状态机**维护allocation ID、成功释放事件与tombstone，在调用底层释放前检查并报告`dead -> free`非法转移；设备侧allocator应有对应设备运行库插桩。模型重放可测试该状态机，但模型自身检测不构成产品方案。仅shadow poison不能检测没有后续访问的double free。[L01][N02]
+**哪里不对、怎样检。** 第二次调用试图再次结束同一对象的生命周期。**真实UMD allocator/driver的状态机**维护allocation ID、成功释放事件与tombstone，在调用底层释放前检查并报告`dead -> free`非法转移；设备侧allocator应有对应设备运行库插桩。仅shadow poison不能检测没有后续访问的double free。[L01][N02]
 
 **组件观测。** compiler／deviceRT 为设备侧释放保留调用点并可靠发布状态，Host 释放则由 runtime 拦截；UMD 区分请求 ID、成功提交及退休完成，对嵌套回调去重。并发 free 还需在对象状态上执行一致的仲裁，不能让两个请求都基于旧 live 状态通过后才写 dead。
 
@@ -1983,7 +1984,7 @@ for (int k = 0; k < 3; ++k) {
 report_leaks_before_context_teardown(context);
 ~~~
 
-**哪里不对、怎样检。** 错误是拥有型对象在约定检查点仍未释放，不要求GPU非法访存。**真实UMD/Host runtime的allocation账本**在检查点扫描尚未成功free的对象，并由工具报告；它属于生产检查器的一部分，不是模型事件重放产品方案。仅“账本未释放”不能在任意业务中自动证明对象已不可达；本例提供明确scope/引用丢失前提。[N02][L01]
+**哪里不对、怎样检。** 错误是拥有型对象在约定检查点仍未释放，不要求GPU非法访存。**真实UMD/Host runtime的allocation账本**在检查点扫描尚未成功free的对象，并由工具报告；它属于生产Host资源诊断，并不等于GPU内部访存检测。仅“账本未释放”不能在任意业务中自动证明对象已不可达；本例提供明确scope/引用丢失前提。[N02][L01]
 
 **组件观测。** compiler／loader 提供分配调用栈与模块定位；deviceRT 补充设备堆分配、失败结果及释放事件；UMD 等待相关命令完成，在 context 自动回收前取快照。工具自己的 shadow、quarantine 和报告缓冲须与应用账本分开。
 
@@ -2005,7 +2006,7 @@ read32<<<1, 1, 0, s>>>(dst, out);         // BAD：fixed=false时消费未定义
 cudaStreamSynchronize(s);
 ~~~
 
-**实现路线与观测点。** A在allocation时置未定义位，按实际byte enable更新store/memset，copy按源位图传播；B额外建设独立初始化bitmap，由Compiler插入load/store检查，Device runtime原子合并共享metadata word。E接入runtime/UMD及copy engine的提交、完成、依赖事件，不能在Host提交copy时提前定义目的端。H2D若只采用“Host来源已定义”假设，须明确其覆盖边界；这属于第15章I1设计，不是普通地址ASan的附赠能力。[N03][L05]
+**实现路线与观测点。** GPU设备Initcheck维护定义性bitmap，按实际byte enable更新store/memset，copy按源位图传播；B额外建设独立初始化bitmap，由Compiler插入load/store检查，Device runtime原子合并共享metadata word。E接入runtime/UMD及copy engine的提交、完成、依赖事件，不能在Host提交copy时提前定义目的端。H2D若只采用“Host来源已定义”假设，须明确其覆盖边界；这属于第15章I1设计，不是普通地址ASan的附赠能力。[N03][L05]
 
 **修复、报告与边界。** 独立运行`fixed=true`版本，完整有序memset后的读取应无报；另测仅补写byte 3后读取4字节合法、读取8字节仍非法。报告至少给出`dst+3`、读取宽度、未定义byte mask、源allocation和copy链。不得把“向内存store一个来源未定义的寄存器”当作值级定义性已正确实现；完整MSan传播另立能力。若copy engine不可见、只按word标记初始化、未跟踪Host来源或实际指令被消除，均需单列漏检边界。
 
@@ -2030,7 +2031,7 @@ __syncthreads();
 if (tid == 0) out[2] = x;                // 末尾barrier不能倒推消除先前冲突
 ~~~
 
-**实现路线与观测点。** A按`launch/block/shared对象/byte`记录两端PC、线程及barrier epoch，检查重叠字节、至少一写、原子属性和HB。E由Compiler或C补齐实际shared访存与barrier事件，Device runtime使用HB历史或适用同步子集内的层次FSM；状态更新原子不能为应用制造HB。[P02][P03] 以线程32替换线程1、block设64，可扩展为跨warp测试；不同block相同shared偏移必须分离身份。
+**实现路线与观测点。** GPU设备Racecheck按`launch/block/shared对象/byte`记录两端PC、线程及barrier epoch，检查重叠字节、至少一写、原子属性和HB。E由Compiler或C补齐实际shared访存与barrier事件，Device runtime使用HB历史或适用同步子集内的层次FSM；状态更新原子不能为应用制造HB。[P02][P03] 以线程32替换线程1、block设64，可扩展为跨warp测试；不同block相同shared偏移必须分离身份。
 
 **修复、报告与边界。** 将完整block同步放在两段访问之间；WAW可明确先后或令各线程写独立位置。同warp也须按目标规则建立有效同步。报告两个访问位置、R/W类型、字节交集及缺失的HB，不能报成未初始化读取。NVIDIA racecheck的shared范围可作对照，但不推出global覆盖。[N02] 重复读、随机延迟或碰撞方案可能漏同值写、ABA或未命中窗口，应与HB/FSM的适用模型保证分栏。[P08]
 
@@ -2059,7 +2060,7 @@ wait_reset_to_zero_and_wait(x);
 good_increment<<<2, 1>>>(x);              // 独立合法反例：完成后计数应为2
 ~~~
 
-**实现路线与观测点。** A使用global规范对象和全grid线程身份维护冲突历史，消费真实同步scope、ordering和barrier事件；block barrier只向同block参与者提供同步。C可在可解码指令处提取load/store/atomic宽度及scope，再经runtime汇总HB；E结合编译器语义、缺失模块补丁和UMD launch事件。两者都必须另建设Racecheck，B的可寻址位和D1/D2对象检查只能确认访问对象，不能判定竞争。[P02][P03]
+**实现路线与观测点。** GPU Racecheck设备库使用global规范对象和全grid线程身份维护冲突历史，消费真实同步scope、ordering和barrier事件；block barrier只向同block参与者提供同步。C可在可解码指令处提取load/store/atomic宽度及scope，再经runtime汇总HB；E结合编译器语义、缺失模块补丁和UMD launch事件。两者都必须另建设Racecheck，B的可寻址位和D1/D2对象检查只能确认访问对象，不能判定竞争。[P02][P03]
 
 **修复、报告与边界。** `good_increment`用相同适用scope的原子操作访问同一计数器，不应报race；用block-scope原子跨block通信仍不足。relaxed仅保护该计数器：若用flag发布普通payload，仍须建立合适scope的release/acquire关系，且acquire读到对应发布值。[N08] 报告两端PC/block/thread、对象内字节、atomic属性和未成立的HB。未建模锁、跨domain同步、历史溢出或未插桩模块应降级；概率重复访问未报错不能作无竞争证明。[P08]
 
@@ -2083,7 +2084,7 @@ read_x<<<1, 1, 0, q1>>>(x, out);         // OK：writer -> event -> reader
 cudaDeviceSynchronize();
 ~~~
 
-**实现路线与观测点。** A同时模拟命令DAG与访存：将kernel内部线程时钟接到所属launch/queue节点，允许合法并行调度。E由Host runtime/UMD记录event版本、record/wait、launch与完成事件，再将B所承载的额外race插桩或C采集的地址历史接入HB引擎；不能在每个kernel结束时无条件清空global历史。只有Host API回调而没有设备访问事件或可信访问范围声明，无法确定两个kernel是否碰同一字节。[N03][P02]
+**实现路线与观测点。** GPU Racecheck记录真实设备访存时钟；UMD将launch/queue/event命令依赖关联到同一执行记录，按实际scope/order建立HB。E由Host runtime/UMD记录event版本、record/wait、launch与完成事件，再将B所承载的额外race插桩或C采集的地址历史接入HB引擎；不能在每个kernel结束时无条件清空global历史。只有Host API回调而没有设备访问事件或可信访问范围声明，无法确定两个kernel是否碰同一字节。[N03][P02]
 
 **修复、报告与边界。** 上述event链及同一queue有序执行都是合法反例。设备内flag协议还须核对atomic scope与发布／获取，普通fence不能代替对端协议。报告应包含两个kernel、launch ID、queue、对象偏移及缺少的依赖边。驱动偶然串行、工具强制串行、默认stream配置改变或未执行目标路径，会影响实验覆盖；不能据此声称检查通过。基于随机延迟和值差异的发现仍是概率证据，须保留HB检测的独立口径。[P08]
 
@@ -2110,11 +2111,11 @@ while (!__mbarrier_test_wait(&b, t1)) {}
 __mbarrier_test_wait(&b, t0);             // BAD②：token早于立即前一phase
 ~~~
 
-**实现路线与观测点。** A在同步指令执行处维护barrier身份、期望计数、live参与者、到达集合和完整phase；同时建等待依赖，区分循环等待证据与单纯超时。E由Compiler/C记录初始化、arrive/wait/drop、mask和退出事件，Device runtime维护同步状态，UMD提供block维度；F若能导出硬件barrier状态，可补充缺失参与证据，但仍需软件归因。
+**实现路线与观测点。** 真实GPU Synccheck在同步指令执行处维护barrier身份、期望计数、live参与者、到达集合和完整phase；同时建等待依赖，区分循环等待证据与单纯超时。E由Compiler/C记录初始化、arrive/wait/drop、mask和退出事件，Device runtime维护同步状态，UMD提供block维度；F若能导出硬件barrier状态，可补充缺失参与证据，但仍需软件归因。
 
 **修复、报告与边界。** 用例①把完整block barrier移到全员必经位置，或采用语义匹配的子组同步；用例②只使用当前或立即前一phase的有效token。报告barrier PC/ID、期望／实际参与集合、等待链或token/current phase。[N08] 不将普通barrier之前的任意return一概判错，退出线程必须按目标规范处理。NVIDIA当前synccheck的错误类、架构适用范围和barrier跟踪容量只是产品对照；自研“完整参与集合及phase验证”是目标能力。仅超时或缺失退出观测时，结论必须保留为疑似阻塞／覆盖不足。[N02]
 
-若目标token仅编码phase parity，phase 0与phase 2可能具有相同值，纯token值或当前硬件状态不能保证识别这种ABA。A须额外保留token来源phase；E要保证旧token识别，须传播barrier身份和完整phase代数等sidecar。缺少该来源／epoch信息时，只能声明部分错配检测，不能宣称完整phase覆盖。
+若目标token仅编码phase parity，phase 0与phase 2可能具有相同值，纯token值或当前硬件状态不能保证识别这种ABA。GPU设备Synccheck须额外保留token来源phase；E要保证旧token识别，须传播barrier身份和完整phase代数等sidecar。缺少该来源／epoch信息时，只能声明部分错配检测，不能宣称完整phase覆盖。
 
 <a id="case-s18"></a>
 
@@ -2135,7 +2136,7 @@ if (mode == 0) {
 }
 ~~~
 
-**实现路线与观测点。** A按动态warp、同步PC/实例记录每lane的mask、live/exit和到达状态：先检查self bit，再检查同组被点名且未退出的lane是否执行匹配调用。E由Compiler或C保存每lane原始mask与实际执行mask，Device runtime核对相交mask的一致性和等待关系；F只能在确有mask/到达状态观测接口时补充。不能把访存谓词mask直接当同步参与mask。
+**实现路线与观测点。** GPU设备Synccheck按动态warp、同步PC/实例记录每lane的mask、live/exit和到达状态：先检查self bit，再检查同组被点名且未退出的lane是否执行匹配调用。E由Compiler或C保存每lane原始mask与实际执行mask，Device runtime核对相交mask的一致性和等待关系；F只能在确有mask/到达状态观测接口时补充。不能把访存谓词mask直接当同步参与mask。
 
 **修复、报告与边界。** 独立合法反例是仅lane 0–15调用`__syncwarp(0x0000ffff)`，其他lane不被点名；相互不重叠且满足目标规范的子组mask也不能误报。报告调用lane、self bit、声明mask、实际到达／已退出／仍待到达集合。CUDA要求被点名且尚未退出的参与线程以相同mask完成相应调用；具体收敛约束、wave宽度及退出语义须按目标ISA核验，不能照搬到其他GPU。[N08][L06] NVIDIA手册明确：synccheck可报self-mask错误，但不检测所有被点名线程未到达的情况；后者是自研目标，不可标成现产品保证。[N02]
 
@@ -2162,7 +2163,7 @@ else {
 __pipeline_wait_prior(0);                // 收尾等待不追溯修复过早读
 ~~~
 
-**实现路线与观测点。** A把异步传输作为独立访问主体，追踪源读／目的写、commit组号、完成及消费者可见性；指令发出不等于目的已经可读。C拦截实际async opcode与wait，或E结合Compiler高层pipeline信息、runtime completion和Device checker；必须关联到同一个传输组／barrier phase，不能把任意wait当作全局完成。[N02][N03]
+**实现路线与观测点。** 真实GPU Synccheck把异步传输作为独立访问主体，追踪源读／目的写、commit组号、完成及消费者可见性；指令发出不等于目的已经可读。C拦截实际async opcode与wait，或E结合Compiler高层pipeline信息、runtime completion和Device checker；必须关联到同一个传输组／barrier phase，不能把任意wait当作全局完成。[N02][N03]
 
 **修复、报告与边界。** 读取前`__pipeline_wait_prior(0)`保护本线程已提交批次；其他线程读取时，还需规定的参与同步与可见性。barrier版本要等绑定当前copy的phase：上一phase的token可能仍是合法参数，但成功等待它不证明当前传输已完成；比立即前一phase更旧的token则另属S17。报告copy发起PC、范围、组号／phase、等待实际覆盖范围及过早访问PC。预置0仍可发生传输竞争，不能只依赖I1位图。未观测copy engine、未支持bulk/tensor异步指令、仅观察一次幸运完成顺序均可能漏检；NVIDIA现有shared async-copy检查不能外推为全部引擎覆盖。[N02]
 
@@ -2188,7 +2189,7 @@ cudaFreeAsync(p, q0);                    // BAD：fixed=false时无使用->free�
 cudaDeviceSynchronize();
 ~~~
 
-**实现路线与观测点。** A同时记录对象epoch、命令DAG、free请求、生效与完成；访问和free无序时报生命周期竞争，free生效后执行的访问报UAF。E由runtime/UMD将free命令及依赖下发，B按设备顺序poison；D2再传播旧指针身份，以覆盖随后同VA复用。free提交不能立即全局poison，同queue排在free之前的合法访问应放行。[N02][N03]
+**实现路线与观测点。** UMD与真实GPU检查器联合记录对象epoch、命令DAG、free请求、生效与完成；访问和free无序时报生命周期竞争，free生效后执行的访问报UAF。E由runtime/UMD将free命令及依赖下发，B按设备顺序poison；D2再传播旧指针身份，以覆盖随后同VA复用。free提交不能立即全局poison，同queue排在free之前的合法访问应放行。[N02][N03]
 
 **修复、报告与边界。** `fixed=true`建立合法链；同queue中“使用→free”也是合法反例。CUDA规定free操作开始后不能继续使用；`retire complete`是确认退休、回收描述符及后续复用的证据，不应把非法访问边界拖到完成，更不能用Host API返回代替设备时刻。[N08] 报告对象/epoch、最后使用queue与launch、free提交点及缺失依赖；有完成证据时补报实际退休节点。仅监控API调用顺序会误报或漏报；B遇同VA新分配重新unpoison可能漏旧指针，D2仍需完整身份传播；隐藏free、外部queue或不可见依赖必须输出unknown。
 
@@ -2232,7 +2233,7 @@ masked_store_f32(addr, 1.0f, active);  // 合法：实际只有 i=8、9 写内�
 
 **哪里不对、应检测什么。** 原例程序没有空间错误；若检查器对所有 8 个地址无条件访问 shadow 并报警，是检查器引入的错误。LLVM masked memory 的关闭元素不执行对应访存，VP 操作还要结合显式向量长度 EVL；不能用“访问完整向量后 select”替代原语义。[L05] 若一个 GPU lane 内还有向量元素，实际检查集合应同时考虑逻辑 lane、指令谓词、元素 mask 和 `element_index < EVL`，不能把硬件 EXEC 当成全部逻辑条件。
 
-**实现方案与组件。** B在LLVM IR中保留mask/EVL，按真实GPU活动元素插入检查；C/E从目标机器码谓词和执行模式恢复同一集合。D及真正存在的F硬件同样必须服从mask，不能无条件检查被屏蔽元素。**模型只能对照这些真实GPU检查行为**，不能在解释器回调中自作判定并宣布产品通过。被关闭lane的非法地址不应触发额外设备metadata访问或错误报告。
+**实现方案与组件。** B在LLVM IR中保留mask/EVL，按真实GPU活动元素插入检查；C/E从目标机器码谓词和执行模式恢复同一集合。D及真正存在的F硬件同样必须服从mask，不能无条件检查被屏蔽元素。**GPU设备检查行为必须有真实执行证据**；未受检查的访问不能标记为已覆盖。被关闭lane的非法地址不应触发额外设备metadata访问或错误报告。
 
 **修复、合法反例与预期报告。** 原例预期零错误、有效访问数为 2；`<=` 变体应只把 i=10 对应的 4 B 访问报告为 OOB。同时验证全零 mask、部分 mask 及 gather/scatter。EVL 合法对照可选“起始下标 8、向量长度 8、元素 mask 全真、EVL=2”，同样只能访问两个元素。此例也检验 race/init 插桩不能为关闭元素制造虚构的读写事件。
 
@@ -2254,7 +2255,7 @@ surface_store_u32(surface, x_byte=64*4, y=0, value=7, mode=TRAP);
 
 **哪里不对、应检测什么。** A 的地址可能已映射且在 allocation 内，但写权限不允许。B 不能只检查底层 pitch allocation：行尾 padding 即使在物理分配内，也未必是合法像素。检查应理解维度、格式、坐标单位、mip/layer 和边界模式。PTX 对 surface 的边界处理提供明确模式；目标 ISA 的合法 clamp/zero 等行为必须按其语义处理，不能把所有超出原始坐标范围的操作都报为非法访存。[N09]
 
-**实现方案与组件。** A 按资源描述符和权限在模型入口检查。Compiler＋UMD＋device runtime 可提供资源类插桩：加载时登记只读符号，创建资源时登记格式、维度与权限，在 texture/surface intrinsic 前检查参数。C/E 若覆盖资源 opcode，可查询同一描述符；只实现线性地址 shadow 的 B 不能自动获得这项能力。D 可以为显式资源 view 保留逻辑边界；F 的权限或坐标 fault 可作为硬件信号，但报告工具仍需关联资源 ID 和源码。
+**实现方案与组件。** 真实GPU Device Runtime在资源访问ISA前，依据资源描述符和权限执行检查。Compiler＋UMD＋device runtime 可提供资源类插桩：加载时登记只读符号，创建资源时登记格式、维度与权限，在 texture/surface intrinsic 前检查参数。C/E 若覆盖资源 opcode，可查询同一描述符；只实现线性地址 shadow 的 B 不能自动获得这项能力。D 可以为显式资源 view 保留逻辑边界；F 的权限或坐标 fault 可作为硬件信号，但报告工具仍需关联资源 ID 和源码。
 
 **修复、合法反例与预期报告。** A 应写可写对象或使用允许的 Host 更新接口；B 改为合法像素坐标。另设采用规定 clamp 模式的越界采样作为合法反例：它可以返回边界像素，不应报告通用 OOB；如果应用要求更严格的逻辑坐标，需作为独立约束声明。预期报告分别为 `write-to-read-only` 与 `surface-coordinate-out-of-range`，包含资源格式、坐标、单位和模式。资源 opcode 不受支持时必须显示覆盖缺口。
 
@@ -2277,7 +2278,7 @@ write_on_device(owner, a, q0, 3);
 write_on_device(peer,  b, q1, 4);         // BAD②：同对象写写，无跨device依赖
 ~~~
 
-**实现路线与观测点。** A须连同Host访问、peer设备、映射别名及命令同步建模；只模拟GPU访存不能检出CPU对端。E将CPU checker的访问/HB事件、GPU Compiler/C访存事件与UMD的map/import/alias/权限事件归并，以规范对象ID＋偏移匹配；导入产生映射身份，不凭空创建独立所有权。D2能保存身份但仍须另加HB引擎。[N03]
+**实现路线与观测点。** CPU/GPU跨端Racecheck需要真实Host访问记录、GPU设备访存记录、peer映射和实际命令同步事件。E将CPU checker的访问/HB事件、GPU Compiler/C访存事件与UMD的map/import/alias/权限事件归并，以规范对象ID＋偏移匹配；导入产生映射身份，不凭空创建独立所有权。D2能保存身份但仍须另加HB引擎。[N03]
 
 **修复、报告与边界。** CPU写前等待GPU完成；peer/IPC使用目标支持的跨设备／进程事件或完成协议，并遵守别名一致性规则。system-scope release/acquire只在该内存、地址宽度、对齐及互连支持相互原子性时成为合法反例，device-scope不能同步CPU；驻留、prefetch或映射成功都不建立HB。[N08] 报告CPU/两GPU端PC、device/context、两VA到同对象的关系及缺失同步。若peer未授权，应报权限/不可访问错误，不能以此代称数据race。不可见CPU访问、IPC另一进程、别名漏登记或概率观测窗口未命中均限制覆盖。
 
@@ -2303,7 +2304,7 @@ check_temporal(v, id);       // 工具错误：把不属于同一次发布的二
 
 **哪里不对、应检测什么。** 上半段不是应用缺陷；下半段是检查器的元数据一致性缺陷。同类不一致在地址复用场景中，还可能把旧裸指针附上新 allocation 身份，从而漏掉 UAF。分别原子读取 value 和 metadata 不保证它们来自同一次写入，单纯“再读一次指针值”也不能排除 ABA。这里要求的是检查器维护发布身份的一致协议，不能靠一次地址表查找重建历史。[L05] 该结论由原子接口语义与身份模型推导，属于工程设计要求。
 
-**实现方案与组件。** 可选一：在目标支持合适宽度且 ABI 受控时原子发布 `{value, identity}`。可选二：所有 writer/reader 都遵守经过证明的版本化 side metadata 协议，携带发布序号、正确的内存顺序和失败重试策略。Compiler 负责完整识别 store/exchange/CAS 与跨函数传播，device runtime 实现协议；UMD 只提供 allocation epoch，不能代替指针发布身份。增加受控调度枚举的 A 扩展可对有界交错做协议反例验证，但普通地址模型本身不提供 D2 或调度穷举。C/E 只有在全部相关 writer 可纳入协议时才能给同等保证；SIMT 内自旋锁和无界重试还需要单独证明前进性。
+**实现方案与组件。** 可选一：在目标支持合适宽度且 ABI 受控时原子发布 `{value, identity}`。可选二：所有 writer/reader 都遵守经过证明的版本化 side metadata 协议，携带发布序号、正确的内存顺序和失败重试策略。Compiler 负责完整识别 store/exchange/CAS 与跨函数传播，device runtime 实现协议；UMD 只提供 allocation epoch，不能代替指针发布身份。使用真实GPU并发压力测试及值-身份发布一致性用例核对协议；单纯地址有效性查询不具备D2历史身份保证。C/E 只有在全部相关 writer 可纳入协议时才能给同等保证；SIMT 内自旋锁和无界重试还需要单独证明前进性。
 
 **修复、合法反例与预期报告。** 修复检查器，原合法程序应零误报。另设“保存旧指针→释放A→同地址新对象”的受控变体：旧身份应报 M5，新发布身份应通过。未知 writer 或无法证明成对一致时应报告 `provenance-unavailable`／覆盖不足，不能伪造当前 epoch 后宣布时间安全。
 
@@ -2326,7 +2327,7 @@ kernel void prebuilt_library_kernel(int32_t* p, int n) {
 
 **哪里不对、应检测什么。** 应用确实有一次非法访问，但只在调用方插桩，无法观察库内每次访存。没有报告只能说明检查器没有看到错误，不能说明库安全。模块 manifest 至少应声明检查器、地址空间、指令覆盖及 ABI 版本；JIT 产物同样必须登记。NVIDIA 的 hybrid 也有编译单元／module 内函数粒度限制，不能据其名字假定任意未插桩函数都会自动补齐。[N05]
 
-**实现方案与组件。** 首选重编译库并使用兼容B/D设备插桩；无法重编译时C/E在模块加载/JIT后重写受支持的目标GPU opcode并共享UMD对象表。**模型能解释库指令不等于真机该库已经插桩。** UMD必须记录实际模块覆盖，区分成功加载与检查生效；工具显示未覆盖模块，Binary Fallback不能恢复原对象/时间身份时必须降级。
+**实现方案与组件。** 首选重编译库并使用兼容B/D设备插桩；无法重编译时C/E在模块加载/JIT后重写受支持的目标GPU opcode并共享UMD对象表。**库模块必须在实体GPU上实际插桩并核对最终ISA，未检查的访问必须报告覆盖缺口。** UMD必须记录实际模块覆盖，区分成功加载与检查生效；工具显示未覆盖模块，Binary Fallback不能恢复原对象/时间身份时必须降级。
 
 **修复、合法反例与预期报告。** 库中改用 `p[n-1]` 是合法反例。对可插桩的错误版，应报告库内 PC、模块名和 4 B 越界；对暂不支持的二进制，应明确 `unsupported-module` 或拒绝该检查模式，不能输出无条件 clean。验收同时运行“已插桩→未插桩→已插桩”的指针返回链，确认 unknown 身份不会被包装成强保证。
 
@@ -2350,7 +2351,7 @@ cudaGraphLaunch(exec, s);                 // BAD：replay 2仍访问旧p
 cudaStreamSynchronize(s);
 ~~~
 
-**实现路线与观测点。** A记录capture节点、每次执行实例、对象创建/释放和节点实际访存；模型若只有VA表也会漏同VA复用，因此必须保留被捕获参数的原身份。E＋D2由runtime为节点参数建立identity sidecar，replay生成新的execution/launch ID，Compiler传播对象ID/epoch至使用点；不能在每次launch按当前VA表重新“认领”新对象。C可补充设备访问，但裸地址补丁无法自行恢复丢失来源。[N03]
+**实现路线与观测点。** UMD记录capture节点、每次执行实例、对象创建/释放；GPU设备检查器记录每次实际访存；只依据当前VA表仍会漏同VA复用，因此必须保留被捕获参数的原身份。E＋D2由runtime为节点参数建立identity sidecar，replay生成新的execution/launch ID，Compiler传播对象ID/epoch至使用点；不能在每次launch按当前VA表重新“认领”新对象。C可补充设备访问，但裸地址补丁无法自行恢复丢失来源。[N03]
 
 **修复、报告与边界。** 让p存活至所有replay完成，或在受支持更新入口同时替换节点指针和身份。连续合法replay应具有不同执行ID、相同仍live对象epoch；graph内alloc/free节点每次建立新的分配生存期时，才生成相应新allocation epoch，不能机械地按replay全量换epoch。[N08] 报告graph/exec/replay/node ID、旧对象与free位置、若复用则给当前对象身份。B在地址仍poison时可报UAF，复用unpoison后可能漏；未跟踪节点参数更新、间接指针或device-side graph launch时须降级，不能假定每个设备发起replay都有Host回调。[N03]
 
@@ -2602,7 +2603,7 @@ GMSBench 中不同 checker 使用不同适用分母，HiRace 的 code/input 组�
 | 阶段 | 范围 | 建议投入 | 预计跨度 | 退出证据 |
 |---|---|---|---|---|
 | M0 能力摸底 | 三组件生产契约、GPUVA/ISA/abort、allocator、真实硬件错误通道 | 2–3人 | 2–3周 | 实际接口清单、硬件限制、预算修订 |
-| M1 窄原型 | 最小P＋B global＋A小用例oracle | 3–4人 | 6–10周 | 真机报错、确认B的地址reuse边界、首轮性能 |
+| M1 窄原型 | 最小P＋B Global设备插桩＋S01真实GPU合法/非法用例 | 3–4人 | 6–10周 | 真机报错、确认B的地址reuse边界、首轮性能 |
 | M2 内存检查内测版 | P＋B完善、KMD契约回归、shared/private、API、诊断与覆盖 | 5–7人 | 再10–16周 | 支持矩阵闭合、应用样例、资源可控 |
 | M3 对象语义 | D1先行，再做受控D2与pool/view | 5–8人 | 16–28周 | 相邻对象／旧指针／atomic边界通过 |
 | M4 独立checker | init、sync、shared race逐项推进 | 3–6人/工作流 | 每项8–16周量级 | 各自覆盖、误报和性能报告 |
@@ -2642,7 +2643,7 @@ M1是**真实GPU代码生成能力的窄原型**，不能将工期作为完整P�
 | metadata和日志OOM | 检查中途失效 | 预算、显式降级、CI失败分类 |
 | 二进制重写覆盖特殊指令不全 | 假clean或错误结果 | opcode清单、拒绝未知指令、差分执行 |
 | 性能优化偷偷降低覆盖 | 看似加速但工具退化 | 性能与覆盖同时验收，采样模式单列 |
-| 模型与真机内存语义不一致 | oracle不可信 | 目标litmus校验、事件差分、保留分歧 |
+| 实际ISA与设备运行时语义不一致 | 漏检、误报或错误完成 | 实体GPU ISA核验、memory-order litmus与设备日志交叉审查 |
 | KMD只取消未运行job，却承诺运行中abort | 错误后挂死或扩大reset影响 | 分别验证queued cancel、dispatch/context abort和device reset [K01][K02] |
 | GPUVA/Host指针及设备backing混用 | 错误映射、权限越界、上下文误关联 | 显式GPUVA/BO/Host域及版本，实体GPU与KMD契约核对 |
 | 把论文原型当可直接移植软件 | 计划低估、关键组件不可获得 | 核验artifact、实现开放范围和依赖 [P09] |

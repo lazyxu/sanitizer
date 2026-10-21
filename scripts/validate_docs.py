@@ -55,7 +55,7 @@ legacy_words = (
     "模拟" + "器",
     "仿" + "真器",
 )
-text_suffixes = {".md", ".json", ".py", ".sh", ".yaml", ".yml"}
+text_suffixes = {".md", ".json", ".py", ".sh", ".yaml", ".yml", ".cu", ".cpp", ".hip", ".h", ".txt"}
 for p in ROOT.rglob("*"):
     if not p.is_file() or p.suffix not in text_suffixes or ".git" in p.parts:
         continue
@@ -72,6 +72,40 @@ for p in ROOT.rglob("*"):
     check(not re.search(r"(?:路线|方案)\s*A\b|第六(?:条|种)方案", body),
           f"{p.relative_to(ROOT)}中不得再出现额外产品路线")
 
+
+# 旧产品概念不能只删除名称、继续保留同义的设备检查实现职责。
+# 谨慎避开S04案例中“对象A/对象B”的合法文字，防止误删原对象Bounds示例。
+retired_meaning_patterns = [
+    re.compile(r"(?:方案|路线)\s*A(?=\W|[\u4e00-\u9fff])"),
+    re.compile(r"(?<![A-Za-z0-9_])A\s*(?:在allocation时|按\x60launch|按动态warp|同时模拟|同时记录对象|把异步传输|使用global|记录capture|按资源描述符|须连同Host访问|在同步指令执行|须额外保留token)"),
+    re.compile(r"模型(?:来源追踪只能辅助|重放可测试|只负责验证|只能对照|能解释库指令|若只有VA表)"),
+    re.compile("(?:" + "|".join((
+        "GPU ISA" + "模型的访存hook", "A" + "小用例oracle",
+        "UMD/" + "模型", "模型事件" + "重放产品方案"
+    )) + ")"),
+]
+# 验证审计规则本身：必须抓出废弃实现，同时保留真正的对象A/B边界案例。
+for example in ("路线" + "A的旧条目", "A" + "同时模拟命令DAG",
+                "模型" + "来源追踪只能辅助验证",
+                "A" + "按动态warp", "A" + "记录capture节点"):
+    check(any(pat.search(example) for pat in retired_meaning_patterns),
+          "语义防回归规则不再覆盖旧方案示例: " + example)
+for example in ("对象 A 的派生指针落入 B", "GPU软件记录对象 A 的原始base/size"):
+    check(not any(pat.search(example) for pat in retired_meaning_patterns),
+          "语义防回归不能误删S04对象A/B边界语义")
+for p in ROOT.rglob("*"):
+    if not p.is_file() or p.suffix not in text_suffixes or ".git" in p.parts:
+        continue
+    try:
+        content = p.read_text(encoding="utf-8")
+    except UnicodeError:
+        continue
+    for pat in retired_meaning_patterns:
+        hit = pat.search(content)
+        if hit:
+            FAILURES.append(f"遗留旧方案实现描述：{p.relative_to(ROOT)}，内容片段 {hit.group(0)}")
+            break
+
 main = read("docs/llvm-gpu-sanitizer-research.md")
 guide = read("docs/S01-vendor-implementation-guide.md")
 implant = read("docs/real-gpu-components-implementation.md")
@@ -80,6 +114,19 @@ root_readme = read("README.md")
 budget = load_json("docs/estimates-v1.8.json")
 report = load_json("docs/validation-report.json")
 manifest = load_json("samples/manifest.json")
+amd_guide = read("docs/amd-gpu-asan-hardware-fallback.md")
+for required in (
+    "XNACK", "HMM", "无XNACK", "无HMM", "无MMU", "无硬件", "Compiler",
+    "LLVM", "Device Runtime", "UMD", "KMD", "Firmware", "RTL",
+    "Shadow", "Interval", "GPU", "TOOL_FAILURE", "S01",
+):
+    check(required.lower() in amd_guide.lower(),
+          "AMD指南未解释硬件缺失路径或组件: " + required)
+check("amd-gpu-asan-hardware-fallback.md" in root_readme
+      and "amd-gpu-asan-hardware-fallback.md" in guide
+      and "amd-gpu-asan-hardware-fallback.md" in main,
+      "README/S01/主稿必须共同链接AMD缺硬件路径")
+
 
 # 当前文稿、实际GPU执行入口与全部生产责任主体。
 chapters = [int(x) for x in re.findall(r"^## (\d+)\. ", main, re.M)]
@@ -174,6 +221,14 @@ blob_sha = hashlib.sha1(
 ).hexdigest()
 check(report.get("main_document_blob_sha") == blob_sha,
       "审计报告引用的主稿SHA已过期")
+check(report.get("main_line_count") == len(main.splitlines()),
+      "审计报告引用的主稿行数已过期")
+check(report.get("amd_hardware_fallback", {}).get("document")
+      == "docs/amd-gpu-asan-hardware-fallback.md",
+      "报告中缺少AMD硬件依赖及软件替代路径审计")
+check(report.get("legacy_text_cleanup", {}).get("static_semantic_regression")
+      == "scripts/validate_docs.py",
+      "报告未登记历史方案语义防回归检查")
 check(report.get("product_routes") == ["B", "C", "D", "E", "F"],
       "审计报告产品路线不一致")
 check(report.get("physical_gpu_checker_result") == "GPU_NOT_RUN",

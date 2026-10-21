@@ -1,6 +1,6 @@
 # LLVM GPU Sanitizer：真实硬件实施调研
 
-**版本 v1.8（2026-10-21）· 文档及工程伪代码阶段，目标自研 GPU 尚无实卡检出验收。**
+**版本 v1.9（2026-10-21）· 文档及工程伪代码阶段，目标自研 GPU 尚无实卡检出验收。**
 
 面向自研 LLVM GPU 后端、GPU Device Runtime、UMD、KMD 及必要的 Firmware/RTL，研究内存越界、生命周期、Initcheck、Racecheck、Synccheck 的可部署方案。正式候选仅包括 B（LLVM Shadow）、C（运行时GPU二进制重写）、D（原对象Bounds/指针身份）、E（混合）、F（实体GPU硬件辅助）。F0 仅页粒度；F1/F2 必须具备真实芯片指令和元数据能力，否则标记不支持。
 
@@ -10,6 +10,7 @@
 - [完整正式调研（23章、28个详细场景）](docs/llvm-gpu-sanitizer-research.md)：厂商比较、目标语义、五种实体GPU候选、对象与指针传播、场景矩阵、验收与性能。
 - [实体GPU产品部署审计](docs/hardware-deployability-audit.md)：方案资格、组件职责、硬件前提和状态界限。
 - [S01 厂商路径与逐组件实施说明](docs/S01-vendor-implementation-guide.md)：NVIDIA默认运行时/编译期Bounds、AMD GPU ASan/Shadow，以及设备区间表、GPU Guard Page与硬件扩展。
+- **[AMD GPU ASan逐组件实施与缺硬件特性替代方案](docs/amd-gpu-asan-hardware-fallback.md)**：官方XNACK/HMM依赖、自研无XNACK设备Shadow、无MMU/Tag/Bounds等条件的真实GPU软件检查、精度和验收矩阵。
 - [B～F生产软件与条件KMD预算（v1.8）](docs/estimates-v1.8.json)：仅生产三组件与新增检查器；单位kLOC，均是设计估算，不是目标源码实测。
 - [S01～S28检测场景及生产职责](docs/llvm-gpu-sanitizer-research.md#detection-scenarios)、[实际组件对照表](docs/llvm-gpu-sanitizer-research.md#scenario-platforms)、[真实GPU验收](docs/llvm-gpu-sanitizer-research.md#validation)。
 - [研究进度](docs/research-progress.md)、[修订历史](docs/revision-history.md)、[文档检查结果](docs/validation-report.json)、[研究资料](docs/research-notes/)。

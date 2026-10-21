@@ -40,7 +40,7 @@ cudaFreeAsync(p, q0);                    // BAD：fixed=false时无使用->free�
 cudaDeviceSynchronize();
 ~~~
 
-**实现路线与观测点。** A同时记录对象epoch、命令DAG、free请求、生效与完成；访问和free无序时报生命周期竞争，free生效后执行的访问报UAF。E由runtime/UMD将free命令及依赖下发，B按设备顺序poison；D2再传播旧指针身份，以覆盖随后同VA复用。free提交不能立即全局poison，同queue排在free之前的合法访问应放行。[N02][N03]
+**实现路线与观测点。** UMD与GPU Device Runtime协同记录对象epoch、命令DAG、free请求、生效与完成；访问和free无序时报生命周期竞争，free生效后执行的访问报UAF。E由runtime/UMD将free命令及依赖下发，B按设备顺序poison；D2再传播旧指针身份，以覆盖随后同VA复用。free提交不能立即全局poison，同queue排在free之前的合法访问应放行。[N02][N03]
 
 **修复、报告与边界。** `fixed=true`建立合法链；同queue中“使用→free”也是合法反例。CUDA规定free操作开始后不能继续使用；`retire complete`是确认退休、回收描述符及后续复用的证据，不应把非法访问边界拖到完成，更不能用Host API返回代替设备时刻。[N08] 报告对象/epoch、最后使用queue与launch、free提交点及缺失依赖；有完成证据时补报实际退休节点。仅监控API调用顺序会误报或漏报；B遇同VA新分配重新unpoison可能漏旧指针，D2仍需完整身份传播；隐藏free、外部queue或不可见依赖必须输出unknown。
 

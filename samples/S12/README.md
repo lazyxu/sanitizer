@@ -38,7 +38,7 @@ for (int k = 0; k < 3; ++k) {
 report_leaks_before_context_teardown(context);
 ~~~
 
-**哪里不对、怎样检。** 错误是拥有型对象在约定检查点仍未释放，不要求GPU非法访存。**真实UMD/Host runtime的allocation账本**在检查点扫描尚未成功free的对象，并由工具报告；它属于生产检查器的一部分，不是模型事件重放产品方案。仅“账本未释放”不能在任意业务中自动证明对象已不可达；本例提供明确scope/引用丢失前提。[N02][L01]
+**哪里不对、怎样检。** 错误是拥有型对象在约定检查点仍未释放，不要求GPU非法访存。**真实UMD/Host runtime的allocation账本**在检查点扫描尚未成功free的对象，并由工具报告；它属于生产Host资源诊断，并不等于GPU内部访存检测。仅“账本未释放”不能在任意业务中自动证明对象已不可达；本例提供明确scope/引用丢失前提。[N02][L01]
 
 **组件观测。** compiler／loader 提供分配调用栈与模块定位；deviceRT 补充设备堆分配、失败结果及释放事件；UMD 等待相关命令完成，在 context 自动回收前取快照。工具自己的 shadow、quarantine 和报告缓冲须与应用账本分开。
 
