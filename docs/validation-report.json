@@ -1,5 +1,5 @@
 {
-  "version": "1.9",
+  "version": "1.10",
   "as_of": "2026-10-21",
   "scope": "repository document and structural evidence only",
   "status": "DOCUMENT_REVIEW; PHYSICAL_GPU_NOT_RUN",
@@ -7,8 +7,8 @@
   "physical_gpu_checker_result": "GPU_NOT_RUN",
   "real_gpu_performance": "NOT_MEASURED",
   "document": "docs/llvm-gpu-sanitizer-research.md",
-  "main_document_blob_sha": "65901d7d21d156f545dc51cb29530c31ee1d2cb2",
-  "main_line_count": 2973,
+  "main_document_blob_sha": "6e36ed92da413edfb3013212a63faf4c5b74ec16",
+  "main_line_count": 2977,
   "chapter_count": 23,
   "scenarios_count": 28,
   "reference_entries": 39,
@@ -148,7 +148,7 @@
   "KMD_increment_condition": "only proven missing production contracts",
   "C_runtime_compiler_source_changes_possible": 0,
   "F_hardware_caveat": "actual GPU silicon must implement feature, otherwise unsupported",
-  "CI_results": "PENDING_BRANCH_STATIC_CI",
+  "CI_results": "AWAITING_HEAD_STATIC_CI",
   "claimed_real_gpu_detection": false,
   "report_meaning": "structural validation evidence, not running code on any target GPU",
   "legacy_text_cleanup": {
@@ -163,5 +163,17 @@
     "status": "DESIGN_ONLY",
     "hardware_requirements": "official ROCm XNACK/HMM distinct from self-hosted GPU-resident Shadow/Bounds",
     "implementation_status": "NOT_IMPLEMENTED_OR_INSPECTED"
+  },
+  "route_taxonomy_audit": {
+    "status": "DOCUMENT_SPECIFIED_NOT_HARDWARE_VERIFIED",
+    "source": "docs/S01-vendor-implementation-guide.md",
+    "B1_I": "LLVM-inserted GPU current Live Allocation table; address validity, not D1 provenance",
+    "B2": "GPU Shadow/Redzone, initial S01 recommendation, not dependent on XNACK in a custom target",
+    "D1": "original object bounds and carried pointer provenance distinct from B1",
+    "F0_G": "auxiliary GPU page-granularity guard; excluded from standalone complete S01 and P+F object-check estimate",
+    "F1_T": "real physical tag hardware only, software tag belongs to device instrumentation/D2",
+    "F2_H": "requires actual physical bounds hardware, otherwise future RTL/ASIC work",
+    "E": "integration of B/D/C, not an independent memory-check predicate",
+    "ROCm_official_xnack": "xnack- stock ROCm device instrumentation unsupported; custom software Shadow requires separate implementation"
   }
 }
