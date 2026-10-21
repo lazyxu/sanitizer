@@ -7,7 +7,7 @@
   "physical_gpu_checker_result": "GPU_NOT_RUN",
   "real_gpu_performance": "NOT_MEASURED",
   "document": "docs/llvm-gpu-sanitizer-research.md",
-  "main_document_blob_sha": "9fb6f1254e2662d863642907b86763cb6bc7ff8a",
+  "main_document_blob_sha": "65901d7d21d156f545dc51cb29530c31ee1d2cb2",
   "main_line_count": 2973,
   "chapter_count": 23,
   "scenarios_count": 28,
@@ -152,9 +152,11 @@
   "claimed_real_gpu_detection": false,
   "report_meaning": "structural validation evidence, not running code on any target GPU",
   "legacy_text_cleanup": {
-    "status": "SCHEME_A_AND_MODEL_SUPPORT_DESCRIPTIONS_REMOVED",
+    "status": "CURRENT_TREE_SCHEME_A_TEXT_REMOVED",
     "scope": "main research, affected samples, implementation comparisons",
-    "static_semantic_regression": "scripts/validate_docs.py"
+    "static_semantic_regression": "scripts/validate_docs.py",
+    "last_audit": "2026-10-21",
+    "additional_regression": "reject independent scheme A validation phrase"
   },
   "amd_hardware_fallback": {
     "document": "docs/amd-gpu-asan-hardware-fallback.md",
