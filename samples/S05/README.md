@@ -17,7 +17,6 @@ python3 scripts/run_samples.py --backend rocm --case S05 --mode both --strict
 
 **预期含义：** `detect` 是厂商官方能力下的期望，不是本项目已检出；`conditional` 需要GPU架构/ISA/执行时序支持；`unsupported` 表示当前选定工具不能保证；`api` 是GPU API错误但不构成GPU kernel内部sanitizer命中；`clean` 是用于排除误报的合法操作。
 
-
 ## 真实场景、错误原因、可检测算法、修复对照及实现要求
 
 以下章节直接对应[主调研文档 §18.5](../../docs/llvm-gpu-sanitizer-research.md#case-s05)的正式原理与验收设计。**其中的CUDA风格伪代码和受控allocator不一定与本目录中可编译程序逐行相同**；两者须按相同违规语义而非源码文字对齐。实际运行前确认目标机器码保留相关访存，不可以假设未定义行为一定触发。
@@ -41,23 +40,20 @@ __global__ void s05(uint8_t *a, View v, int which) {
 
 **哪里不对、怎样检。** M4 需要子对象／view 契约。前一写超出 A 的 3 B；后一写位于 view 外包区间内，却不满足 `row<2 && col<3`。D1设备端检查可以为子对象收窄bounds，并把view形状、步长、坐标验证嵌入实际GPU指令；UMD/框架必须在运行时注册逻辑view。若降成裸指针且索引语义丢失，仅有外包范围不能还原任意 view 的逻辑约束。[P01][L05]
 
-**组件观测。** compiler 保留子对象身份与行列操作；deviceRT 查询对应逻辑描述符；UMD／框架登记 parent、子范围及生存期；cmodel 以合法元素集合对照访问。B 可用更细位图表达特定孔洞，但经典 1:8 的单字节编码不能表示本例“有效三字节、无效两字节、有效三字节”。全局 poison 也不能区分同地址上的多个重叠 view 权限。[L02]
+**组件观测。** compiler 保留子对象身份与行列操作；deviceRT 查询对应逻辑描述符；UMD／框架登记 parent、子范围及生存期；B 可用更细位图表达特定孔洞，但经典 1:8 的单字节编码不能表示本例“有效三字节、无效两字节、有效三字节”。全局 poison 也不能区分同地址上的多个重叠 view 权限。[L02]
 
 **合法反例、修复及报告。** `a[2]` 与 `view_store(v,0,2,...)` 应通过；合法的 pool 管理操作可持有 parent 范围，不能因逻辑孔洞被永久误禁。预期报告 parent／子对象 ID、错误偏移，或 `(row=0,col=3)` 与形状、步长。未登记子分配时只能报告 pool 级覆盖，不能将“地址在 128 B 内”当作 tensor 索引安全。
 
-## 生产方案与两类模型辅助验证职责
-
-**下表只定义如何验证已能在GPU执行的B/C/D/E设备检查器或已存在硬件的F；绝不要求、也不认可将模型侧自定义访存检查作为生产Sanitizer。**
+## 真实GPU生产职责
 
 | 角色 | 正确职责 |
 |---|---|
-| **真实GPU生产Checker** | Compiler/UMD生成设备检查指令，或实际GPU硬件MMU/Tag/Bounds生效；GPU上的报告才是产品验收 |
-| 独立功能级cmodel（验证） | 子对象和stride语义，或执行相应D检查；仅用于运行真实checker产物/参考核对 |
-| **现有QEMU GPU ISA解释器（验证）** | Guest框架/UMD注册子分配，区分父BO和子生命周期；不得仅靠模拟器独有hook宣布真机检测完成 |
-| KMD（生产） | 支撑父映射；同一BO中的tensor边界由上层登记；接口充分时新增代码可为0 |
+| **真实GPU检查／Host API** | Compiler/UMD在真实GPU上部署设备检查指令或使用实体GPU已有硬件检查；设备执行和报告构成证据 |
+| **Compiler／Device Runtime／UMD** | 生成GPU检查代码、维护元数据与生命周期、解码设备报告及覆盖状态 |
+| **KMD（生产）** | 支撑父映射；同一BO中的tensor边界由上层登记；接口充分时新增代码可为0 |
 
 ## 验收需要留下什么证据？
 
-在对应真实GPU上记录：1）硬件型号、驱动和CUDA/ROCm版本；2）编译命令、目标GPU架构及最终ISA访存；3）`--good`正常且无误报；4）`--bad`出现对应的**设备级**GPU检查器报告，或者明确归类为`UNSUPPORTED/NOT_DETECTED/PREREQUISITE_NOT_MET`；5）`results/<backend>/S05.*.log`日志及`summary.json`。CPU ASan、Host API错误和模型独有hook不能冒充真实GPU检查器；GPU MMU fault仅证明符合其硬件页级规则，不等于对象级越界检测。
+在对应真实GPU上记录：1）硬件型号、驱动和CUDA/ROCm版本；2）编译命令、目标GPU架构及最终ISA访存；3）`--good`正常且无误报；4）`--bad`出现对应的**设备级**GPU检查器报告，或者明确归类为`UNSUPPORTED/NOT_DETECTED/PREREQUISITE_NOT_MET`；5）`results/<backend>/S05.*.log`日志及`summary.json`。GPU MMU fault仅证明符合其硬件页级规则，不等于对象级越界检测。
 
 **当前状态：只有源码/文档及CPU静态检查证据，尚无实际GPU编译和sanitizer检出数据。** [GPU CI启用方法](../../docs/gpu-actions-ci.md)说明如何在可信master的NVIDIA/AMD GPU Runner中自动验证。
