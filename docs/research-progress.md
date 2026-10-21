@@ -8,7 +8,7 @@
 |---|---|---|
 | B～F产品准入定义 | 文档已完成 | [研究主稿](llvm-gpu-sanitizer-research.md)第9章 |
 | 逐组件修改位置与关键伪代码 | 文档已完成 | [实现指南](real-gpu-components-implementation.md)覆盖Compiler、Device Runtime、UMD、KMD、Firmware、RTL和CI |
-| S01 NVIDIA/AMD/自研差异比较 | 已更新 | [S01指南](S01-vendor-implementation-guide.md)，全程要求真实GPU执行 |
+| S01 NVIDIA/AMD/自研差异比较 | 已更新 | [S01指南](S01-vendor-implementation-guide.md)与[AMD硬件依赖及替代实现指南](amd-gpu-asan-hardware-fallback.md)，明确XNACK/HMM与自研设备Shadow的不同前提 |
 | 28组S01～S28错误与合法对照 | 已有源码和README | 实际厂商GPU编译/检出结果须运行后再更新 |
 | B/C/D/E/F生产软件预算 | 已重算 | [v1.8预算](estimates-v1.8.json)；未测量目标GPU源码 |
 | LLVM真实设备Sanitizer Pass与设备库 | **未实施** | 首先产生目标ISA检查指令和支持清单 |
