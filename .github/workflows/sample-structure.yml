@@ -24,10 +24,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Compile Python scripts (syntax only)
-        run: python3 -m py_compile scripts/run_samples.py scripts/validate_layout.py tests/test_gpu_runner.py
+        run: python3 -m py_compile scripts/run_samples.py scripts/validate_layout.py scripts/validate_docs.py tests/test_gpu_runner.py
       - name: Bash syntax
         run: bash -n scripts/setup-docker.sh scripts/run-all.sh scripts/ci-gpu.sh
       - name: Validate case source inventory (not nvcc/hipcc)
         run: python3 scripts/validate_layout.py
+      - name: Audit production checker hardware deployability and component ownership
+        run: python3 scripts/validate_docs.py
       - name: Unit-test GPU report classification with synthetic logs
         run: python3 -m unittest discover -s tests -v
