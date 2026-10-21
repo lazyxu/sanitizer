@@ -163,7 +163,7 @@ SanVerdict check_current_allocation(uint64_t addr, uint32_t width,
 }
 ~~~
 
-以上仅是**借鉴公开观察点、独立设计的候选模型**。NVIDIA真实Memcheck如何布置设备元数据、如何与驱动深层配合，不能凭公开Patching API推断细节。并且当前地址有效性检查可能把相邻B识别成合法，属于该等级的已知限制。
+以上仅是**借鉴公开观察点、独立设计的候选实现**。NVIDIA真实Memcheck如何布置设备元数据、如何与驱动深层配合，不能凭公开Patching API推断细节。并且当前地址有效性检查可能把相邻B识别成合法，属于该等级的已知限制。
 
 #### 用 NVIDIA 原生工具先验证 S01
 
@@ -263,6 +263,8 @@ compute-sanitizer --tool memcheck ./s01_ct --bad
 ---
 
 ## 2. 参考 AMDGPU：ROCm GPU AddressSanitizer 怎样检测 S01？
+
+**硬件依赖与替代方案：** 自研GPU无需复制官方ROCm的XNACK/HMM运行前提，但必须在真实GPU上执行设备检查指令。各组件修改、无XNACK/HMM时的显式GPU Shadow替代、无MMU/Tag/Bounds硬件时的可部署软件路径及精度限制，详见[AMD逐组件与硬件替代实施指南](amd-gpu-asan-hardware-fallback.md)。
 
 ### 2.1 官方确认的组成，不是“只有LLVM Pass”
 
