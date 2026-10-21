@@ -53,12 +53,12 @@ v1.5 的56份CUDA/HIP样例与GPU Actions文档保持不变，真实GPU验收仍
 
 ### 1.1 推荐结论
 
-随后增加对象边界与时间身份传播。**
+**建议先用 LLVM B 路线的真实设备 Shadow 检查器建立最小 GPU 内存安全闭环，再增加 D1 原对象边界和 D2 时间身份。**
 
 推荐的建设顺序是：
 
 1. 建设公共底座 P：统一对象登记、异步生命周期、模块能力声明、错误报告和符号化。
-** 不再将模型独有检查器作为产品阶段或候选方案。
+2. 交付可在真实GPU上运行的B路线Global Store检查，直接运行S01合法及越界对照。
 3. 扩展 B 的地址空间和指令覆盖；增加 D1 的编译器对象 bounds 分析，弥补“越界后落入另一合法分配”的漏检。
 4. 对明确需要地址复用后 UAF 检测的场景，再做 D2 的完整指针时间身份传播；与仅查询分配表的方案分别命名、分别验收。
 5. 当闭源库、已有二进制、JIT 模块构成实际覆盖缺口时，增加 E 的二进制补充。C 的工程成本与已有解码、重编码和 patch 基础设施高度相关。
@@ -66,7 +66,7 @@ v1.5 的56份CUDA/HIP样例与GPU Actions文档保持不变，真实GPU验收仍
 
 这一路线要求编译器与UMD可扩展，KMD提供所需映射、完成、故障和终止契约；已有契约充分时可复用，不要求每条路线都新增KMD代码。第一版不必同时完成四类检查器、全部CUDA类功能或完整二进制重写器。
 
-### 1.2 三组件交付与两类验证平台
+### 1.2 三组件交付与真实GPU执行边界
 
 一个LLVM Pass可以插入检查，但不能独自提供资源生存期、特权映射、队列完成或可靠终止。
 
@@ -85,7 +85,7 @@ v1.5 的56份CUDA/HIP样例与GPU Actions文档保持不变，真实GPU验收仍
 
 **第二，分配表 generation 不等于完整时间安全。** 地址重用后，新旧裸指针可以具有完全相同的位值；只有当前对象表而没有指针自身的历史身份，就无法区分两者。D2 必须解决指针身份的生成、传播、存取和跨模块边界。
 
-**第三，插桩能够观察到一次执行，不等于证明所有输入和调度都安全。新近研究也直接讨论了输入依赖和逻辑子分区导致的漏检。[P07]
+**第三，插桩能够观察到一次执行，不等于证明所有输入和调度都安全。** 新近研究也直接讨论了输入依赖和逻辑子分区导致的漏检。[P07]
 
 ### 1.4 立项时最实用的选择表
 
@@ -881,7 +881,7 @@ VFIO文档将设备访问、I/O地址映射及中断等接口分开，并在示�
 
 **地址归一化应保留证据。** 只有存在经过验证的映射关系时，才将不同地址域的访问归一到同一规范对象与偏移。若外部导入接口不能提供足够的来源关联，应标记关联未知并降低跨域检测保证。FD、GEM handle、裸GPUVA或当前物理页号均不宜单独充当全局不可复用的allocation identity。
 
-**虚拟化路径按实际部署填写。** 设备透传时，guest厂商KMD与Host VFIO／IOMMU内核路径的职责不同；不能默认Host还运行同一块设备的原生厂商KMD。虚拟GPU后端若调用Host原生GPU，则guest KMD、后端协议及Host KMD均属于实际路径。纯用户态CPU仿真没有guest内核，不能据此声称验过guest KMD。每种路径仍需分别说明哪一个执行引擎真正执行GPU ISA、在哪一层产生访存检查事件。
+**在真实硬件路径中**，KMD完成GPUVA映射、提交和故障处理；如生产架构采用设备直通，还应区分实际执行检查的物理GPU、Guest驱动和Host IOMMU/Fault管理职责，不能把IOMMU映射当成语言对象边界检查。
 
 #### 逐路线表的阅读口径
 
@@ -949,8 +949,6 @@ Compiler仅对编译插桩路径要求新增源码；纯运行时C使用UMD独�
 
 这里是具备多空间和异常路径处理的内测版本，不是插入几个 load/store helper 的演示程序。
 
-<a id="route-b-platforms"></a>
-
 
 
 ### 10.7 方案出处、融合与本项目原创工作
@@ -1005,8 +1003,6 @@ UMD 在模块加载或 JIT 产物生成后取得目标代码，解析指令与�
 如果全部核心应用都能重编译，而项目尚无成熟的机器码重编码／调试 patch 设施，C 的基础建设通常会挤占最急需的对象与生命周期工作。可以先把模块未覆盖作为可见缺口，等实际闭源覆盖需求出现再补。
 
 若这些前提不存在，还需追加第 16 章列出的基础设施投入。
-
-<a id="route-c-platforms"></a>
 
 
 
@@ -1104,8 +1100,6 @@ cuCatch 中 BST 是 **Base and Size Table**，GPUArmor 的 BST 则可以指 **Bi
 
 只完成 D1 的受控原型应按任务单单独裁剪，不能承诺同时具有完整 D2 能力。
 
-<a id="route-d-platforms"></a>
-
 
 
 ### 12.9 方案出处、融合与本项目原创工作
@@ -1173,8 +1167,6 @@ UMD 依据这些字段选择原代码、已插桩代码、patch 后代码或拒�
 
 E按B全量、D独有部分、C fallback子集和集成去重，不直接叠加B/C/D总量。
 
-<a id="route-e-platforms"></a>
-
 
 
 ### 13.6 方案出处、融合与本项目原创工作
@@ -1227,8 +1219,6 @@ else { declare_partial_coverage(); reject_if_required(); }
 ### 14.4 预算解释
 
 前提是所需硬件能力**已经存在或另有交付，相关KMD基础契约也可复用**。缺少这些能力时，不能用这张软件表报价完整 F。ISA／RTL／DV／固件的新增工作必须另行立项。
-
-<a id="route-f-platforms"></a>
 
 
 
@@ -1820,7 +1810,7 @@ read32<<<1, 1, 0, s>>>(dst, out);         // BAD：fixed=false时消费未定义
 cudaStreamSynchronize(s);
 ~~~
 
-**实现路线与观测点。** A在allocation时置未定义位，按实际byte enable更新store/memset，copy按源位图传播；B额外建设独立初始化bitmap，由Compiler插入load/store检查，Device runtime原子合并共享metadata word。E接入runtime/UMD及copy engine的提交、完成、依赖事件，不能在Host提交copy时提前定义目的端。H2D若只采用“Host来源已定义”假设，须明确其覆盖边界；这属于第15章I1设计，不是普通地址ASan的附赠能力。[N03][L05]
+**实现路线与观测点。** I1设备检查器在allocation时置未定义位，按实际byte enable更新store/memset，copy按源位图传播；B额外建设独立初始化bitmap，由Compiler插入load/store检查，Device runtime原子合并共享metadata word。E接入runtime/UMD及copy engine的提交、完成、依赖事件，不能在Host提交copy时提前定义目的端。H2D若只采用“Host来源已定义”假设，须明确其覆盖边界；这属于第15章I1设计，不是普通地址ASan的附赠能力。[N03][L05]
 
 **修复、报告与边界。** 独立运行`fixed=true`版本，完整有序memset后的读取应无报；另测仅补写byte 3后读取4字节合法、读取8字节仍非法。报告至少给出`dst+3`、读取宽度、未定义byte mask、源allocation和copy链。不得把“向内存store一个来源未定义的寄存器”当作值级定义性已正确实现；完整MSan传播另立能力。若copy engine不可见、只按word标记初始化、未跟踪Host来源或实际指令被消除，均需单列漏检边界。
 
@@ -1845,7 +1835,7 @@ __syncthreads();
 if (tid == 0) out[2] = x;                // 末尾barrier不能倒推消除先前冲突
 ~~~
 
-**实现路线与观测点。** A按`launch/block/shared对象/byte`记录两端PC、线程及barrier epoch，检查重叠字节、至少一写、原子属性和HB。E由Compiler或C补齐实际shared访存与barrier事件，Device runtime使用HB历史或适用同步子集内的层次FSM；状态更新原子不能为应用制造HB。[P02][P03] 以线程32替换线程1、block设64，可扩展为跨warp测试；不同block相同shared偏移必须分离身份。
+**实现路线与观测点。** Racecheck设备检查器按`launch/block/shared对象/byte`记录两端PC、线程及barrier epoch，检查重叠字节、至少一写、原子属性和HB。E由Compiler或C补齐实际shared访存与barrier事件，Device runtime使用HB历史或适用同步子集内的层次FSM；状态更新原子不能为应用制造HB。[P02][P03] 以线程32替换线程1、block设64，可扩展为跨warp测试；不同block相同shared偏移必须分离身份。
 
 **修复、报告与边界。** 将完整block同步放在两段访问之间；WAW可明确先后或令各线程写独立位置。同warp也须按目标规则建立有效同步。报告两个访问位置、R/W类型、字节交集及缺失的HB，不能报成未初始化读取。NVIDIA racecheck的shared范围可作对照，但不推出global覆盖。[N02] 重复读、随机延迟或碰撞方案可能漏同值写、ABA或未命中窗口，应与HB/FSM的适用模型保证分栏。[P08]
 
@@ -1977,7 +1967,7 @@ else {
 __pipeline_wait_prior(0);                // 收尾等待不追溯修复过早读
 ~~~
 
-**实现路线与观测点。** A把异步传输作为独立访问主体，追踪源读／目的写、commit组号、完成及消费者可见性；指令发出不等于目的已经可读。C拦截实际async opcode与wait，或E结合Compiler高层pipeline信息、runtime completion和Device checker；必须关联到同一个传输组／barrier phase，不能把任意wait当作全局完成。[N02][N03]
+**实现路线与观测点。** Synccheck设备检查器把异步传输作为独立访问主体，追踪源读／目的写、commit组号、完成及消费者可见性；指令发出不等于目的已经可读。C拦截实际async opcode与wait，或E结合Compiler高层pipeline信息、runtime completion和Device checker；必须关联到同一个传输组／barrier phase，不能把任意wait当作全局完成。[N02][N03]
 
 **修复、报告与边界。** 读取前`__pipeline_wait_prior(0)`保护本线程已提交批次；其他线程读取时，还需规定的参与同步与可见性。barrier版本要等绑定当前copy的phase：上一phase的token可能仍是合法参数，但成功等待它不证明当前传输已完成；比立即前一phase更旧的token则另属S17。报告copy发起PC、范围、组号／phase、等待实际覆盖范围及过早访问PC。预置0仍可发生传输竞争，不能只依赖I1位图。未观测copy engine、未支持bulk/tensor异步指令、仅观察一次幸运完成顺序均可能漏检；NVIDIA现有shared async-copy检查不能外推为全部引擎覆盖。[N02]
 
@@ -2092,7 +2082,7 @@ write_on_device(owner, a, q0, 3);
 write_on_device(peer,  b, q1, 4);         // BAD②：同对象写写，无跨device依赖
 ~~~
 
-**实现路线与观测点。** A须连同Host访问、peer设备、映射别名及命令同步建模；只模拟GPU访存不能检出CPU对端。E将CPU checker的访问/HB事件、GPU Compiler/C访存事件与UMD的map/import/alias/权限事件归并，以规范对象ID＋偏移匹配；导入产生映射身份，不凭空创建独立所有权。D2能保存身份但仍须另加HB引擎。[N03]
+**实现路线与观测点。** Racecheck设备检查器须连同Host访问、peer设备、映射别名及命令同步建模；只模拟GPU访存不能检出CPU对端。E将CPU checker的访问/HB事件、GPU Compiler/C访存事件与UMD的map/import/alias/权限事件归并，以规范对象ID＋偏移匹配；导入产生映射身份，不凭空创建独立所有权。D2能保存身份但仍须另加HB引擎。[N03]
 
 **修复、报告与边界。** CPU写前等待GPU完成；peer/IPC使用目标支持的跨设备／进程事件或完成协议，并遵守别名一致性规则。system-scope release/acquire只在该内存、地址宽度、对齐及互连支持相互原子性时成为合法反例，device-scope不能同步CPU；驻留、prefetch或映射成功都不建立HB。[N08] 报告CPU/两GPU端PC、device/context、两VA到同对象的关系及缺失同步。若peer未授权，应报权限/不可访问错误，不能以此代称数据race。不可见CPU访问、IPC另一进程、别名漏登记或概率观测窗口未命中均限制覆盖。
 
@@ -2165,7 +2155,7 @@ cudaGraphLaunch(exec, s);                 // BAD：replay 2仍访问旧p
 cudaStreamSynchronize(s);
 ~~~
 
-**实现路线与观测点。** A记录capture节点、每次执行实例、对象创建/释放和节点实际访存；模型若只有VA表也会漏同VA复用，因此必须保留被捕获参数的原身份。E＋D2由runtime为节点参数建立identity sidecar，replay生成新的execution/launch ID，Compiler传播对象ID/epoch至使用点；不能在每次launch按当前VA表重新“认领”新对象。C可补充设备访问，但裸地址补丁无法自行恢复丢失来源。[N03]
+**实现路线与观测点。** Runtime/UMD记录capture节点、每次执行实例、对象创建/释放和节点实际访存；仅凭当前VA映射同样会漏掉地址复用后的旧身份，因此必须保留被捕获参数的原身份。E＋D2由runtime为节点参数建立identity sidecar，replay生成新的execution/launch ID，Compiler传播对象ID/epoch至使用点；不能在每次launch按当前VA表重新“认领”新对象。C可补充设备访问，但裸地址补丁无法自行恢复丢失来源。[N03]
 
 **修复、报告与边界。** 让p存活至所有replay完成，或在受支持更新入口同时替换节点指针和身份。连续合法replay应具有不同执行ID、相同仍live对象epoch；graph内alloc/free节点每次建立新的分配生存期时，才生成相应新allocation epoch，不能机械地按replay全量换epoch。[N08] 报告graph/exec/replay/node ID、旧对象与free位置、若复用则给当前对象身份。B在地址仍poison时可报UAF，复用unpoison后可能漏；未跟踪节点参数更新、间接指针或device-side graph launch时须降级，不能假定每个设备发起replay都有Host回调。[N03]
 
@@ -2413,7 +2403,7 @@ GMSBench 中不同 checker 使用不同适用分母，HiRace 的 code/input 组�
 | M5 生态补充 | E中binary fallback与JIT/外部库 | 4–6人 | 10–18周 | 混合边界无静默漏检 |
 | M6 硬件研究 | 真实GPU瓶颈profile＋ISA/RTL/DV方案 | 跨架构团队 | 单独排期 | 与软件基线的同口径收益 |
 
-M1是**真实GPU代码生成能力的窄原型**，不能将工期预算当成完整P＋B承诺。M3/M4可部分并行。模型独有hook不得作为前置产品方案。第16章旧Q2平台成本仍只按缺失的验证接线计算。
+M1是**真实GPU代码生成能力的窄原型**，不能将工期预算当成完整P＋B承诺。M3/M4可部分并行，条件KMD/Firmware按现有设备接口缺口计费，不能把文档估算直接当成真机交付成本。
 
 ### 20.2 团队职责建议
 
@@ -2445,7 +2435,7 @@ M1是**真实GPU代码生成能力的窄原型**，不能将工期预算当成�
 | metadata和日志OOM | 检查中途失效 | 预算、显式降级、CI失败分类 |
 | 二进制重写覆盖特殊指令不全 | 假clean或错误结果 | opcode清单、拒绝未知指令、差分执行 |
 | 性能优化偷偷降低覆盖 | 看似加速但工具退化 | 性能与覆盖同时验收，采样模式单列 |
-| 模型与真机内存语义不一致 | oracle不可信 | 目标litmus校验、事件差分、保留分歧 |
+| 最终GPU ISA检查语义与访存行为不一致 | 漏检或误报 | 审核设备指令、mask、atomic和真机litmus结果 |
 | KMD只取消未运行job，却承诺运行中abort | 错误后挂死或扩大reset影响 | 分别验证queued cancel、dispatch/context abort和device reset [K01][K02] |
 | 把论文原型当可直接移植软件 | 计划低估、关键组件不可获得 | 核验artifact、实现开放范围和依赖 [P09] |
 | 追逐最低平均overhead | 忽略长尾和实际业务 | 使用自己的应用分布与端到端基线 |
@@ -2464,14 +2454,13 @@ M1是**真实GPU代码生成能力的窄原型**，不能将工期预算当成�
 5. 原子宽度、memory order/scope和支持的同步原语。
 6. Host分配、设备分配、pool、VMM、managed、IPC、peer、图和JIT API清单。
 7. KMD的OS/驱动架构、BO/GPUVA/导入接口、可执行代码加载、依赖与完成fence、fault精度，以及queued cancel、运行中abort、context/device reset的真实能力。
-9. 真正要支持的语言／框架与闭源模块比例。
-10. 第一版是开发者工具、CI工具，还是更强的运行时防护需求。
-11. 必须支持的地址空间和错误类型，特别是对象／子对象与复用UAF。
-需进一步核查现有GPU执行器的源码入口、CPU accelerator、设备前端、GPU MMU/VRAM/DMA/IRQ、Guest驱动、访存前hook、快照/重放和故障注入现状。
-如果不共用，它们的ISA语义差分接口如何设计；GPUVA/Guest/Host地址域转换及Guest/Host KMD边界；Q3的VFIO能力单独核查。
-14. 可投入团队、可用真机、允许的显存和性能预算；
+8. 真正要支持的语言／框架与闭源模块比例。
+9. 第一版是开发者工具、CI工具，还是更强的运行时防护需求。
+10. 必须支持的地址空间和错误类型，特别是对象／子对象与复用UAF。
+11. 真实物理GPU的MMU/Tag/Bounds现有能力、fault精度、abort及Firmware接口。
+12. 可投入团队、可用真机、允许的显存和性能预算。
 
-回答这些参数后，应优先修订第16章的估算和第20章排期，再进入具体实现设计。本轮结论已经足以决定首个原型的方向：公共P＋真机B＋独立A校验，以及明确预留D的对象身份协议。
+回答这些参数后，应优先修订第16章的估算和第20章排期，再进入具体实现设计。本轮结论已经足以决定首个原型的方向：公共P＋真机B设备检查与S01正反例，以及明确预留D的对象身份协议。
 
 <a id="references"></a>
 
