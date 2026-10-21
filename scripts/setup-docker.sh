@@ -18,7 +18,8 @@ if [[ "$action" == "--build-only" ]]; then
   exit 0
 fi
 [[ "$(uname -s)" == "Linux" ]] || { echo "需要Linux GPU宿主机或正确配置的虚拟化GPU透传" >&2; exit 4; }
-args=(run --rm -it -v "$root:/workspace" -w /workspace -e "SAN_BACKEND=$backend" -e "ROCM_ARCH=${ROCM_ARCH:-}" -e "HSA_XNACK=${HSA_XNACK:-}" -e "CUDA_ARCH=${CUDA_ARCH:-}" --ipc=host)
+args=(run --rm -i -v "$root:/workspace" -w /workspace -e "SAN_BACKEND=$backend" -e "ROCM_ARCH=${ROCM_ARCH:-}" -e "HSA_XNACK=${HSA_XNACK:-}" -e "CUDA_ARCH=${CUDA_ARCH:-}" --ipc=host)
+if [[ -t 0 && -t 1 ]]; then args+=(-t); fi
 if [[ "$backend" == "cuda" ]]; then
   args+=(--gpus all)
 else
