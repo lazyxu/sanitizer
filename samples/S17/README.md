@@ -47,16 +47,13 @@ __mbarrier_test_wait(&b, t0);             // BAD②：token早于立即前一pha
 
 若目标token仅编码phase parity，phase 0与phase 2可能具有相同值，纯token值或当前硬件状态不能保证识别这种ABA。A须额外保留token来源phase；E要保证旧token识别，须传播barrier身份和完整phase代数等sidecar。缺少该来源／epoch信息时，只能声明部分错配检测，不能宣称完整phase覆盖。
 
-## 生产方案与两类模型辅助验证职责
-
-**本场景只能由真实GPU设备代码或者已实现的硬件检查机制提供产品保证；模拟器和QEMU不能单独增加真机检测能力。**
+## 真实GPU生产职责
 
 | 角色 | 正确职责 |
 |---|---|
-| **真实GPU生产Checker** | 编译/运行时GPU检查ISA、GPU设备运行库、或受支持硬件MMU/Tag/Bounds；必须真机执行及报告 |
-| 独立功能级cmodel（验证） | live参与集合、完整phase来源与等待依赖；用真实checker产物做语义预验证 |
-| **现有QEMU GPU ISA解释器（验证）** | 模型违规→IRQ/故障→Guest终止链；注入与真实检测分开；模型独有hook不得计GPU产品实现 |
-| KMD（生产） | 有效终止／reset和错误通知；超时不等于证明phase错误；原接口满足契约时不新增代码 |
+| **真实GPU检查／Host API** | 仅实际GPU设备指令或实体GPU硬件检查产生产品检测证据；Host API误用须另列 |
+| **Compiler／Device Runtime／UMD** | 维护GPU检查代码、对象与生命周期、报告和覆盖状态 |
+| **KMD（生产）** | 有效终止／reset和错误通知；超时不等于证明phase错误；原接口满足契约时不新增代码 |
 
 ## 验收需要留下什么证据？
 
