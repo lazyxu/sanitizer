@@ -2,7 +2,7 @@
 
 **版本 v1.9（2026-10-21）· 文档及工程伪代码阶段，目标自研 GPU 尚无实卡检出验收。**
 
-面向自研 LLVM GPU 后端、GPU Device Runtime、UMD、KMD 及必要的 Firmware/RTL，研究内存越界、生命周期、Initcheck、Racecheck、Synccheck 的可部署方案。正式候选仅包括 B（LLVM Shadow）、C（运行时GPU二进制重写）、D（原对象Bounds/指针身份）、E（混合）、F（实体GPU硬件辅助）。F0 仅页粒度；F1/F2 必须具备真实芯片指令和元数据能力，否则标记不支持。
+面向自研 LLVM GPU 后端、GPU Device Runtime、UMD、KMD 及必要的 Firmware/RTL，研究内存越界、生命周期、Initcheck、Racecheck、Synccheck 的可部署方案。正式候选仅包括 B（LLVM编译期地址检查：B2 Shadow或B1当前Live区间表）、C（运行时GPU二进制重写）、D（D1原对象Bounds/D2指针身份）、E（混合**集成策略**）、F（目标GPU确有Tag/Bounds时的硬件检查）。**方案I归B1，G/F0只是辅助页保护实验，不是独立完整Sanitizer；软件Tag不是硬件F1，F2缺芯片时只是研发方向。**
 
 ## 主要文档
 
@@ -19,11 +19,11 @@
 
 | 路线 | 检查真正生效的位置 | Compiler生产源码 | UMD | KMD/实体硬件门槛 |
 |---|---|---|---|---|
-| B | GPU执行LLVM生成的Shadow检查ISA | 需要LLVM GPU Pass/后端适配 | Shadow、生命周期、报告 | 实际Metadata映射/完成契约 |
+| B | GPU执行LLVM生成的B2 Shadow或B1当前Live区间表检查ISA | 需要LLVM GPU Pass/后端适配 | Shadow/对象表、生命周期、报告 | 实际Metadata映射/完成契约；不以XNACK为自研必需能力 |
 | C | GPU执行UMD改写后的设备Binary | **可以零修改** | 独立机器码重写器、装载/PC映射 | 正规可执行映射及设备终止语义 |
 | D | GPU检查原对象Bounds及身份代次 | D1/D2来源传播必需 | sidecar、对象epoch、ABI | Metadata/报告可靠可见 |
-| E | GPU分别执行经协商的编译或运行时检查 | 受控插桩与manifest | 混合模式与统一元数据 | 共享依赖不重复实现 |
-| F | 实体GPU自身MMU/Tag/Bounds检查 | 视已存在ISA支持情况 | 硬件上下文和元数据初始化 | **必须有真实硬件能力** |
+| E（集成） | GPU执行B/D/C已实现检查，UMD按模块协商 | 受控插桩与manifest | 混合模式与统一元数据 | 不新增独立访存判断算法 |
+| F | 实体GPU实际具备的Tag/Bounds检查 | 视真实ISA支持情况 | 硬件上下文和元数据初始化 | **必须有F1/F2真实硬件；F0页保护仅辅助** |
 
 **关键界限：** Device Runtime虽可归Compiler交付，但实际在GPU上执行。既有KMD资源契约充分时可零新增；不意味着可以省去KMD契约验证。未能可靠处理元数据失败、GPU fault/abort、未知opcode或未覆盖模块时，必须报告 UNSUPPORTED / TOOL_FAILURE / PARTIAL_COVERAGE，不能默认为干净执行。
 
@@ -33,7 +33,7 @@
 - [Docker环境](scripts/setup-docker.sh)：`./scripts/setup-docker.sh cuda`，或`ROCM_ARCH=gfx90a:xnack+ HSA_XNACK=1 ./scripts/setup-docker.sh rocm`；运行`./scripts/run-all.sh cuda|rocm`。
 - [GPU硬件GitHub Actions](.github/workflows/gpu-hardware.yml)和[Runner配置说明](docs/gpu-actions-ci.md)：必须有实体GPU可见的Runner及匹配驱动/SDK；未调度显示 GPU_NOT_RUN。
 - [CPU静态CI](.github/workflows/sample-structure.yml)：只验证样例、文档和合成日志，绝不是GPU实卡检测。
-- [GPU真实Guard Page实验](samples/experiments/gpu-guard-page/README.md)：使用GPU VMM、GPU fault，不能拿CPU页保护代替。
+- [GPU真实Guard Page辅助实验](samples/experiments/gpu-guard-page/README.md)：仅验证GPU VMM和页级fault，**不构成完整S01地址Sanitizer方案**，也不是CPU页保护。
 - 文档一致性：`python3 scripts/validate_docs.py`；样例结构：`python3 scripts/validate_layout.py`。
 
 ## 实施顺序
