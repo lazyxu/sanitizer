@@ -1,16 +1,16 @@
 {
   "status": "pass",
   "document": "docs/llvm-gpu-sanitizer-research.md",
-  "version": "1.6.1",
+  "version": "1.7",
   "checked_on": "2026-10-21",
-  "bytes": 332070,
-  "lines": 3384,
+  "bytes": 327716,
+  "lines": 3330,
   "sha256": null,
   "chapters": 23,
   "scenarios": 28,
   "unique_references": 44,
-  "tables": 86,
-  "fenced_blocks": 52,
+  "tables": 93,
+  "fenced_blocks": 51,
   "prior_document_sha256": "d373c9a6d4bb0dce6476f416b0a4dc7e76ea7606799306c249d8b7ac897e72a7",
   "baseline_commit": "198e82fad1d4273e3711ef15bb95ff25520b2d38",
   "checks": {
@@ -413,15 +413,16 @@
     }
   ],
   "not_performed": [
-    "No compilation or execution of NVIDIA/AMD GPU samples or the new illustrative implementation snippets",
-    "No running of user LLVM GPU backend, kernel mode driver, user mode driver, standalone cmodel, or QEMU GPU ISA execution model",
-    "No new real hardware GPU sanitizer results; GPU CI remains opt-in and may show Skipped",
-    "No audit of target ISA opcode support, device shadow layout or real KMD/UMD APIs",
-    "No scientific novelty claim for known ASan, shadow, fat pointers or tagging algorithms"
+    "No compilation of target self-developed LLVM GPU sanitizer into device ISA",
+    "No implementation testing of production UMD, KMD or binary rewriter",
+    "No user cmodel or QEMU GPU ISA emulator execution performed",
+    "No physical NVIDIA/AMD GPU sanitizer run from this chat; GitHub hardware workflow skipped",
+    "No real performance, occupancy, memory overhead or hardware-error-report measurements",
+    "No production environment acceptance claimed"
   ],
   "interpretation": "Document consistency and design review only; not a claim of sanitizer implementation correctness.",
-  "sha256_note": "Exact GitHub blob SHAs recorded; no separately computed SHA-256",
-  "github_blob_sha": "0d4fb4b8fe6aafa79329c7f39106a793b6165f39",
+  "sha256_note": "v1.7 checked via GitHub blob SHA, no independent SHA256 hash recorded",
+  "github_blob_sha": "22f88b339331f69dceb6ff587919026de865cccc",
   "v13_check_results": {
     "main_chapters": true,
     "cases": true,
@@ -568,5 +569,52 @@
       30,
       58
     ]
+  },
+  "v17_hardware_deployability_audit": {
+    "policy": "Production checker must execute GPU instructions on real hardware or be supplied by actual physical GPU MMU/Tag/Bounds. Model-only cmodel/QEMU access-hook checker is not a product route.",
+    "active_product_routes": [
+      "B",
+      "C",
+      "D",
+      "E",
+      "F"
+    ],
+    "retired_product_route": "A / model-only method M",
+    "model_role": "Verification of SAME executable GPU check binary and Guest UMD/KMD integration ONLY; optional independent reference oracle is testing code",
+    "guide": "docs/S01-vendor-implementation-guide.md",
+    "guide_blob_sha": "771b58e356436d4ae470a50e87aed6b9e9e6372c",
+    "audit": "docs/hardware-deployability-audit.md",
+    "audit_blob_sha": "bbc8ea35ca9d462011621f2b5ada09e7c2ec2485",
+    "structural_checks": {
+      "main_chapters_23": true,
+      "all_s01_s28_preserved": true,
+      "references_44_resolve": true,
+      "main_tables_consistent": true,
+      "main_fence_blocks_balanced": true,
+      "anchors_valid": true,
+      "guide_no_product_scheme_M": true,
+      "guide_hardware_first": true,
+      "active_budget_only_B_to_F": true,
+      "retired_model_standalone_estimate_absent": true,
+      "readmes_28_hardware_only_tested": true,
+      "C_runtime_compiler_change_not_mandatory": true,
+      "KMD_actual_source_change_conditional": true
+    },
+    "validation_ci": {
+      "workflow": "GPU sample static checks (CPU only, not GPU validation)",
+      "result": "success",
+      "run_url": "https://github.com/lazyxu/sanitizer/actions/runs/39569103042",
+      "head_commit": "f46adbcbc539f6d0caa46f95ff5a4f1d730eab72",
+      "checks": "Python/Bash, sample layout, synthetic device report tests, hardware-only documentation regression test",
+      "context": "This success proves only structure and simulated diagnostic classification. Not GPU hardware execution."
+    },
+    "hardware_ci": {
+      "status": "SKIPPED, not performed",
+      "run_url": "https://github.com/lazyxu/sanitizer/actions/runs/39569103119",
+      "blocking_condition": "GPU_CI_ENABLED not configured and no actual accessible NVIDIA/AMD GPU Runner confirmed",
+      "real_gpu_detected_samples": 0,
+      "real_gpu_tests_performed": 0
+    },
+    "implementation_status": "DOCUMENT_AND_SAMPLE_AUDIT_ONLY; NO CUSTOM GPU SANITIZER IMPLEMENTATION"
   }
 }
