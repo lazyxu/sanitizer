@@ -484,7 +484,7 @@ for (auto granule : real_accessed_tag_granules(addr,width)) {
 - Compiler：为实际访存携带expected object descriptor ID/Base/Size、生成检查指令或硬件元数据寄存器。
 - KMD：管理硬件metadata上下文、BO/GPUVA一致性、context切换、fault与隔离。
 - UMD：descriptor生命周期、allocation ID、发布/撤销与queue顺序。
-**功能模型正确不等于RTL、时序、面积或性能已验证**。
+**只有实体芯片上的对应硬件检查与故障反馈经过实测，才能作为硬件功能有效性的证据**。
 
 只有B式真实GPU软件检查发现性能瓶颈，再立项新ISA/RTL/DV与真机验收。
 
@@ -574,4 +574,4 @@ struct SanReport {
 | CUDA GPU VMM | [CUDA Driver Virtual Memory Management](https://docs.nvidia.com/cuda/cuda-driver-api/cuda_driver_api/group__CUDA__VA.html) | GPUVA预留/映射/访问权限 | MMU映射成功等于64B逻辑边界合法 |
 | AMD HIP GPU VMM | [HIP Virtual Memory Management](https://rocm.docs.amd.com/projects/HIP/en/latest/how-to/hip_runtime_api/memory_management/virtual_memory.html) | GPU VMM、权限和页粒度 | GPU页级Guard能检所有4B越界 |
 
-**本文的落实结论：** S01第一条产品路线是**借鉴AMD/LLVM的真实GPU设备Shadow检查**：LLVM Pass产生设备ISA，UMD维护Shadow与报告，KMD提供映射与完成。真机的对应报告才完成验收。在这个基础上可融合NVIDIA编译期原对象Base/Bounds；只有不可重编译模块确实存在时再建设NVIDIA式UMD二进制插桩。独立模型访存检查已退出全部产品路线。KMD按缺失契约改，不为了S01重新设计整个驱动；硬件Tag/Bounds晚于软件基线性能分析。
+**本文的落实结论：** S01第一条产品路线是**借鉴AMD/LLVM的真实GPU设备Shadow检查**：LLVM Pass产生设备ISA，UMD维护Shadow与报告，KMD提供映射与完成。真机的对应报告才完成验收。在这个基础上可融合NVIDIA编译期原对象Base/Bounds；只有不可重编译模块确实存在时再建设NVIDIA式UMD二进制插桩。KMD按缺失契约改，不为了S01重新设计整个驱动；硬件Tag/Bounds晚于软件基线性能分析。
