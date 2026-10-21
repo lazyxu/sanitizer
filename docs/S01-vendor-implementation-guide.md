@@ -1,10 +1,10 @@
 # S01 工程实施指南：先看 NVIDIA、再看 AMD，最后比较其他方案
 
-**版本 1.1（澄清运行时二进制插桩的编译器零改动边界）· 2026-10-21 · 适用对象：自研 LLVM GPU 编译器、KMD、UMD、功能级 cmodel、已有目标 GPU ISA 执行器的 QEMU 全系统平台。**
+**版本 1.2（移除仅cmodel/QEMU可用的产品方案）· 2026-10-21 · 适用对象：自研 LLVM GPU 编译器、KMD、UMD、功能级 cmodel、已有目标 GPU ISA 执行器的 QEMU 全系统平台。**
 
 > 本文是面向研发落地的**厂商方案优先**设计说明，不是某个闭源 GPU Sanitizer 的反编译说明。凡“厂商官方确认”的机制都给出来源与限长英文原文；凡没有公开具体实现的数据结构、ISA 注入方法或内核接口，均明确写作**本项目建议实现**，不冒充 NVIDIA/AMD 的私有实现。
 >
-> 本项目已有的 QEMU 全系统虚拟平台**能够执行目标 GPU ISA**。所以下文 QEMU 修改是现有 GPU 解释器的事件钩子、对象/Shadow 接入和报告验证，不再包括从零开发 GPU ISA 执行器。未看到项目具体源码之前，不声称这些接线已经完成。
+> 本项目已有的QEMU全系统虚拟平台**能够执行目标GPU ISA**，但**只有模型解释器执行的Host侧检查不能部署到真实GPU**。QEMU/cmodel只用来预验证**真正生成的GPU检查ISA或已存在硬件语义**，不再提供独立方案M；真实GPU没有对应Checker/硬件能力的方案不能验收或列为当前产品能力。
 
 ## 0. S01 应交付的检测保证（先固定问题）
 
@@ -44,8 +44,8 @@ bool within(uint64_t addr, uint64_t width,
 | Compiler | 为编译期方案插桩、保留原对象或调试映射；**NVIDIA-R纯运行时模式无需它参与** | **NVIDIA-R：生产编译器可保持完全不改（新增0）**。可选择复用现有MC库，或由UMD侧独立开发机器码解码器；AMD式LLVM ASan与NVIDIA编译期式Bounds才需要编译器改动 |
 | KMD | GPUVA/BO映射、执行提交与完成、所选错误策略需要的fault/abort或reset | 有足够既有契约则可以新增 **0**；KMD不应代替UMD凭空推断每个tensor长度 |
 | UMD | 用户逻辑 requested_size、分配/释放与异步顺序、module load/patch、Shadow/对象表、诊断解析 | 各真机方案都需要UMD侧可靠对象事件，但实现量不同 |
-| 功能级 cmodel | 可选独立地址/原对象 oracle 和访存语义差分 | 如果希望独立判定错误，需要模型hook/参考检查器，不是只运行一次插桩后的代码 |
-| **已有 QEMU GPU ISA 模型** | 贯通 Guest UMD/KMD 与模型的真实GPU访存前检查及错误回传 | **GPU ISA执行核心已有，不重复开发**；新增的只是缺失的hook/metadata/report桥及目标新增指令语义 |
+| 功能级cmodel（仅测试） | 执行B/C/D/E编译或补丁生成的同一GPU检查ISA，辅助比对地址/原对象参考数据 | **仅模型hook不构成生产检测器**；模型参考算法不能提供硬件不存在的保证 |
+| **已有QEMU GPU ISA模型（仅测试）** | 执行实际GPU检查产物，联调Guest UMD/KMD Shadow/描述符与报告 | **不得先做QEMU私有访存hook作为Sanitizer产品实现**；已有ISA核心只需验证设备Checker语义及缺失桥接 |
 
 ---
 
@@ -429,31 +429,11 @@ AMD官方文档明确要求 `--offload-arch=gfx...:xnack+`，并指出在 `xnack
 
 ---
 
-## 3. 其他方案（每个方案按组件列任务，不再用A/B/C代替厂商）
+## 3. 其他可以在真实GPU运行的方案（模拟器只能验证）
 
-### 3.1 方案M：直接在功能级cmodel/现有QEMU GPU ISA执行器检查
+### 3.1 方案I：LLVM编译插桩＋当前Live Allocation区间表（无Shadow）
 
-**出处：** 通用内存区间判定＋QEMU设备模型架构；**本项目新增的是GPU访存语义hook和oracle，非照搬某厂商GPU memcheck源码**。
-
-- Compiler：A0模型检查可不插桩；保留用于PC→源行的debug map。
-- KMD：独立cmodel可不经过KMD；在全系统QEMU里使用已有Guest KMD/UMD映射与错误回传。
-- UMD：发布请求的逻辑对象大小、分配/释放事件和launch ID（不是只有BO地址）。
-- cmodel：在实际Global Load/Store生效前查询逻辑区间（检查active lane、4B宽度和完整范围），非法时生成参考报告并阻止模型store。
-- 现有QEMU ISA执行器：复用已有解释器，只加缺失的pre-memory-effect hook和Guest报告；若与独立cmodel共用检查实现，再用另一份独立参考算法验证。
-
-~~~cpp
-// 要插在已有GPU ISA执行器语义入口，而不是CPU TCG访存回调。
-if (lane_active && opcode_is_effective_global_store) {
-    GpuAccess a = decode_actual_access(pc, lane, predicate, byte_enable);
-    SanVerdict result = reference_objects.check_range(a.gpuva, a.bytes);
-    if (result != SanVerdict::VALID) report_and_suppress(a, result);
-    else execute_store(a);
-}
-~~~
-
-**优势：** 不需要真实硬件就能开始验证事件/对象语义；**限制：** 模型通过不证明真机GPUASan、性能或所有合法调度，也不能把同一GPU模型在两个启动器上跑两次当独立证明。
-
-### 3.2 方案I：LLVM编译插桩＋当前Live Allocation区间表（无Shadow）
+**硬件准入：本方案不是Host区间查询，必须是LLVM在GPU Load/Store前插入**可在实体GPU执行**的设备区间查询代码。**
 
 **出处：** LLVM访存插桩组织＋通用有序区间索引；**是针对自研GPU的简化工程方案，不是声称AMD当前产品采用这种表**。
 
@@ -475,7 +455,7 @@ SanVerdict check_interval(GPUVA addr, uint64_t width, IntervalTable table) {
 
 **优点：** 数据结构易读、快速打通端到端；**限制：** 每次设备访存二分查找比Shadow热路径重，外部未登记地址必须声明覆盖缺口，跨到另一Live对象B仍会漏掉原对象语义。
 
-### 3.3 方案G：GPU MMU Guard Page（F0）
+### 3.2 方案G：GPU MMU Guard Page（F0）
 
 **出处：** NVIDIA CUDA Driver VMM与AMD HIP VMM中的设备虚拟地址/权限接口；**并非CPU Guard Page也不是CPU ASan**。完整现有双厂商演示：[GPU Guard Page样例](../samples/experiments/gpu-guard-page/README.md)。
 
@@ -495,7 +475,7 @@ p[0] → legal; p[1] → GPU page fault
 
 **重要局限：** GPU页粒度通常远大于64B，`a[16]`若仍处在已映射页内不会触发Guard Page。也可能只得到粗粒度GPU fault而非精确对象诊断；因此只能作KMD/fault验证和特定跨页错误捕捉。
 
-### 3.4 方案T：Pointer/Memory Tag（F1）
+### 3.3 方案T：Pointer/Memory Tag（F1）
 
 **出处：** LLVM [HWASan Design](https://clang.llvm.org/docs/HardwareAssistedAddressSanitizerDesign.html)，属于通用tag技术而非本项目原创算法。
 
@@ -511,9 +491,9 @@ for (auto granule : real_accessed_tag_granules(addr,width)) {
 }
 ~~~
 
-**局限：** tag碰撞、同一tag粒度内小越界及逻辑重叠对象；tag相等并不等于任意原对象Bounds都正确。
+**硬件准入：** 如果当前真实GPU没有Tag比较指令或软件Tag插桩产物，就只能作为未来研究，不算已可用的GPU检测方案。**局限：** Tag碰撞、同一granule小越界和逻辑重叠对象，Tag相等不等于原对象bounds正确。
 
-### 3.5 方案H：新硬件 Bounds Check／Metadata Cache（F2）
+### 3.4 方案H：新硬件 Bounds Check／Metadata Cache（F2）
 
 **出处：** NVIDIA编译期原对象分析、cuCatch/GPUArmor公开研究的对象元数据思路。具体目标GPU ISA、metadata cache和RTL由本项目**自主工程实现**，不声称学术首次提出Bounds算法。
 
@@ -523,9 +503,9 @@ for (auto granule : real_accessed_tag_granules(addr,width)) {
 - cmodel：增加新ISA的bounds校验、fault、状态转移。
 - 已有QEMU：扩展现有解释器的新Bounds指令/metadata语义及驱动接口；**功能模型正确不等于RTL、时序、面积或性能已验证**。
 
-只有真机B式软件实现显示出可定位的寄存器、显存访存、延迟/带宽瓶颈后，才值得评估硬件辅助。
+**硬件准入：** 如果当前GPU尚无新Bounds/Metadata检查硬件，本方案只属于待开发芯片特性，不能靠在QEMU实现新指令宣布S01设备Sanitizer有效。只有B式真实GPU软件检查发现性能瓶颈，再立项新ISA/RTL/DV与真机验收。
 
-### 3.6 方案E：NVIDIA Hybrid策略＋AMD/LLVM Shadow＋D1 Bounds＋受控Binary fallback
+### 3.5 方案E：NVIDIA Hybrid策略＋AMD/LLVM Shadow＋D1 Bounds＋受控Binary fallback
 
 **出处：** NVIDIA手册的Hybrid Instrumentation、AMD/LLVM GPU ASan Shadow与NVIDIA编译期Bounds构成**多源融合工程方案**。不是直接从某个厂商仓库复制现成混合系统。
 
@@ -541,16 +521,18 @@ for (auto granule : real_accessed_tag_granules(addr,width)) {
 
 ## 4. 针对S01的最终选型与任务拆分
 
+**交付条件：每个P0阶段必须产出真实GPU能执行的检查指令与UMD/KMD资源协议；QEMU只在此后测试同一份检查产物。模型独有oracle只属于辅助测试，不能设为独立产品里程碑。**
+
 | 交付阶段 | 具体实现 | 真实证据 | 是否优先 |
 |---|---|---|---|
-| S01-0 模型基线 | **现有QEMU GPU ISA执行器**增加实际Global访问前hook；UMD对象表输入64B逻辑范围；独立oracle | 0、15合法，-1、16非法，只有实际活跃lane报告；Guest回传 | **P0** |
-| S01-1 AMD/LLVM式真机检查 | Compiler给Global load/store插ASan式check；UMD DebugAllocator/Shadow；复用KMD资源与完成 | 真机GPU设备越界报告、源PC、对象范围；legal/invalid差分；最终ISA覆盖 | **P0** |
+| S01-0 **真实GPU设备代码原型** | **先**实现LLVM Global Store设备插桩＋UMD 64B逻辑对象及Shadow/Redzone，KMD复用有效映射/完成；生成可在实体GPU运行的Binary | 目标GPU ISA确实包含Checker；在实体GPU可运行时记录原PC、lane、错误与合法对照 | **P0** |
+| S01-1 **模型预验证同一设备产物＋真机验收** | QEMU执行S01-0产出的**同一GPU插桩Binary**与UMD Shadow/Report协议；随后在真实GPU上运行正反例 | QEMU用于提前核对ISA/Guest链路；**最终真机设备Checker报告才是验收证据** | **P0** |
 | S01-2 优化与边界 | 跨Shadow granule、1/2/4/8/16 B、mask、atomic、异步poison顺序 | 扩展用例通过、工具资源不足显示不完整、三性能基线 | P1 |
 | S01-3 NVIDIA编译期Bounds融合 | 直接Kernel指针参数base/size sidecar，GEP/phi/select传播；未知来源明确降级 | A越界落入B仍检出，合法B来源访问通过（S04） | P1/P2 |
 | S01-4 NVIDIA运行期fallback | 仅当存在不可重编译Kernel且有成熟rewriter时建设 | patch前后合法行为、PC/资源重定位、覆盖manifest | 按需 |
 | S01-5 GPU MMU/Tag/硬件 | F0做KMD fault验证；F1/F2按硬件规划 | 页级对照与字节级检查分离，后者需RTL/DV另立项 | 可选 |
 
-**第一版必须交付的ABI建议：**
+**第一版真正需要交付到实体GPU的Checker与UMD ABI建议：**
 
 ~~~cpp
 struct SanAccessEvent {
@@ -576,7 +558,7 @@ struct SanReport {
 
 ### S01最小验收矩阵
 
-| 用例 | 模型或GPU期望 |
+| 用例 | **真实GPU设备检查器**期望（QEMU只预验证） |
 |---|---|
 | `a[0]`、`a[15]` | 正常、无报错 |
 | `a[-1]`、`a[16]` | 在明确无效redzone/受控布局下报告Underflow/Overflow |
@@ -611,4 +593,4 @@ struct SanReport {
 | CUDA GPU VMM | [CUDA Driver Virtual Memory Management](https://docs.nvidia.com/cuda/cuda-driver-api/cuda_driver_api/group__CUDA__VA.html) | GPUVA预留/映射/访问权限 | MMU映射成功等于64B逻辑边界合法 |
 | AMD HIP GPU VMM | [HIP Virtual Memory Management](https://rocm.docs.amd.com/projects/HIP/en/latest/how-to/hip_runtime_api/memory_management/virtual_memory.html) | GPU VMM、权限和页粒度 | GPU页级Guard能检所有4B越界 |
 
-**本文的落实结论：** S01 第一条实际工程路线是“**已有QEMU GPU ISA模型的独立oracle＋借鉴AMD/LLVM的设备Shadow检查**”；在这个基础上，再融合“NVIDIA编译期Base/Bounds原对象分析”；只有不可重编译覆盖缺口确实存在时，才建设NVIDIA式运行时二进制插桩。KMD按缺失契约改，不为了S01重新设计整个驱动；硬件Tag/Bounds晚于软件基线性能分析。
+**本文的落实结论：** S01第一条产品路线是**借鉴AMD/LLVM的真实GPU设备Shadow检查**：LLVM Pass产生设备ISA，UMD维护Shadow与报告，KMD提供映射与完成。**随后**QEMU/cmodel运行**同一份设备检查产物**做预验证；真机的对应报告才完成验收。在这个基础上可融合NVIDIA编译期原对象Base/Bounds；只有不可重编译模块确实存在时再建设NVIDIA式UMD二进制插桩。独立模型访存检查已退出全部产品路线。KMD按缺失契约改，不为了S01重新设计整个驱动；硬件Tag/Bounds晚于软件基线性能分析。
