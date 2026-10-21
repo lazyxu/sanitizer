@@ -35,22 +35,25 @@ __global__ void s03(const uint8_t *bytes, uint32_t *out) {
 // s03<<<1,32>>>(bytes, out);
 ~~~
 
-**哪里不对、怎样检。** 应验证的是该目标操作要求的对齐，即 `address % 4 == 0`，并另行验证范围。A0 在解释实际 opcode 时检查对齐；C 可对已明确解码的同类指令插入模运算／位检查。两者均须使用指令契约，不能因为源码类型为 `uint32_t` 就断言任何机器访问都必须对齐。B 的普通可访问性 shadow 和 D1 的 bounds 查询会接受这四字节，只有额外插入对齐条件才具有本例能力。[L05][N02]
+**哪里不对、怎样检。** 应验证的是该目标操作要求的对齐，即 `address % 4 == 0`，并另行验证范围。真实GPU上的B可在已声明对齐要求下插入设备对齐检查；C可以针对已准确解码的目标指令插入设备端模运算／位检查。两者均须使用指令契约，不能因为源码类型为 `uint32_t` 就断言任何机器访问都必须对齐。B 的普通可访问性 shadow 和 D1 的 bounds 查询会接受这四字节，只有额外插入对齐条件才具有本例能力。[L05][N02]
 
 **组件观测。** compiler 必须区分目标硬约束、IR 的 `align` 承诺和实际降级生成的操作；若向 IR 提供了错误的强对齐承诺，优化器可能先利用未定义行为，不能靠事后插桩恢复被删去的访问。deviceRT 输出要求值与实际余数；UMD 提供分配基址；cmodel 在指令生效前比对 ISA 规则，不能只看宿主机模拟读写是否成功。
 
 **合法反例、修复及报告。** 改用 `bytes+4`，或使用目标明确允许非对齐的字节读取／拷贝路径，应通过。预期报告 `MISALIGNED_ADDRESS`、global、宽度 4、要求对齐 4、实际地址与 PC，而不是对象越界。若该 ISA 本来允许此操作非对齐，原错误前提就不成立，应换用确有对齐约束的 opcode。
 
-## 组件与模型平台检查点
+## 生产方案与两类模型辅助验证职责
 
-| 层 | 需要的信息或修改 |
+**下表只定义如何验证已能在GPU执行的B/C/D/E设备检查器或已存在硬件的F；绝不要求、也不认可将模型侧自定义访存检查作为生产Sanitizer。**
+
+| 角色 | 正确职责 |
 |---|---|
-| 功能级 cmodel | 是否满足该指令的对齐要求 |
-| QEMU 已有 GPU ISA 执行模型 | M2 |
-| KMD | opcode 与对齐契约 |
+| **真实GPU生产Checker** | Compiler/UMD生成设备检查指令，或实际GPU硬件MMU/Tag/Bounds生效；GPU上的报告才是产品验收 |
+| 独立功能级cmodel（验证） | opcode自身要求和真实地址；IR承诺另查；仅用于运行真实checker产物/参考核对 |
+| **现有QEMU GPU ISA解释器（验证）** | GPU模型按ISA处理，不能以Host可读写为正确标准；不得仅靠模拟器独有hook宣布真机检测完成 |
+| KMD（生产） | 转交已发生的对齐fault及上下文；若硬件不报则依赖检查器；接口充分时新增代码可为0 |
 
 ## 验收需要留下什么证据？
 
-在对应真实GPU上记录：1）硬件型号、驱动和CUDA/ROCm版本；2）编译命令、目标GPU架构及最终ISA访存；3）`--good`正常且无误报；4）`--bad`出现对应的**设备级**GPU检查器报告，或者明确归类为`UNSUPPORTED/NOT_DETECTED/PREREQUISITE_NOT_MET`；5）`results/<backend>/S03.*.log`日志及`summary.json`。CPU ASan、单纯Host API错误或GPU MMU硬件fault不能冒充准确检测到本案例的对象级语义。
+在对应真实GPU上记录：1）硬件型号、驱动和CUDA/ROCm版本；2）编译命令、目标GPU架构及最终ISA访存；3）`--good`正常且无误报；4）`--bad`出现对应的**设备级**GPU检查器报告，或者明确归类为`UNSUPPORTED/NOT_DETECTED/PREREQUISITE_NOT_MET`；5）`results/<backend>/S03.*.log`日志及`summary.json`。CPU ASan、Host API错误和模型独有hook不能冒充真实GPU检查器；GPU MMU fault仅证明符合其硬件页级规则，不等于对象级越界检测。
 
 **当前状态：只有源码/文档及CPU静态检查证据，尚无实际GPU编译和sanitizer检出数据。** [GPU CI启用方法](../../docs/gpu-actions-ci.md)说明如何在可信master的NVIDIA/AMD GPU Runner中自动验证。
