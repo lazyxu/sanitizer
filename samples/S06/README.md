@@ -17,7 +17,6 @@ python3 scripts/run_samples.py --backend rocm --case S06 --mode both --strict
 
 **预期含义：** `detect` 是厂商官方能力下的期望，不是本项目已检出；`conditional` 需要GPU架构/ISA/执行时序支持；`unsupported` 表示当前选定工具不能保证；`api` 是GPU API错误但不构成GPU kernel内部sanitizer命中；`clean` 是用于排除误报的合法操作。
 
-
 ## 真实场景、错误原因、可检测算法、修复对照及实现要求
 
 以下章节直接对应[主调研文档 §18.6](../../docs/llvm-gpu-sanitizer-research.md#case-s06)的正式原理与验收设计。**其中的CUDA风格伪代码和受控allocator不一定与本目录中可编译程序逐行相同**；两者须按相同违规语义而非源码文字对齐。实际运行前确认目标机器码保留相关访存，不可以假设未定义行为一定触发。
@@ -41,23 +40,20 @@ s06_dynamic<<<2,32,24>>>();
 
 **哪里不对、怎样检。** 检查必须分别知道静态对象大小和本次 launch 的动态长度。**真实GPU B/D插桩**需要Compiler输出与最终ISA一致的shared对象布局，并结合UMD动态shared请求，在设备端按`(launch,block,object)`检查；B可以为static layout增加Redzone、为动态区尾部Poison，但必须更新真实设备资源声明。只检查整个 shared backing，可能漏掉静态对象跨入邻变量；此时需原对象关联／D1 来源，只有地址布局表仍不够，也不能拿额外预留空间扩充应用合法范围。[L05][L06]
 
-**组件观测。** compiler 输出最终布局而非优化前偏移；deviceRT 为不同 block 选择独立 shadow／对象上下文；UMD 传递请求的 24 B 及 sanitizer 额外占用；cmodel 让两个 block 中相同数值偏移分别指向不同对象实例。不能让 block 0 的状态误用到 block 1，也不能把不同 block 的 `s[0]` 当作共享同一对象。
+**组件观测。** compiler 输出最终布局而非优化前偏移；deviceRT 为不同 block 选择独立 shadow／对象上下文；UMD 传递请求的 24 B 及 sanitizer 额外占用；不能让 block 0 的状态误用到 block 1，也不能把不同 block 的 `s[0]` 当作共享同一对象。
 
 **合法反例、修复及报告。** 分别改为 `s[7]`、`d[5]`，两个 block 均应通过。错误报告须区分 static／dynamic shared、block ID、4 B 宽度与偏移 32／24；可以合并重复报告，但保留观察到的 block／错误计数。若错误策略在首个 block 后终止 launch，未执行 block 不计漏检。仅完成 global 插桩的 B／C 不具有本例覆盖。
 
-## 生产方案与两类模型辅助验证职责
-
-**下表只定义如何验证已能在GPU执行的B/C/D/E设备检查器或已存在硬件的F；绝不要求、也不认可将模型侧自定义访存检查作为生产Sanitizer。**
+## 真实GPU生产职责
 
 | 角色 | 正确职责 |
 |---|---|
-| **真实GPU生产Checker** | Compiler/UMD生成设备检查指令，或实际GPU硬件MMU/Tag/Bounds生效；GPU上的报告才是产品验收 |
-| 独立功能级cmodel（验证） | launch/block/对象布局与实际访存；仅用于运行真实checker产物/参考核对 |
-| **现有QEMU GPU ISA解释器（验证）** | 接通launch参数和GPU内部shared模型；不得仅靠模拟器独有hook宣布真机检测完成 |
-| KMD（生产） | 调度资源配置；无法从外部DMA自动观察每个shared访问；接口充分时新增代码可为0 |
+| **真实GPU检查／Host API** | 仅实际GPU设备指令或实体GPU硬件检查产生产品检测证据 |
+| **Compiler／Device Runtime／UMD** | 维护GPU检查代码、对象与生命周期、报告和覆盖状态 |
+| **KMD（生产）** | 调度资源配置；无法从外部DMA自动观察每个shared访问；接口充分时新增代码可为0 |
 
 ## 验收需要留下什么证据？
 
-在对应真实GPU上记录：1）硬件型号、驱动和CUDA/ROCm版本；2）编译命令、目标GPU架构及最终ISA访存；3）`--good`正常且无误报；4）`--bad`出现对应的**设备级**GPU检查器报告，或者明确归类为`UNSUPPORTED/NOT_DETECTED/PREREQUISITE_NOT_MET`；5）`results/<backend>/S06.*.log`日志及`summary.json`。CPU ASan、Host API错误和模型独有hook不能冒充真实GPU检查器；GPU MMU fault仅证明符合其硬件页级规则，不等于对象级越界检测。
+在对应真实GPU上记录：1）硬件型号、驱动和CUDA/ROCm版本；2）编译命令、目标GPU架构及最终ISA访存；3）`--good`正常且无误报；4）`--bad`出现对应的**设备级**GPU检查器报告，或者明确归类为`UNSUPPORTED/NOT_DETECTED/PREREQUISITE_NOT_MET`；5）`results/<backend>/S06.*.log`日志及`summary.json`。GPU MMU fault仅证明符合其硬件页级规则，不等于对象级越界检测。
 
 **当前状态：只有源码/文档及CPU静态检查证据，尚无实际GPU编译和sanitizer检出数据。** [GPU CI启用方法](../../docs/gpu-actions-ci.md)说明如何在可信master的NVIDIA/AMD GPU Runner中自动验证。
