@@ -249,6 +249,63 @@ void consume_report(Dispatch d) {
 
 报告必须包含实际设备、driver/firmware/ISA版本、模块hash、模式及保证等级、site/原PC、访问宽度/地址空间、lane/workgroup、分配ID/epoch、日志溢出和资源状态。不能将UNKNOWN、PARTIAL、INCOMPLETE美化为“无错误”。
 
+### 12.1 Initcheck：GPU字节定义性检查器
+
+~~~cpp
+__device__ void before_read(Address a, Bytes n, LaneMask active) {
+    if (!active) return;
+    if (!defined_bitmap.all_set_for_effective_bytes(a, n))
+        device_report(UNINITIALIZED_READ, a, n);
+}
+__device__ void after_successful_store(Address a, ByteEnable en) {
+    atomic_or_defined_bits(a, en); // 必须避免元数据位丢失
+}
+void after_async_copy_visible(CopyEvent e) {
+    copy_defined_bits(e.dst, e.src, e.bytes); // 真实完成之后
+}
+~~~
+
+仅写入真实成功的有效字节后才设置定义性；atomic read-modify-write先检查旧值再按成功路径更新。Host来源默认已定义的保守策略需明确说明，不能宣称完整CPU/GPU MSan。
+
+### 12.2 Racecheck：设备访问事件、HB和scope/order
+
+~~~cpp
+__device__ void record_access(Access a) {
+    ThreadClock here = clock_for(a.launch, a.block, a.thread);
+    for (PriorAccess old : shadow_conflicts(a.object, a.byte_range)) {
+        if ((a.write || old.write) &&
+            !atomic_ordering_exempts(old, a) &&
+            !happens_before(old.clock, here))
+            device_report(DATA_RACE, old.site, a.site);
+    }
+    publish_access_state_without_synchronizing_app(a, here);
+}
+void on_valid_sync(SyncEvent e) {
+    update_happens_before_edges(e); // scope和event/queue必须符合实际语义
+}
+~~~
+
+不能用“谁先在物理设备执行”当成语言HB，也不能通过检查器自身的额外atomic给应用制造不存在的同步。Metadata OOM/clock溢出时报告INCOMPLETE，而不是判定race-free。
+
+### 12.3 Synccheck：Barrier/Phase/Subgroup检查
+
+~~~cpp
+__device__ void check_barrier(Barrier b, Participation p) {
+    auto expected = required_participants(b, current_live_lanes());
+    if (!mask_satisfies_isa_rules(p.mask, expected))
+        device_report(INVALID_BARRIER_MASK, b.site);
+    if (!phase_consistent(b.id, p.phase, p.token))
+        device_report(BARRIER_PHASE_MISMATCH, b.site);
+    register_arrival_or_wait(b, p);
+}
+__device__ void check_async_wait(CopyGroup g, WaitToken t) {
+    if (!references_committed_group_and_phase(g, t))
+        device_report(INVALID_ASYNC_WAIT, g.site);
+}
+~~~
+
+必须与目标ISA的合法退出、部分参与、warp/block/cluster作用域和async copy completion规则一致。超时只说明未完成；若无额外语义证据，不自动判定程序死锁。检测器本身不能在barrier前挂死。
+
 ## 13. 真机测试、性能及CI
 
 ~~~python
@@ -279,5 +336,8 @@ for sample in range(1, 29):
 | GPU RTL／MMU | 运行设备ISA | 运行Patch ISA | 运行身份检查ISA | 运行实际组合ISA | **必须具备对应真实机制** | GPU架构／RTL |
 | Reporter／CLI | 设备Shadow诊断 | 原始PC还原 | 原对象/epoch报告 | 保证等级 | 硬件fault归因 | 工具 |
 | 真机测试／CI | OOB和掩码 | ISA重写等价 | A→B/ABA/UAF | 混合兼容性 | 页fault/Tag/Bounds | QA／性能 |
+| Initcheck | GPU位图定义性 | GPU位图定义性 | 对象初始态身份 | 覆盖降级 | 设备能力相关 | Device RT＋UMD |
+| Racecheck | 真实GPU访存事件 | Binary访存采集 | 追踪对象身份 | 组合scope/HB | 硬件可选辅助 | Device RT＋UMD |
+| Synccheck | barrier／async事件 | Binary同步采集 | 与对象边界独立 | 组合检查 | 有限硬件fault | Device RT＋UMD |
 
 **实施顺序：** P0先交付B的真实GPU Global Store检查（含报告和S01正反例）；随后扩展B覆盖与D1，再根据真实需求分别实施D2、C/E、F。源码级和静态结构检查可以先执行，但**当前仓库并未因此完成自研GPU产品实现或真机验收**。
