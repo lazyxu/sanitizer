@@ -13,10 +13,10 @@
 - [厂商/LLVM详细机制](docs/llvm-gpu-sanitizer-research.md#vendor-deep-dive)与[各方案来源／融合／原创对照](docs/llvm-gpu-sanitizer-research.md#route-provenance-matrix)：NVIDIA runtime/compile-time、AMD GPU ASan、Intel UR、MUSA公开能力、LLVM shadow/tag与cuCatch/HiRace/GPUArmor等研究。
 - [三组件支持契约](docs/llvm-gpu-sanitizer-research.md#component-contracts)：编译器、KMD、UMD分别生产哪些信息、依赖什么接口，以及现有支持与新增修改的区别。
 - [功能级cmodel／QEMU能力边界](docs/llvm-gpu-sanitizer-research.md#model-platforms)与[全系统接入](docs/llvm-gpu-sanitizer-research.md#qemu-integration)：区分GPU执行、模型检查、Guest驱动路径和真机直通。
-- 逐路线双平台分析：[A cmodel](docs/llvm-gpu-sanitizer-research.md#route-a-platforms)、[B shadow](docs/llvm-gpu-sanitizer-research.md#route-b-platforms)、[C binary](docs/llvm-gpu-sanitizer-research.md#route-c-platforms)、[D bounds／identity](docs/llvm-gpu-sanitizer-research.md#route-d-platforms)、[E hybrid](docs/llvm-gpu-sanitizer-research.md#route-e-platforms)、[F hardware](docs/llvm-gpu-sanitizer-research.md#route-f-platforms)。各路线正文也有三组件支持与修改表。
-- [工程量估算](docs/llvm-gpu-sanitizer-research.md#component-estimates)与[本项目QEMU已确认事实和预算数据](docs/estimates-v1.3.json)：核心／手写测试分开；三组件、cmodel、条件KMD缺口及QEMU接入分别计算。
+- 逐路线双平台分析：[真实GPU产品准入条件](docs/llvm-gpu-sanitizer-research.md#hardware-deployment-gate)、[B shadow](docs/llvm-gpu-sanitizer-research.md#route-b-platforms)、[C binary](docs/llvm-gpu-sanitizer-research.md#route-c-platforms)、[D bounds／identity](docs/llvm-gpu-sanitizer-research.md#route-d-platforms)、[E hybrid](docs/llvm-gpu-sanitizer-research.md#route-e-platforms)、[F hardware](docs/llvm-gpu-sanitizer-research.md#route-f-platforms)。各路线正文也有三组件支持与修改表。
+- [工程量估算](docs/llvm-gpu-sanitizer-research.md#component-estimates)与[当前真实GPU候选预算](docs/estimates-v1.7.json)：核心／手写测试分开；三组件、cmodel、条件KMD缺口及QEMU接入分别计算。
 - **[S01：NVIDIA/AMD/其他方案，逐组件实施指南](docs/S01-vendor-implementation-guide.md)**：区分 NVIDIA 运行时二进制插桩和 CUDA13.1+ 编译期Base/Bounds，AMD LLVM+Shadow/Redzone，逐个给出 Compiler/KMD/UMD/cmodel/现有QEMU模型改动与核心伪代码，并附厂商官方原文。
-- [S01七条具体机制与平台落地](docs/llvm-gpu-sanitizer-research.md#case-s01)：模型oracle、区间表、Shadow、二进制patch、原对象bounds、hybrid、硬件辅助。
+- [S01真实GPU检测与验证边界](docs/llvm-gpu-sanitizer-research.md#case-s01)：设备区间表、Shadow、Binary Patch、原对象Bounds、Hybrid、真实硬件MMU/Tag，以及QEMU验证（非独立方案）。
 - [检测场景与实例分析](docs/llvm-gpu-sanitizer-research.md#detection-scenarios)：S01～S28逐例说明错误位置、检测方案、组件配合、修复／合法对照、报告与限制；[逐场景KMD和平台对应表](docs/llvm-gpu-sanitizer-research.md#scenario-platforms)补充每例的执行与观测条件。
 - [验证基准与验收矩阵](docs/llvm-gpu-sanitizer-research.md#validation)、[研究进度](docs/research-progress.md)、[修订记录](docs/revision-history.md)、[文稿验证记录](docs/validation-report.json)。
 - [归档研究笔记](docs/research-notes/)：架构、论文及友商资料的过程记录与来源链接。
@@ -50,7 +50,7 @@
 
 ## 1.3版：现有QEMU GPU ISA执行模型＋厂商机制溯源
 
-**确认的项目事实：QEMU全系统虚拟平台已具备目标GPU ISA执行模型（Q2）。** 不再将“新建QEMU GPU ISA解释器”列为开发工作；直接利用已有模型在实际GPU load/store之前增加检查钩子，并打通Guest UMD/KMD逻辑对象、Shadow与诊断回传。还未知的部分（模型是否与独立cmodel共用、具体访存opcode/Guest桥/Shadow已有程度）必须源码审计，不能臆测成已完成或未完成。
+**确认的项目事实：QEMU全系统虚拟平台已具备目标GPU ISA执行模型（Q2）。** 不再将“新建QEMU GPU ISA解释器”列为开发工作；直接利用已有模型**执行B/C/D/E生成的GPU检查代码**、核对Shadow与Guest UMD/KMD报告；模型本身的访存检查钩子不列为产品实现。还未知的部分（模型是否与独立cmodel共用、具体访存opcode/Guest桥/Shadow已有程度）必须源码审计，不能臆测成已完成或未完成。
 
 第4章深入比较NVIDIA memcheck的运行时/编译期、base-and-bounds及hybrid，AMD GPU ASan的Shadow/Redzone/device runtime，Intel oneAPI与Unified Runtime，MUSA公开产品能力，以及LLVM源码/HWASan；各机制附官方直达链接和限长原文摘录，明确已知事实与未公开实现的区别。
 
@@ -62,7 +62,7 @@
 
 功能级cmodel能否运行插桩代码，与是否实现独立检查oracle分开。QEMU配置按Q0/Q1/Q2/Q3比较，**本项目已确认属于Q2**；模型执行与真机、TCG CPU回调的观测能力不同，QEMU内部是否复用cmodel待审计。
 
-代码量保留1.1版六路线基础参考包合计，重新组织三组件与模型分项；KMD新增映射、故障／完成、终止、代码及硬件状态契约按缺口另计。Q2一次性系统基础和逐路线接线分别估算，复用的cmodel检查引擎只计一次；Guest KMD适配也有明确归属。
+代码量历史版本曾包含已撤销的模型-only路线；当前预算仅保留五条真实GPU候选，重新组织三组件与辅助验证分项；KMD新增映射、故障／完成、终止、代码及硬件状态契约按缺口另计。Q2一次性系统基础和逐路线接线分别估算，复用的cmodel检查引擎只计一次；Guest KMD适配也有明确归属。
 
 新增Linux kernel与QEMU官方来源9项。原28个详细实例保留，并补上全部场景的KMD／双平台对应和分层验收，区分真实检测、故障注入、模型证据与真机证据。
 
