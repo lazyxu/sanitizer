@@ -17,7 +17,6 @@ python3 scripts/run_samples.py --backend rocm --case S09 --mode both --strict
 
 **预期含义：** `detect` 是厂商官方能力下的期望，不是本项目已检出；`conditional` 需要GPU架构/ISA/执行时序支持；`unsupported` 表示当前选定工具不能保证；`api` 是GPU API错误但不构成GPU kernel内部sanitizer命中；`clean` 是用于排除误报的合法操作。
 
-
 ## 真实场景、错误原因、可检测算法、修复对照及实现要求
 
 以下章节直接对应[主调研文档 §18.9](../../docs/llvm-gpu-sanitizer-research.md#case-s09)的正式原理与验收设计。**其中的CUDA风格伪代码和受控allocator不一定与本目录中可编译程序逐行相同**；两者须按相同违规语义而非源码文字对齐。实际运行前确认目标机器码保留相关访存，不可以假设未定义行为一定触发。
@@ -49,23 +48,20 @@ use_saved<<<1,32>>>(slot, out);
 
 **哪里不对、怎样检。** 访问范围仍是新 B 的合法前 4 B，但指针预期 A 的生存期已经结束。D2 要让 pointer store／reload 传递 `(A_ID,A_epoch)`，与当前对象身份比较；**D2的真实GPU检查指令与metadata传播**必须覆盖寄存器、内存槽及allocator事件的预期身份。普通分配表查询只得到 B 当前 generation，缺少指针预期值；B的Unpoison、D1的同尺寸bounds及仅依赖当前地址有效性的C因而不能保证识别旧指针。[P01][L02]
 
-**组件观测。** compiler 保留 slot 的 pointer metadata 配对；deviceRT 避免载入时把旧指针重新标记为 B；UMD 发布新身份，并保持检查所需的旧描述符；cmodel 核对真实复用及保存／加载链。普通 `malloc` 是否复用不可假定；扩大 quarantine 只能推迟这一条件。
+**组件观测。** compiler 保留 slot 的 pointer metadata 配对；deviceRT 避免载入时把旧指针重新标记为 B；UMD 发布新身份，并保持检查所需的旧描述符；普通 `malloc` 是否复用不可假定；扩大 quarantine 只能推迟这一条件。
 
 **合法反例、修复及报告。** 独立运行通过正确携带 B 身份的 `b[0]` 应通过；修复是清除旧引用并分发新指针及其身份。报告应同时给出相同 GPUVA、预期 A 和当前 B 的 ID／epoch、两次分配与 A 的释放位置。未知 writer、身份丢失、tag 碰撞或 epoch 回绕必须作为保证边界，不能静默退回地址查询后仍声称完整 M5。
 
-## 生产方案与两类模型辅助验证职责
-
-**模型及QEMU仅验证实际GPU设备检查产物/真实硬件机制，不可作为独立Sanitizer产品方案。**
+## 真实GPU生产职责
 
 | 角色 | 正确职责 |
 |---|---|
-| **真实GPU生产Checker** | Compiler/UMD生成并使GPU执行设备检查ISA；或实体GPU硬件检查单元/MMU触发，附真实设备报告 |
-| 独立功能级cmodel（验证） | 保存旧identity并与新epoch比较；只用于预验证真实checker产物和oracle差分 |
-| **现有QEMU GPU ISA解释器（验证）** | 验证Guest内存池复用、sidecar与映射重用相互独立；不能用模型独有访存hook代替真实设备检查 |
-| KMD（生产） | 当前BO句柄或GPUVA不能重建旧指针身份；已充分支持的接口不需改源码 |
+| **真实GPU检查／Host API** | 仅实际GPU设备指令或实体GPU硬件检查产生产品检测证据 |
+| **Compiler／Device Runtime／UMD** | 维护GPU检查代码、对象与生命周期、报告和覆盖状态 |
+| **KMD（生产）** | 当前BO句柄或GPUVA不能重建旧指针身份；已充分支持的接口不需改源码 |
 
 ## 验收需要留下什么证据？
 
-在对应真实GPU上记录：1）硬件型号、驱动和CUDA/ROCm版本；2）编译命令、目标GPU架构及最终ISA访存；3）`--good`正常且无误报；4）`--bad`出现对应的**设备级**GPU检查器报告，或者明确归类为`UNSUPPORTED/NOT_DETECTED/PREREQUISITE_NOT_MET`；5）`results/<backend>/S09.*.log`日志及`summary.json`。CPU ASan、Host API错误或模型独有hook不能冒充真实GPU设备检测；GPU MMU fault限于页级证据。
+在对应真实GPU上记录：1）硬件型号、驱动和CUDA/ROCm版本；2）编译命令、目标GPU架构及最终ISA访存；3）`--good`正常且无误报；4）`--bad`出现对应的**设备级**GPU检查器报告，或者明确归类为`UNSUPPORTED/NOT_DETECTED/PREREQUISITE_NOT_MET`；5）`results/<backend>/S09.*.log`日志及`summary.json`。GPU MMU fault限于页级证据。
 
 **当前状态：只有源码/文档及CPU静态检查证据，尚无实际GPU编译和sanitizer检出数据。** [GPU CI启用方法](../../docs/gpu-actions-ci.md)说明如何在可信master的NVIDIA/AMD GPU Runner中自动验证。
