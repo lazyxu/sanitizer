@@ -1,10 +1,10 @@
 # 自研 LLVM GPU 后端 Sanitizer 技术调研与实施方案
 
-**版本：1.2 · 资料核验日期：2026-10-20 · 文档语言：中文**
+**版本：1.3 · 资料核验日期：2026-10-21 · 文档语言：中文**
 
 **用途：技术立项、编译器／驱动／架构联合评审、研发任务拆分与预算讨论。**
 
-**1.2 版修订：** 按[编译器、KMD、UMD](#component-contracts)重整支持契约与预算，逐路线说明[功能级cmodel和QEMU全系统平台](#model-platforms)能否检测、需要哪些修改及证据边界；保留详细背景、目标与28个实例，并增加[逐场景平台/KMD对应表](#scenario-platforms)。
+**1.3 版修订：** 用户明确确认 **QEMU 全系统平台现有可执行目标GPU ISA的执行模型（Q2）**；本版将其作为既有前提而非待建设能力，并按实际缺失接线重新解释预算。[友商及LLVM机制深挖](#vendor-deep-dive)逐一说明原理/代码入口/证据限制；[全部路线出处及融合矩阵](#route-provenance-matrix)明确借鉴、融合与本项目需自行实现的部分，保留28个详细实例。
 
 本文回答：在自研 GPU、LLVM 后端、KMD（Kernel-Mode Driver，内核态驱动）、UMD（User-Mode Driver，用户态驱动）及验证环境的边界下，怎样建设可用于真机调试的 sanitizer；不同路线能检测什么、需要修改哪些组件、投入多少、如何验证，以及什么情况下值得进一步投入二进制插桩或硬件支持。
 
@@ -62,7 +62,7 @@
 5. 当闭源库、已有二进制、JIT 模块构成实际覆盖缺口时，增加 E 的二进制补充。C 的工程成本与已有解码、重编码和 patch 基础设施高度相关。
 6. Racecheck、Initcheck、Synccheck 作为独立检查器迭代；如果软件方案的真实瓶颈足够集中，再评估 F 的硬件辅助。
 
-这一路线要求编译器与UMD可扩展，KMD提供所需映射、完成、故障和终止契约；已有契约充分时可复用，不要求每条路线都新增KMD代码。功能级cmodel用于语义核对，QEMU全系统平台在接入目标GPU模型后用于Guest UMD/KMD系统验证，二者职责分开。第一版不必同时完成四类检查器、全部CUDA类功能或完整二进制重写器。
+这一路线要求编译器与UMD可扩展，KMD提供所需映射、完成、故障和终止契约；已有契约充分时可复用，不要求每条路线都新增KMD代码。**用户确认既有QEMU全系统平台可执行目标GPU ISA，本项目现状按Q2记录**：它可用于Guest UMD/KMD到真实模型访存的系统验证，未实现的只是具体checker/metadata/report接线；独立功能cmodel是否与QEMU复用同一模型仍待源码确认，不能重复计为独立oracle。第一版不必同时完成四类检查器、全部CUDA类功能或完整二进制重写器。
 
 ### 1.2 三组件交付与两类验证平台
 
@@ -76,7 +76,7 @@
 
 **归属不等于运行位置。** 设备检查库在GPU执行，不能因其预算归入编译器包就称为编译期检查；CLI和Host SDK也不必嵌入底层UMD库。这样分组用于满足三组件比较口径，不要求搬动用户现有源码目录；团队调整归属时保持总量去重。
 
-**模型与平台分别回答两件事：能否执行目标检查器，以及能否提供独立oracle。** 已有完整ISA模型可能直接执行B/C/D/E的插桩产物；额外增加独立模型检查仍需要模型hook和分析逻辑。普通QEMU不会自动观察GPU内部每条访存，必须区分Q0/Q1设备桩、Q2功能GPU模型与Q3真机直通，定义见第7.7节。[Q01][Q02]
+**模型与平台分别回答两件事：能否执行目标检查器，以及能否提供独立oracle。** 已有完整ISA模型可能直接执行B/C/D/E的插桩产物；额外增加独立模型检查仍需要模型hook和分析逻辑。通用QEMU的TCG回调不自动观察GPU内部每条访存；**本项目QEMU已具有目标GPU ISA执行模型，属于Q2**，因此可在模型真实访存入口直接加检查。Q0/Q1/Q3保留作其他部署形态的比较，而非声称本项目仍缺GPU执行器；详见第7.7节。[Q01][Q02]
 
 ### 1.3 三项必须坚持的能力区分
 
@@ -252,57 +252,210 @@
 
 **官方来源之间也有更新不同步。** NVIDIA 产品总览仍保留 initcheck 仅 global 的概括，而当前用户手册与 release notes 已列出 shared 支持；本报告按后两者的版本信息处理这一冲突。[N01][N02][N05]
 
-## 4. 友商产品与上游实现
+## 4. 友商产品与上游实现：机制、实现接线及可复用边界
 
-### 4.1 NVIDIA：成熟工具套件与新增编译分析
+<a id="vendor-deep-dive"></a>
 
-**【官方事实】** NVIDIA 提供 memcheck、racecheck、initcheck、synccheck，并公开工具扩展接口。当前 memcheck 可选择编译期插桩；其价值包括利用原对象 bounds 改善相邻合法分配之间的越界检测。[N01][N02][N04]
+**本章采用“证据分级”：官方明确公开的算法／接口＝【官方事实】；从接口推导的内部数据结构＝【工程推断】，不是厂商源码事实；本项目推荐的实现＝【自研设计】。** 不能把同样具有“越界检测”能力的产品推断为用了相同的 shadow、BST 或二进制重写器，也不能把论文实验原型说成产品的开源实现。每段提供官方链接与限长原文节选；真正可抄的只是接口/开源代码在许可允许范围内的部分，GPU ISA、地址空间、KMD及失败处理均需重做。[N01][N02][N03][A01][I01][M01][L01]
 
-**建议借鉴的分层是：资源／命令观测、代码检查点、元数据访问、分析与报告。** API 指南的 callback、patching、memory 部分可作为阅读入口；当前接口目录还有 barrier 和 stream 等模块，“三大组成”适合作概括，不宜当作全部接口清单。[N03]
+### 4.1 NVIDIA Compute Sanitizer：运行时插桩、编译期 bounds 与多 checker 不是同一种算法
 
-对实际使用必须保留的版本条件是：编译器与工具匹配、按官方要求启动检查器，并核对 release notes 中 HMM、cluster、JIT 和混合模块等限制。调试行信息与插桩标志是两个独立配置。[N02][N05][N07]
+#### 4.1.1 Memcheck 的两条入口与可观测数据
 
-**【工程建议】** 自研模块至少输出插桩 ABI 版本、检查器种类、覆盖的地址空间和指令种类。加载器发现不兼容时应明确报错或记录降级，不应静默运行并输出“没有错误”。
+**官方事实。** [Compute Sanitizer User Manual — Compile-time patching](https://docs.nvidia.com/compute-sanitizer/ComputeSanitizer/index.html#compile-time-patching) 写明：
 
-### 4.2 AMD ROCm：LLVM ASan 移植具有直接参考价值
+> For now, only memcheck supports compile-time instrumentation.
 
-**【官方事实】** ROCm GPU ASan 将编译插桩与运行库支持结合；稳定版文档给出 address sanitizer 和 shared runtime 的编译方式，并对 xnack、平台和运行环境作出约束。已知限制还涉及 private／stack、LDS 的建模方式、有限 redzone 和 NULL 地址；不能只从支持 ASan 推导全部空间均已覆盖。[A01]
+即当前仅 memcheck 支持编译期插桩，racecheck/initcheck/synccheck 依赖运行时二进制插桩。Memcheck 的默认路径与可选编译期路径须分开比较。[N02][N05]
 
-LLNL El Capitan 指南提供实际部署中的编译包装器、环境设置和已知问题，示例注明 rocmcc/7.0.0；其中包括 hipFree double-free 和 hipMemcpy 非法地址的检测限制，适合构建现场回归清单。其结论不能替代其他版本和集群环境的支持声明。[A02]
+~~~text
+运行时检查：CUDA模块 → Sanitizer执行期识别/补入访存检查 → 设备端访问观察
+             + Host资源/API事件 → 对象状态/错误判定 → 设备PC、线程及Host栈报告
 
-**【工程建议】** 优先复用 LLVM 的指令识别、检查组织、ignorelist 和符号化经验；shadow 的地址布局、设备错误通道、设备 allocator 与队列生命周期按自研 GPU 设计。CPU compiler-rt 不能直接假定 GPU 具有同样的 mmap、信号、线程局部存储和系统调用能力。
+编译期检查：CUDA源/PTX → NVCC/PTXAS插桩 + base-and-bounds分析
+             → 已插桩模块 → Compute Sanitizer memcheck配套runtime
+             → 地址/原对象约束 + 资源事件 → 报告
+~~~
 
-### 4.3 Intel oneAPI：用于验证异构运行时职责是否齐全
+**运行时入口的公开事实**是工具能检查 global/local/shared 越界、对齐、GPU硬件异常、API错误和泄漏，并将精确设备违规与较粗的硬件故障分开报告；官方未公开可据以复现所有内部数据结构的完整源代码。因此本文不能断言其默认路径一定使用某个 1:8 shadow 排列、红黑树或某种 GPUVA 页表结构。[N01][N02]
 
-Intel 的设备侧 sanitizer 文档提供 ASan、MSan、TSan 的产品路径，并明确具体平台和限制。其公开限制表说明：支持列表、执行串行化、某些规模下跳过检查，都属于产品规格的一部分。[I01][I02]
+**编译期入口的增益**来自原对象关联。例如 A=[0x1000,0x1040)、B=[0x1040,0x1080)，A 派生指针计算出 0x1040：只按当前地址定位可能认为 B 合法；保留 A 的 base/size 后则报告 A 越界。官方明确写出 *compiler tracks which allocation a pointer refers to*，并描述分析失败后的普通 allocation bounds fallback。这里的 fallback 降低保证，不能继续宣称已追踪原对象。[N02][N04]
 
-**【工程建议】** 参考它组织 Unified Runtime／USM 与编译器的协作方式，同时在自己的结果中公开“哪些 kernel／空间未检查”和“执行是否被串行化”。不要只比较 checker 名字，也不要把 Intel 的平台限定当作所有 LLVM GPU 后端的限制。
+**工程移植点：** Compiler 必须明确是在 IR/MIR 保留 pointer origin 还是仅 final addr；UMD 必须提供 allocation identity/size 与异步生命周期；设备库执行真实访存前的检查，PC 与符号化由工具层关联。只有从旧裸地址查询“当前 live 对象”不构成同等级的编译期 bounds 分析。
 
-### 4.4 摩尔线程 MUSA：自研 GPU 产品化近邻
+#### 4.1.2 API 的 callback／patch／memory 三通路
 
-MUSA Compute Sanitizer 的公开指南展示了运行时工具、global 越界、Runtime／Driver API 错误和显存泄漏报告。本次可读取的官方材料不足以独立确认其内部是否采用用户参考描述中的“驱动 API 插桩＋指令级插桩”架构，因此本文不把该内部实现当作已证实事实。[M01][M02]
+官方 [Compute Sanitizer API Reference](https://docs.nvidia.com/compute-sanitizer/SanitizerApiGuide/index.html) 将开发接口分为 callback、patching、memory，且公开 [Patching API](https://docs.nvidia.com/compute-sanitizer/api/group__SANITIZER__PATCHING__API.html) 的指令枚举与参数语义。[N03]
 
-**【工程建议】** 近邻价值主要在工具命令、驱动集成和基础故障报告的产品形态。其公开版本不能证明国内厂商都采用同一路线，也不能推出“必须先完成二进制插桩才能做编译插桩”。
+| 公开接口 | 实际观察／控制的层次 | 对本项目的模块设计启示 |
+|---|---|---|
+| Callback API | Runtime/Driver调用、resource、launch、memcpy/memset、event/graph等事件 | UMD Event Adapter 去重、记录逻辑 allocation 与 Host 调用栈；API entry/exit 不直接等于 GPU 命令生效 |
+| Patching API | 在已知指令种类插入 callback，例如 global/shared/local memory access、barrier、async copy 等 | C 路线的 InstructionSemantics 表和 CodePatch 边界必须保留 access size、predicate、PC、sync type |
+| Memory API | 工具元数据所需设备内存管理与访问能力 | 设备报告缓冲、元数据映射与初始化；不要让 GPU user load 误写检测元数据 |
 
-### 4.5 LLVM 上游：可复用的是框架，不是现成的目标支持
+公开结构 **SanitizerCallbackMemoryAccess** 提供 PC、地址、宽度、flags 等参数，官方列出1/2/4/8/16字节访问宽度；shared/local 指针在该回调中可表达为相应内存窗口的偏移。这证明指令宽度／空间分类是运行时工具的核心输入，但并不证明你能够原样移植 NVIDIA 的机器码 patch 实现。[N03]
 
-AddressSanitizer 官方文档将工具分为编译器插桩与 runtime。[L01] 核验时的 LLVM 在线源码页标为开发分支快照；AMDGPU 相关路径仍包含特定地址空间和 stack poisoning 条件，不能将“源码出现 AMDGPU”解释为已覆盖所有 GPU 存储类别。[L03]
+**自研落地对照：** UMD 在 module load/JIT 阶段选择 patch、记录原PC↔新PC及资源用量；Compiler/MC 提供自研 ISA decode/encode；KMD 复用正规可执行映射与调度接口，不应绕过代码安全策略；cmodel和已具有目标GPU ISA执行能力的QEMU全系统模型对 patch 前后的合法输入结果与错误PC作差分。
 
-HWASan 提供另一种思路：指针 tag 与内存 tag 对比，结合 granule 与短 granule 处理。但目标地址格式、tag 存放和剥离语义必须由 ISA 保证或软件明确实现，不能假设自研 GPU 可直接使用高地址位。[L04]
+#### 4.1.3 Racecheck、Initcheck、Synccheck 的内部语义差异
 
-### 4.6 友商比较应采用的表格
-
-| 对象 | 主要入口 | 最值得复用的经验 | 对自研方案的限制提醒 |
+| Checker | 公布的检测对象与原理输入 | 自研实现时必需的附加分析 | 不能从该产品推出 |
 |---|---|---|---|
-| NVIDIA Compute Sanitizer | 二进制检查＋可选 memcheck 编译插桩 | 模块混合、对象 bounds、完整报告和工具 API | checker、版本、地址空间必须逐项核对 |
-| ROCm GPU ASan | LLVM 编译插桩＋异构 runtime | shadow 方案的跨组件接线 | 设备地址空间与平台条件并非通用 |
-| Intel device sanitizers | 编译器＋异构运行时 | 多 checker 的运行时管理 | 检查跳过与串行化必须透明 |
-| MUSA Compute Sanitizer | 运行器＋内存／API 检查＋报告 | 自研生态中的工具产品形态 | 内部插桩机制需另有公开证据 |
-| LLVM ASan／HWASan | 编译 pass＋compiler-rt 体系 | 算法、诊断、工程结构 | 目标适配与设备 runtime 是实际工作 |
+| memcheck | 实际访存地址、access size/space、资源范围、对齐/异常 | Validity、allocation或bounds描述符、API状态机、报告 | 仅依赖GPU MMU就能识别小对象越界 |
+| racecheck | shared 访存 hazard；RAW、WAR、WAW、block/warp和若干barrier/async-copy情形 | 冲突访问历史、线程身份、barrier/phase、适用同步范围 | 自动等同跨所有GPU/global/device的完备TSan |
+| initcheck | 未初始化 device 内存读取；当前版本支持 global/shared，默认 global | 有效字节的定义性bitmap、写入／copy/memset及完成时序 | 它与值级 MSan 的全部寄存器 poison 传播相同 |
+| synccheck | 不合法 barrier/syncwarp 等用法及部分扩展同步 | 参与mask、有效参与者、phase/token、作用域及错误分类 | 运行了synccheck就自动检查所有内存越界 |
 
-上述表用于架构比较，不表示这些产品在同一硬件、数据集上具有相同覆盖率或性能。[N01–N07][A01][A02][I01][M01][L01–L04]
+当前手册允许 initcheck 以 `--initcheck-address-space shared` 或 `all` 检查 shared；这一点应优先采用当前手册而非更新滞后的产品总览。[N02][N05]
 
-### 4.7 本次采用的版本基线与操作入口
+NVIDIA release notes 同时公开混合插桩、HMM、共享变量间越界、特殊指令及资源变化的限制。特别是 **不同 compilation unit 混合可行，不代表同一 module 中未插桩函数会被自动补齐**。我们的 module manifest 必须以支持的检查点为单位输出覆盖，不允许“无报错＝完全通过”。[N05]
+
+### 4.2 AMD ROCm GPU AddressSanitizer：LLVM IR 检查＋Shadow／Redzone＋异构 Runtime
+
+**官方实现形态**与B路线最接近。 [AMD Using the AddressSanitizer on a GPU](https://rocm.docs.amd.com/projects/llvm-project/en/docs-7.2.4/conceptual/using-gpu-sanitizer.html) 描述编译侧插桩、compiler-rt/ASan库改造和运行时元数据；其原文有：
+
+> ASan detection works by checking each address at runtime
+
+[ A01 ] 描述了每个实际 load/store/atomic 前进行检查：增加对“shadow”记录的 poisoned 状态读取及判定逻辑；allocator/global/stack 的 Redzone 与 shadow poison 配合。[A01]
+
+~~~text
+HIP/C++ → Clang/LLVM ASan instrumentation → AMDGPU target device code
+                     ↓
+          GPU-side shadow lookup + poisoned-byte validation
+Host allocation/free → GPU可见shadow/redzone更新
+                     ↓
+           设备报告 / 主机ASan runtime与符号化
+~~~
+
+**具体实现分工：**
+1. Clang／LLVM：识别地址空间和实际访存，为普通/原子访问插入设备侧 checker；global、LDS/shared、private/stack不能无条件按CPU的单地址空间处理。可参考 [LLVM AddressSanitizer.cpp](https://llvm.org/doxygen/AddressSanitizer_8cpp_source.html) 中的 AMDGPU 分支 [L03]。
+2. Runtime/UMD：建立 shadow 内存布局、poison/unpoison、对象Redzone、device allocator及报告关联。Host API 调用是输入，shadow 更新必须按 GPU 队列可见性生效。
+3. KMD：保证额外 metadata/报告 BO 的 GPUVA映射与执行生命周期；不要求由 KMD理解每个源码数组。
+4. cmodel/QEMU：可直接执行新增GPU检查指令的前提是目标 ISA 覆盖；另加独立 oracle 才能构成双实现验证。
+
+**AMD特有约束不通用。** 官方文档使用 `-fsanitize=address -shared-libsan -g`，强调 `xnack+` 与相关运行环境，并列出 limited redzones、runtime未正确更新shadow时可能漏报/误报、目标空间/ABI限制。它表明“一种AMD GPU ASan移植”需要特定平台契约，不证明自研 GPU 必须有XNACK，或默认具有GPU缺页机制。[A01][A02]
+
+**代码级观察点：** 采用 (S=shadow_root+(addr >> 3)) 只是候选，必须先验证GPUVA映射和granule表示；单shadow字节只能表示一组应用字节中的全有效、全毒或有效前缀，不能编码同一granule中任意不连续有效岛。热路径还要报告寄存器/occupancy、编译新增访存的覆盖以及工具OOM状态。[L02][A01]
+
+### 4.3 Intel oneAPI：设备侧 Compiler Sanitizers 与 Unified Runtime 层的责任边界
+
+[2026 oneAPI Device-Side Compiler Sanitizers](https://www.intel.com/content/www/us/en/docs/dpcpp-cpp-compiler/developer-guide-reference/2026-0/device-side-compiler-sanitizers.html) 明确给出 SYCL／OpenMP 的 device ASan/MSan/TSan 编译开关、支持空间、选项和运行时错误类别，ASan可报告 device-global、buffer、USM、local/private及use-after-free等在其适用平台下的错误。[I01]
+
+[oneAPI Unified Runtime 规范](https://oneapi-src.github.io/unified-runtime/core/INTRO.html#sanitizers) 的原文：
+
+> Unified Runtime loader implements the runtime part of device-side sanitizers
+
+这是跨层分工的直接证据：编译后的设备检查与 Runtime 对实际 device allocation、context、事件及后端（Level Zero/OpenCL）的资源服务协作。[I03]
+
+~~~text
+SYCL/OpenMP ─ device compiler -fsanitize=address/memory/thread
+                  ↓
+           instrumented device binary
+                  ↓
+        Unified Runtime sanitizer layer
+                  ↔ USM/buffer allocation, queue/event, backend adapter
+                  ↓
+        device reports + host reporting / symbolization
+~~~
+
+**不能混淆三个问题：**
+- ASan 的“地址有效性”需要 metadata 与内存分配接口；MSan 检查定义性（有时涉及传播）；TSan 检查访问冲突及同步，三者不是同一个shadow查询函数。
+- Unified Runtime 是对运行时职责的公开参照，**不是**可直接移植到自研 GPU 的 KMD。设备映射和驱动提交仍需本项目KMD/UMD实现。
+- UR 规范页面对 MSan/TSan 仍可能标为 planned，而 Intel 2026 编译器指南明确给出设备侧MSan/TSan产品命令；版本和适用路径应分别注明，不应写成两者无条件、全平台同等可用。[I01][I03]
+
+**运行模式影响证据。** Intel限制文档披露某些设备/单卡要求，以及设备ASan下kernel串行执行、部分workgroup规模可能跳过私有/局部检查的问题。我们不能通过强制串行化换取低误报后声称并发Racecheck已经通过；应在结果里显式记录并发模式、checked/skipped数及失败原因。[I02]
+
+### 4.4 MUSA Compute Sanitizer：可证实的公开行为与不可推断的内部实现
+
+[摩尔线程官方用户指南](https://docs.mthreads.com/mooreperf/mooreperf-doc-online/musa_compute_sanitizer/user_guide/) 明确公开了 `mt-compute-sanitizer` 的运行期检查形态：默认启用 global 越界；同时检查 MUSA Runtime/Driver API错误；显存泄漏须显式开启 `--leak-check=full`，并提供错误调用栈/定位输出。[M01][M02]
+
+**官方原文片段：** “检测 kernel 访问不属于自己的 global memory 地址”。[M01]
+
+本报告**不能由上述公开功能推断**它是否在某个版本采用：LLVM ASan shadow、完全机器码 patch、硬件事件、对象区间表、三者融合或私有固件算法。除非获得官方设计说明或可核实源码，均标记“实现机制未披露/未核实”，不能以其作为C路线实际采用某种具体ISA重写算法的证据。
+
+本项目可以借鉴的公开产品契约包括：默认 checker 开关、单独的 leak 模式、UMD/Driver API 返回码与GPU访存异常分别归类、报错包含源/Host stack及过滤参数；这些属于产品与接口设计，不意味着复制其内部核心算法。
+
+### 4.5 LLVM 上游 ASan／HWASan：能够直接借鉴的算法与仍缺的 GPU 适配
+
+**经典ASan**：[Clang AddressSanitizer](https://clang.llvm.org/docs/AddressSanitizer.html)、[AddressSanitizerAlgorithm](https://github.com/google/sanitizers/wiki/AddressSanitizerAlgorithm)、[LLVM AddressSanitizer.cpp](https://llvm.org/doxygen/AddressSanitizer_8cpp_source.html) 给出了“编译器访问点插桩＋运行时分配/poison＋shadow/redzone/quarantine”的公共结构。[L01][L02][L03]
+
+~~~c
+// 算法示意：只有Shadow映射已受控且状态有效才能读取
+idx = gpuva >> 3;                         // 常见1:8 granule
+s = safe_shadow_lookup(context, idx);     // 查不到≠有效
+check_all_active_bytes(s, gpuva, width);  // 全部字节，而非只查首字节
+~~~
+
+ASM／特殊设备指令可能在IR pass后出现，必须用目标后端的指令清单复核插桩。CPU compiler-rt 的线程局部、系统调用、mmap、异常机制及符号化工具，不能不加处理地假设 GPU 设备端存在。
+
+**HWASan**：[LLVM Hardware-Assisted AddressSanitizer Design](https://clang.llvm.org/docs/HardwareAssistedAddressSanitizerDesign.html) 定义 pointer tag／memory tag 比较和short granule路径。[L04] 它不是“任何越界都会检出”的确定性对象bounds算法：需要可用tag位或独立携带方式、granule语义、tag重选和碰撞模型，还要处理tag与地址运算。已有CPU专用Top Byte Ignore不能推导自研GPU自动具备同样硬件功能。
+
+**上游与自研分工：** Compiler 借鉴LLVM访存识别、检查插桩、DebugLoc、ignorelist/优化交互；UMD提供对象/分配信息、Shadow资源、设备报告；KMD只补缺失的映射/异常/终止；cmodel与QEMU现有GPU ISA执行器用于原指令和插桩后指令的语义验证。这些GPU地址空间、异步依赖和执行/终止策略属于本项目必须完成的实现。
+
+### 4.6 原始研究给产品路线提供哪部分机制：不要混淆“论文提出”和“厂商当前支持”
+
+| 公开研究 | 能明确借鉴的机制 | 本项目路线 | 不能直接复制的假设 |
+|---|---|---|---|
+| cuCatch，PLDI2023 [P01] | 编译期找到pointer root，维护对象bounds与tag相关元数据 | D1/D2的来源思路；B+D融合 | NVIDIA论文原型数据结构与自研GPUVA/ABI不必一致；产品版非论文完整移植 |
+| BARRACUDA，PLDI2017 [P02] | 二进制/中间形式插桩取事件、Host侧访问历史与HB分析 | C的访问采集；R1的事件/分析分层 | 其fat binary→PTX→JIT不是任意最终机器码rewriter |
+| HiRace，SC2024 [P03] | 受限层次同步下的FSM、scoped clocks和设备端CAS更新 | R1 shared checker | 不支持的锁/scope/epoch wrap不能当作已证明 |
+| GPUArmor，TACO2026 [P04][P05] | 软硬件协同对象元数据、Metadata Lookaside Buffer与开销分析 | F的对象metadata cache/ISA研究；D1 | 作者模拟参数、vanilla与NOP baseline不能当自研真机指标 |
+| SuperCollider，PLDI2026 [P08] | 对某些访问重复读取/随机延迟、地址碰撞的race观测 | R1概率辅助模式 | 同值/ABA/采样窗口可漏检，不能当作全HB保证 |
+
+**判断方法：** 标“参考NVIDIA”不意味着我们拥有NVIDIA内部源码；标“参考cuCatch/GPUArmor”意味着借鉴公开论文机制，不意味着该研究已经成为本项目能直接使用的实现。
+
+### 4.7 以一条 S01 Global Store 对齐不同厂商/LLVM 的真实机制
+
+~~~text
+原指令：if (active && predicate) GLOBAL_STORE32 [addr] = value
+
+公共输入：addr、size=4、GLOBAL、context、lane、predicate、site_id
+  ├─ 运行时patch类[N02][N03]：观察最终访存点 → 做选定的地址检查
+  ├─ LLVM/ROCm类[L01][A01]：IR/MIR插入check → shadow/有效区判断
+  ├─ NVIDIA编译期[N02][N04]：同时携带pointer原对象base/bounds
+  ├─ Intel UR类[I01][I03]：编译检查器 + UMD/runtime分配/队列协同
+  ├─ MUSA产品参照[M01]：公开错误类型/报告要求；内部算法未知
+  └─ 本项目QEMU+GPU ISA模型：可执行插桩码，也可前置独立访存oracle
+~~~
+
+此流程是**原创对照与接口设计图**，不是从任一厂商内部仓库复制的调度流程。判断 S01 合法性时，应检查受控逻辑对象的完整实际访问区间；只有 page/BO map 时，4B 小幅越界可能仍合法映射。若只观察最终地址而目标落入另一个live对象，则需D1来源信息。
+
+### 4.8 A～F每条方案的出处、融合及本项目新增设计
+
+<a id="route-provenance-matrix"></a>
+
+| 路线／S01变体 | 公开机制源头（官方/论文） | 单一借鉴、融合还是本项目新增 | 自研部分必须真正实现 | 不能冒称 |
+|---|---|---|---|---|
+| A：功能模型语义检查 | LLVM LangRef [L05]、AMDGPU目标语义参照[L06]、QEMU平台[Q01][Q03] | **已有GPU模型＋原创检查器接入**；逻辑区间检查属通用算法 | GPU ISA执行入口前的lane/byte谓词、对象范围oracle、错误事件和差分接口 | “QEMU自带ASan/所有GPU空间自动被检查” |
+| B1：LLVM访存插桩＋当前live对象区间 | LLVM ASan插桩结构[L01][L03]＋NVIDIA API/资源检查设计[N03] | **公开通用机制融合＋本项目具体区间服务**，非AMD产品同款算法 | Sorted interval/sparse registry快照、UMD发布协议、失败和未知地址策略 | “B1等于ASan 1:8 shadow”或“检出原对象跨入B” |
+| B2：LLVM Shadow／Redzone | Google ASan [L02]＋ROCm GPU ASan [A01]＋LLVM目标适配[L03] | **明确借鉴的GPU ASan路线＋自研GPUVA/UMD/KMD适配** | GPUVA→shadow布局、设备helper、poison顺序、SIMT-safe报告 | “直接重用CPU runtime无需修改” |
+| C：运行时二进制插桩 | NVIDIA Patching API [N03]；BARRACUDA [P02] 作为研究对照 | **公开patch入口模式＋自研ISA重写器**；具体rewriter属自主实现 | Decode/CFG/encode/relocation/资源重算/原PC映射/patch cache | “复制到了NVIDIA未公开的二进制引擎” |
+| D1：原对象base/bounds | NVIDIA编译期memcheck [N02][N04]＋cuCatch [P01] | **公开编译期fat-pointer理念融合＋自研SSA/ABI传播** | GEP/phi/select/调用参数root、sidecar与unknown降级 | “仅按当前地址查表就是provenance” |
+| D2：指针时间身份 | cuCatch tag/meta思路[P01]＋LLVM HWASan tag[L04] | **公开时间安全思路融合＋针对本项目的强身份协议** | epoch随指针load/store/copy/atomic一致传播，复用与回收协议 | “分配表多一个generation就能检出旧裸指针” |
+| E：编译＋binary混合 | NVIDIA hybrid instrumentation [N02][N05] | **厂商公开产品策略＋B/D/C多机制融合＋自研ABI/manifest** | 模块能力选择、拒绝不兼容、不同保证级别与跨模块来源降级 | “不同模块混用自动等于所有函数被检测” |
+| F0：Guard Page | Linux GPUVM/页表映射 [K01]及目标MMU原理 | **通用映射保护的工程应用** | 页对齐placement、guard map与fault attribution | “页级保护检测任意4B对象内越界” |
+| F1：Tag Compare | LLVM HWASan [L04] | **公开tag算法＋目标ISA/tag存储适配** | tag表示/碰撞/short granule、空转与失效/异常 | “任何tag匹配均证明原对象bounds正确” |
+| F2：硬件Bounds／MLB | GPUArmor [P04]＋cuCatch/NVIDIA对象bounds [P01][N04] | **论文研究结构启发＋独立自研ISA/RTL/driver契约** | metadata cache、一致性、fault时序、RTL/DV | “软件原型性能就是芯片最终开销” |
+| I1 Initcheck | NVIDIA initcheck [N02]＋Intel device MSan [I01] | **分离未写过bitmap与值级定义性传播的融合设计** | byte definedness/copy/async时序；完整值级MSan另立 | “bitmap checker就是MSan” |
+| R1 Racecheck | NVIDIA racecheck [N02]＋BARRACUDA/HiRace/SuperCollider [P02][P03][P08] | **算法按同步子集选择的多源融合** | HB/FSM/state、lane/byte mask、scope、资源上限 | “一次执行无报告就证明race-free” |
+| S1 Synccheck | NVIDIA synccheck [N02]＋目标ISA/LangRef [N09][L05] | **检测目标借鉴＋目标barrier状态机原创适配** | 参与集合、phase、token、合法部分mask与超时分类 | “所有超时都是证明的死锁” |
+
+**“原创”的精确含义：** 本表说的“自研/原创”是针对本项目需独立设计和写代码的工程实现、接口及适配，不是对世界首次提出该算法的学术新颖性宣称。公开文献已有的基本shadow、对象bounds、tag、HB和设备trace不能改名归为新算法。实际在实现时，许可证允许复用代码才复用；否则独立实现并保留公开引用。
+
+### 4.9 对每种产品机制最有价值的源码／官方证据入口
+
+| 需要核对的问题 | 官方定位链接 | 可直接对应到的本项目模块 |
+|---|---|---|
+| NVIDIA编译期与runtime区别、base/bounds与hybrid | [Compute Sanitizer compile-time](https://docs.nvidia.com/compute-sanitizer/ComputeSanitizer/index.html#compile-time-patching) | Compiler instrumentation mode / manifest |
+| NVIDIA每条指令可携带的地址/宽度/PC及patch入口 | [Sanitizer Patching API](https://docs.nvidia.com/compute-sanitizer/api/group__SANITIZER__PATCHING__API.html) | C: OpcodeSemantics/PatchedPCMap |
+| NVIDIA资源、stream、graph、memcpy回调 | [Sanitizer Callback API](https://docs.nvidia.com/compute-sanitizer/api/group__SANITIZER__CALLBACK__API.html) | UMD EventAdapter/AllocationRegistry |
+| AMD GPU ASan的shadow/redzone/device runtime约束 | [ROCm GPU ASan 7.2.4](https://rocm.docs.amd.com/projects/llvm-project/en/docs-7.2.4/conceptual/using-gpu-sanitizer.html) | B: ShadowManager/DeviceChecker |
+| Intel异构runtime sanitizer layer | [Unified Runtime sanitizers](https://oneapi-src.github.io/unified-runtime/core/INTRO.html#sanitizers) | UMD context/queue/backend adapters |
+| MUSA公开错误类型、默认开关及leak模式 | [MUSA用户指南](https://docs.mthreads.com/mooreperf/mooreperf-doc-online/musa_compute_sanitizer/user_guide/) | CLI / ReportDecoder / API error checks |
+| LLVM设备目标已有ASan插桩实现的代码位置 | [AddressSanitizer.cpp](https://llvm.org/doxygen/AddressSanitizer_8cpp_source.html) | Compiler pass/target address-space |
+| HWASan tag/short granule详细算法 | [HWASan Design](https://clang.llvm.org/docs/HardwareAssistedAddressSanitizerDesign.html) | F1、D2机制比较 |
+
+### 4.10 厂商版本、运行命令与可复制的实验入口
 
 | 来源 | 本次核验版本／时间 | 应实际检查的开关和限制 |
 |---|---|---|
@@ -556,7 +709,7 @@ whole-wave／quad-wave 执行时，当前硬件 EXEC 可能不等于应用的逻
 
 ### 7.7 功能级cmodel与QEMU全系统平台的支持边界
 
-**【工程结论】功能级 cmodel 侧重 GPU 执行语义和检查器核对；接入目标 GPU 模型的 QEMU 全系统平台，在此基础上增加 Guest OS、KMD、UMD 与设备协议的联调范围。后者是否具备 GPU 检测能力，取决于接入了什么执行器、检查器和元数据接口，不能仅由“运行在 QEMU 中”推出。**
+**【已知项目事实（用户于2026-10-21确认）】基于QEMU的全系统虚拟平台已具有目标GPU ISA执行模型，因此本项目当前应归类为Q2，而不是Q0或只实现MMIO/队列桩的Q1。** 是否已覆盖全部访存opcode、lane谓词、GPUVA/MMU、shared/private、async和同步语义，以及内部是否复用独立功能cmodel，未见源码与测试证据，必须逐项检查。QEMU具备执行器不意味着已经实现Sanitizer检测器、错误协议或每一项ISA语义。
 
 #### 7.7.1 先区分“执行检查代码”与“独立检查”
 
@@ -579,7 +732,7 @@ F 的新指令、tag、fault 或 metadata cache 行为若不属于现有 ISA／�
 |---|---|---|---|
 | Q0：普通 QEMU，无目标 GPU | Guest CPU／OS 和已有通用设备；未接入目标 GPU | 不能 | 可测试通用 Host 软件和安装流程；现有显示设备不因此成为自研计算 GPU |
 | Q1：目标 GPU 协议桩 | 实现目标寄存器、队列、DMA／中断等约定的设备前端；不执行目标 kernel | 不能 | 可测试 KMD 协议、提交、映射、完成和故障处理；合成 completion 或 fault 不算一次 GPU 检测 |
-| Q2：可执行目标 GPU 的全系统模型 | Q1 所需前端与能够解释目标 ISA 的功能 GPU 模型连接；可复用已有 cmodel | 能，在模型已实现的语义内 | 可把 A 或 B／C／D／E 的实际检测与 UMD、KMD 联通；寄存器、GPU MMU、固件、异常及同步是否完整仍逐项声明 |
+| **Q2：本项目既有全系统GPU ISA模型** | 用户已确认平台能执行目标GPU ISA；它可以直接包含GPU模拟器，或通过桥接复用功能cmodel，具体架构待代码核验 | **能，现有能力**（以实现的opcode/语义为限） | 增加Sanitizer观察入口、shadow/对象身份/报告及Guest生命周期接线；GPU执行器本身不再作为待开发项目计费 |
 | Q3：VFIO 直通真实 GPU | Guest 驱动控制分配给 VM 的真实设备，kernel 在真实 GPU 上执行 | 能，取决于硬件及 Guest 驱动支持 | 可运行已经实现的真机 sanitizer；不自动获得 Q2 的内部模型观测与确定性执行能力 |
 
 KVM 的 Guest CPU 加速方式与 Q1／Q2／Q3 的 GPU 接入方式应分开记录。例如 Q2 可以使用 KVM 运行 Guest CPU，并在软件 cmodel 中运行 GPU；这不表示 KVM 已提供目标 GPU ISA 模型。
@@ -831,12 +984,12 @@ VFIO文档将设备访问、I/O地址映射及中断等接口分开，并在示�
 
 #### 8.8.1 Q1／Q2 需要补齐的系统接口
 
-**【工程设计要求】** QEMU 已提供机器框架，不等于目标 GPU 的设备实现已完成。下表是目标设备与 sanitizer 的接入清单；可优先扩展设备模型、cmodel 桥接和测试服务，是否必须修改 QEMU 通用核心取决于所选版本的接口缺口。
+**【本项目Q2已知前提】** 用户明确确认QEMU全系统虚拟平台已经能够执行目标GPU ISA。所以下表从已有GPU执行模型出发，检查Sanitizer所需的设备/模型/Guest驱动接口，而非要求重新开发GPU执行器。**下表是目标设备与 sanitizer 的接入清单；可优先扩展设备模型、cmodel 桥接和测试服务，是否必须修改 QEMU 通用核心取决于所选版本的接口缺口。
 
 | 组件 | Q1 最低支持 | Q2 增加的支持／需要核对的契约 |
 |---|---|---|
 | 设备前端 | 目标总线、寄存器、doorbell、队列、完成、中断、reset；若为 PCIe 则包括所需 BAR／MSI 等语义 | 把真实提交描述符交给 GPU 执行器；完成／fault 必须来自相应执行结果 |
-| GPU 执行核心 | 不执行目标 kernel，应显式标记该状态 | 已有 cmodel 的 dispatch、ISA、mask、原子、barrier、地址空间；缺失语义补齐或明确拒绝 |
+| GPU 执行核心 | Q1对照配置不执行目标kernel；**本项目已具备目标GPU ISA模型** | 接入访存前hook、检查器helper及错误报告；逐项检查现有dispatch/ISA/mask/atomic/barrier/address-space覆盖，只有缺项才修改执行核心 |
 | 内存／GPU MMU 桥接 | 已支持的 DMA 与 Guest 映射、权限、错误返回 | GPUVA 转换、VRAM／system memory、shared/private 身份、目标要求的映射失效语义；不能把 GPU MMU 与平台 IOMMU 合并为一张假定正确的表 |
 | Guest UMD／Host runtime | 对象与队列管理、模块加载、提交／完成流程 | 将真实 alloc／publish／free-effective／reuse、事件依赖、模块能力、启动 sidecar 送入检查路径；device allocator 同步进入协议 |
 | Device runtime／检查元数据 | 可构造元数据和模拟报告 | B 的 shadow，D 的 bounds／pointer metadata，C/E stub 与 ABI，以及执行中的真实报告 |
@@ -1523,20 +1676,20 @@ K-F 同样只为未具备的驱动状态契约计费。F 的基础预算已经�
 
 #### 16.9.1 四种环境不是同一种检测能力
 
-本节的 Q0–Q3 是项目配置定义。QEMU 是否能运行 Host/guest CPU，并不自动意味着能执行目标 GPU kernel；需要先明确 GPU 设备和执行模型实际存在什么。
+本节Q0–Q3是用于区别架构的通用配置名。**本项目现有QEMU全系统平台经用户确认已具备目标GPU ISA执行模型，采用Q2；Q0/Q1不再是当前待完成GPU执行的阶段。** 未核对源码的Guest接口、地址域和检查器能力仍待逐项确认，不能按全部缺失计费。
 
 | 配置 | 定义与能验证的范围 | 平台新增核心 kLOC | 平台新增手写测试 kLOC | 不能据此承诺的能力 |
 | --- | --- | --- | --- | --- |
 | Q0：无目标 GPU 设备 | 已有 QEMU 运行 CPU/guest 的环境；可执行 CPU 侧单元测试。 | 0 | 0 | 没有目标 GPU kernel 执行，也没有 kernel 内访存/sync 检测。 |
 | Q1：不解释 GPU ISA 的设备桩 | 枚举、有限 MMIO/队列、命令格式、模拟完成或故障的协议夹具。 | 2–5 | 2–5 | 假完成或 DMA copy 不能证明 GPU load/store、atomic、mask、barrier 或 sanitizer 检查逻辑正确。 |
-| Q2：已有可执行目标 ISA 的 GPU cmodel 接入全系统 | guest KMD/UMD 提交真实命令，由已有模型执行 kernel；新增设备接线和系统集成。 | 14–28 | 14–30 | 此处只是一次性平台基础，另加路线特有接线；不包含从零编写 GPU 模拟器。 |
+| **Q2：本项目已具备GPU ISA执行模型** | 现有全系统平台能执行目标kernel；下列14–28/14–30为**仅当全部列出的Guest/设备接线缺失时**的条件参考包，不能当作当前固定新增成本。 | **0～14–28（按实际缺口取子包）** | **0～14–30（按实际缺口取子包）** | GPU ISA模型已存在；已实现的设备前端、队列、Guest驱动接入和执行桥不得重复开发或重复计费。 |
 | Q3：已有可用 VFIO/设备直通路径 | guest 驱动向真实 GPU 提交，另做平台验证与诊断接线。 | 3–7 | 4–9 | kernel 检测发生在真实 GPU 及其 sanitizer 上，不是由 QEMU CPU 模拟器完成。 |
 
 Q0 的 0 表示不建设 GPU 平台，不是“零成本拥有 GPU 检测”。Q1 是可选协议原型，不能自动再叠加到 Q2 全额预算；升级 Q2 时，实际复用的设备前端代码须从 Q2 相应包扣除。Q3 的范围是一套既定 guest OS/设备组合与已选 B–F 真机路径的验证接线；它不提供 A 所需的 GPU 模型，不能以设备直通替代 A 的模型执行。Q3 的前提包括已有适用的直通路径、IOMMU/设备隔离、reset 能力和可工作的 guest GPU 驱动；若这些前提尚未成立，3–7/4–9 只覆盖接线与验证，不能报价完整直通使能。
 
 #### 16.9.2 Q2 的一次性平台基础
 
-必须已有能够执行目标 ISA 的 GPU cmodel、可工作的 guest OS 和该 GPU 的 guest KMD/UMD，并有可连接的设备/内存契约。以下只计把现有部分接起来；不包含从零开发操作系统、全新 KMD、完整 GPU 模拟器、目标 ISA 全指令模型或新硬件。
+**已确认条件：GPU ISA执行模型存在于本项目QEMU全系统平台。** 以下平台基础数字是v1.2列出的**全部系统接线子项尚需新建**的规划包，并非v1.3的实测缺口；具体已有哪些设备前端/guest KMD/地址空间/队列桥不明，应逐项标注“已存在”“需适配”“缺失”。下表既有cmodel执行桥一项只有当现有QEMU与独立cmodel确实分离且缺少桥接时才成立；**QEMU内部已实现独立GPU ISA解释器时，该项可以为0，不能再给它重复建设一个模型。**
 
 | 平台包 | 核心 kLOC | 手写测试 kLOC | 内容与边界 |
 | --- | --- | --- | --- |
@@ -1577,13 +1730,13 @@ E 的平台特有增量按 B 接线核心 2–4/测试 3–6，加 D 独有 1–
 
 **组合公式：** 选定路线的含功能 cmodel 研发参考包＋实际缺失的 KMD 能力净增量＋所选平台的净增量＋所选额外 checker 的去重增量。外部固件、硬件和其他已声明的前置项目单列。
 
-例如 B：基础参考包核心 27–53、测试 23–44；选择 Q2 时加平台基础与 B 接线核心 16–32、测试 17–36，合为核心 **43–85**、测试 **40–80**。若 K-M/K-E/K-A 又确实全缺，且符合各包前提，再加核心 7–16、测试 7–18，得核心 **50–101**、测试 **47–98**；固件缺口另列。不能先加含模型的 B，再把同一个模型随 Q2 重计一次。
+例如 B：基础参考包核心27–53、测试23–44；**只有Q2全部旧条件包确实尚未实现时**，再加平台基础与B接线核心16–32、测试17–36，才有核心**43–85**、测试**40–80**这一情景预算。对已拥有Q2 GPU ISA执行平台的本项目，这不是默认追加额；应按已存在的设备前端和缺失的Sanitizer接线逐包裁剪，可能只需B特有的shadow/报告接入。若 K-M/K-E/K-A 又确实全缺，且符合各包前提，再加核心 7–16、测试 7–18，得核心 **50–101**、测试 **47–98**；固件缺口另列。不能先加含模型的 B，再把同一个模型随 Q2 重计一次。
 
 Q2 的通过说明已实现模型语义与指定 guest 栈的集成结果，不自动证明全部真机调度、真实 cache/一致性时序或性能。Q3 则使用真实 GPU，仍需按真实软件栈与工具覆盖范围解释结果。
 
 ### 16.10 将区间转为项目预算与算术校验
 
-建议以两周左右技术摸底收集 opcode/访存类型、kernel 与 allocator/API 数量、已支持的 patch 模式、module ABI 数量、现有 KMD 契约、模型与真机差异，以及是否已有 Q2/Q3 平台。先做可运行的最小链路，再按“接口、算法、失败路径、兼容、验证”建立工作包和责任人；人月需要结合团队经验与审查/验证成本估计，不用统一的每天写多少行换算。
+建议以两周左右技术摸底收集 opcode/访存类型、kernel 与 allocator/API 数量、已支持的 patch 模式、module ABI 数量、现有 KMD 契约、模型与真机差异，以及**既有Q2 GPU ISA模型的访存hook和Guest系统接线现状**（不再摸底Q2是否存在）；Q3另按实际情况判断。先做可运行的最小链路，再按“接口、算法、失败路径、兼容、验证”建立工作包和责任人；人月需要结合团队经验与审查/验证成本估计，不用统一的每天写多少行换算。
 
 本章数值的复核规则为：
 
@@ -2628,8 +2781,8 @@ M1 是有意缩小的原型，不能把 M1 的周期或代码量当成第16章�
 9. 真正要支持的语言／框架与闭源模块比例。
 10. 第一版是开发者工具、CI工具，还是更强的运行时防护需求。
 11. 必须支持的地址空间和错误类型，特别是对象／子对象与复用UAF。
-12. QEMU平台属于Q0/Q1/Q2/Q3哪类；CPU accelerator、目标GPU设备模型、PCI/MMIO或其他总线接口、GPU MMU/VRAM/DMA/IRQ、Guest驱动、快照/重放和故障注入现状。
-13. Q2是否复用同一cmodel、地址域如何转换、Guest/Host KMD边界；Q3是否具备IOMMU隔离与实际设备直通条件。
+12. **QEMU已经属于Q2（用户确认可执行目标GPU ISA）**；需进一步核查现有GPU执行器的源码入口、CPU accelerator、设备前端、GPU MMU/VRAM/DMA/IRQ、Guest驱动、访存前hook、快照/重放和故障注入现状。
+13. Q2 GPU ISA解释器是否与独立功能级cmodel共用代码；如果不共用，它们的ISA语义差分接口如何设计；GPUVA/Guest/Host地址域转换及Guest/Host KMD边界；Q3的VFIO能力单独核查。
 14. 可投入团队、可用真机、允许的显存和性能预算；明确三组件、模型、QEMU平台及硬件项目各自负责人。
 
 回答这些参数后，应优先修订第16章的估算和第20章排期，再进入具体实现设计。本轮结论已经足以决定首个原型的方向：公共P＋真机B＋独立A校验，以及明确预留D的对象身份协议。
@@ -2640,7 +2793,7 @@ M1 是有意缩小的原型，不能把 M1 的周期或代码量当成第16章�
 
 ### 23.1 官方文档与上游源码
 
-本节所有在线资料均在 **2026-10-20** 核验。未提供可靠单篇发布日期的动态文档，以版本与访问日为准；不把抓取日当成发布日期。
+首版资料主要在 **2026-10-20** 核验；**第4章新增的机制与官方页面于2026-10-21补核**。未提供可靠单篇发布日期的动态文档，以版本与访问日为准；不把抓取日当成发布日期。
 
 **[N01] NVIDIA. NVIDIA Compute Sanitizer.** 官方产品总览，动态页面。
 
@@ -2714,6 +2867,12 @@ M1 是有意缩小的原型，不能把 M1 的周期或代码量当成第16章�
 - [设备 sanitizer 官方文档](https://www.intel.com/content/www/us/en/docs/dpcpp-cpp-compiler/developer-guide-reference/2026-0/device-side-compiler-sanitizers.html)
 - 已读：ASan、MSan、TSan的设备支持、配置和运行层。
 - 用途：异构运行时与多checker产品形态；平台限制需合读[I02]。
+
+**[I03] oneAPI Unified Runtime. Introduction — Sanitizers（官方运行时架构规范）。**
+
+- [官方页面](https://oneapi-src.github.io/unified-runtime/core/INTRO.html#sanitizers)
+- 核验日期：2026-10-21；已核对UR loader层对device-side ASan及其他checker的接口定位。
+- 用途：第4.3节比较编译器/异构UMD runtime分工；该规范中个别checker标为planned，应与[I01] 2026编译器指南的实际产品支持分别解释，不直接推断目标GPU支持。
 
 **[I02] Intel. Compiler Sanitizers.** oneAPI DPC++/C++ Developer Guide 2026.0。
 
