@@ -50,6 +50,7 @@ KMD复用已有契约时增量源码可以为零，必须仍验证实际映射�
 | [正式研究主稿](llvm-gpu-sanitizer-research.md) | 全部正式路线、28场景、职责与真实硬件验收 |
 | [逐组件关键实现代码](real-gpu-components-implementation.md) | Compiler/Device Runtime/UMD/KMD/Firmware/RTL/CLI逐项伪代码及路线对照 |
 | [S01厂商实施指南](S01-vendor-implementation-guide.md) | NVIDIA/AMD与自研实际硬件路径 |
+| [AMD组件及硬件替代指南](amd-gpu-asan-hardware-fallback.md) | 无XNACK/HMM/MMU/Tag/Bounds时真实GPU软件检查与不能恢复的保证 |
 | [生产软件预算](estimates-v1.8.json) | 仅五条方案、P一次计费与缺失KMD契约 |
 | [28组用例](../samples/) | 错例、合法对照、支持范围和真实GPU运行结果 |
 | [CI验证指南](gpu-actions-ci.md) | 实卡Runner、错误证据、未运行分类 |
