@@ -41,6 +41,12 @@ require("## 9. 真实GPU部署准入与模型验证边界" in main,
 require("真实GPU" in audit and "QEMU" in audit,
         "全仓库硬件准入审计应存在")
 require("## 9. 路线 A" not in main, "不得恢复模型侧产品路线")
+require("A 是 cmodel" not in main and "不把六条路线都写成无条件支持" not in main,
+        "不得在场景总述恢复已废弃的六路线/A模型产品分类")
+require("M1可以直接在Q2运行S01正反例" not in main,
+        "M1必须先交付真实GPU检测产物，再由QEMU运行相同产物")
+require("模型能检" not in main,
+        "第18.29场景表不得暗示独立模型检测算产品能力")
 require("### 3.1 方案M" not in guide and "方案M：" not in guide,
         "不得恢复S01模型原生检测候选方案")
 require("| S01-0 模型基线 |" not in guide,

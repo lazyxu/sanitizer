@@ -6,7 +6,7 @@
 
 | 实际参考路线 | CUDA/AMDGPU现有机制 | 自研组件重点 |
 |---|---|---|
-| NVIDIA默认运行时Memcheck | 对已编译GPU二进制的访存点运行时插桩、检查当前有效分配；某些邻接live对象场景可漏检 | UMD机器码patch和对象registry；Compiler提供MC指令语义；KMD提供正常映射/完成 |
+| NVIDIA默认运行时Memcheck | 对已编译GPU二进制的访存点运行时插桩、检查当前有效分配；某些邻接live对象场景可漏检 | UMD独立Runtime Binary Rewriter处理ISA解码/编码、Patch和对象Registry；**生产Compiler零改动**（可选复用已有MC工具）；KMD按需提供映射/完成 |
 | NVIDIA CUDA13.1+编译期Memcheck | Base-and-Bounds/fat pointer来源分析，运行时与GPU设备检查协同；未知来源降级 | Compiler SSA provenance与GPU检查库；UMD Kernel参数对象sidecar |
 | AMD ROCm GPU ASan | LLVM访存插桩＋Shadow Memory＋Redzone/Poison＋ASan运行库 | Compiler LLVM Pass与设备checker；UMD shadow与对象生命周期；KMD按缺口改 |
 | 其他GPU方案 | **GPU设备可执行**的区间表插桩、GPU MMU Guard Page、已具备的Tag/Bounds硬件；cmodel仅作验证 | 按厂商未提供的检测保证及项目GPU硬件能力选择 |
