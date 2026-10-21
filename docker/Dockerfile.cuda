@@ -1,0 +1,8 @@
+# NVIDIA 官方 GPU 编译环境，不用 CPU AddressSanitizer 代替设备检测。
+FROM nvidia/cuda:13.1.2-devel-ubuntu24.04
+ARG DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends python3 ca-certificates bash build-essential cmake git && rm -rf /var/lib/apt/lists/*
+ENV PATH="/usr/local/cuda/bin:${PATH}"
+WORKDIR /workspace
+RUN command -v nvcc && command -v compute-sanitizer
+CMD ["/bin/bash"]

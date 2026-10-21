@@ -1,0 +1,7 @@
+.git
+build
+results
+__pycache__
+*.o
+*.so
+*.log

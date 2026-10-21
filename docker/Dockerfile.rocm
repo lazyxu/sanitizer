@@ -1,0 +1,10 @@
+# AMD 官方 ROCm GPU 开发环境。受支持的 xnack+ GPU 与 /dev/kfd 是运行前提。
+FROM rocm/dev-ubuntu-24.04:7.2.4-complete
+ARG DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends python3 ca-certificates bash build-essential cmake git && rm -rf /var/lib/apt/lists/*
+ENV ROCM_PATH=/opt/rocm
+ENV PATH="/opt/rocm/bin:/opt/rocm/llvm/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/opt/rocm/lib/asan:/opt/rocm/lib:${LD_LIBRARY_PATH}"
+WORKDIR /workspace
+RUN command -v hipcc
+CMD ["/bin/bash"]
