@@ -91,7 +91,7 @@ def compile_case(item, backend, compiler_patch):
                           "\n" + linked)
     return binary, log
 
-def classify(backend, expected, mode, rc, log):
+def classify(backend, expected, mode, rc, log, case=None):
     if rc == 124:
         return "TIMEOUT"
     if rc == 77 or "SKIP:" in log:
@@ -101,7 +101,18 @@ def classify(backend, expected, mode, rc, log):
         return "GPU_API_ERROR_NOT_GPU_KERNEL_SANITIZER"
     detected = bool((NVIDIA_GPU if backend == "cuda" else AMD_GPU).search(log))
     if detected:
-        return "DETECTED_GPU" if mode == "bad" else "FALSE_POSITIVE_OR_OTHER_ERROR"
+        if mode == "good":
+            return "FALSE_POSITIVE_OR_OTHER_ERROR"
+        # Smoke必须检出指定的GPU错误类别，不能把一个无关泄漏当成S01越界。
+        required = {
+            ("cuda", "S01"): r"Invalid __global__",
+            ("cuda", "S13"): r"Uninitialized __global__",
+            ("cuda", "S14"): r"(Potential (?:RAW|WAR|WAW)|Hazard (?:RAW|WAR|WAW)|Race reported)",
+            ("rocm", "S01"): r"heap-buffer-overflow[^\n]*on amdgpu device\s+\d+"
+        }.get((backend, case))
+        if required and not re.search(required, log, flags=re.I):
+            return "MISMATCHED_GPU_DIAGNOSTIC"
+        return "DETECTED_GPU"
     if backend == "rocm" and "ERROR: AddressSanitizer:" in log:
         return "CPU_ASAN_ONLY_NOT_GPU"
     if "GPU_API_ERROR:" in log:
@@ -175,7 +186,7 @@ def main():
                 rc, log = run(cmd, timeout=40 if item.get("dangerous") else 120,
                               env=os.environ.copy())
                 (results_dir / f"{case}.{mode}.log").write_text(log, encoding="utf-8")
-                result=classify(a.backend, spec["expect"], mode, rc, log)
+                result=classify(a.backend, spec["expect"], mode, rc, log, case=case)
             print(f"  {mode}: {result} （要求：{spec['expect']}；{spec['reason']}）")
             results.append(dict(case=case,mode=mode,expected=spec["expect"],status=result))
     (results_dir / "summary.json").write_text(
@@ -186,7 +197,7 @@ def main():
     if a.strict:
         fail={"BUILD_OR_INSTRUMENTATION_FAILURE","FALSE_POSITIVE_OR_OTHER_ERROR",
               "TIMEOUT","RUNTIME_ERROR_NO_GPU_REPORT","CPU_ASAN_ONLY_NOT_GPU",
-              "UNCLASSIFIED_SANITIZER_ERROR"}
+              "UNCLASSIFIED_SANITIZER_ERROR", "MISMATCHED_GPU_DIAGNOSTIC"}
         if any(x["status"] in fail or
                (x.get("mode")=="bad" and x["expected"]=="detect" and
                 x["status"]!="DETECTED_GPU") for x in results):
