@@ -2,11 +2,13 @@
 
 本仓库保存面向自研GPU和LLVM后端的sanitizer技术调研与架构实施建议。生产软件按**编译器、KMD（Kernel-Mode Driver，内核态驱动）、UMD（User-Mode Driver，用户态驱动）**分工；功能级cmodel与基于QEMU的全系统虚拟平台分别分析。
 
-**当前版本1.6.1（2026-10-21）：增加 S01「NVIDIA、AMD、其他方案」的厂商优先工程实施指南。既有56份 CUDA/HIP 样例与两厂商 GPU CI 不变；GPU 硬件检测尚无实际验收记录。**
+**当前版本1.7（2026-10-21）：撤销仅在cmodel/QEMU中生效的独立检测产品路线。正式候选只保留可在真实GPU执行检查指令或由真实硬件实施的B/C/D/E/F，模型只用于辅助验证。同步修正整个仓库的组件职责、实施顺序、样例和预算；真实GPU硬件检测仍未完成。**
 
 ## 阅读入口
 
-- [正式调研与实施方案](docs/llvm-gpu-sanitizer-research.md)：23章、44项参考来源，包含详细背景与目标、六条技术路线、组件契约、工程预算和28个检测场景。
+- **[全仓库真实GPU可部署性与职责审计](docs/hardware-deployability-audit.md)**：逐项说明被删除的模型独立检查产品方案、五个可部署候选、Compiler/KMD/UMD真实改动与需要完成的硬件证据。
+- **[当前B～F硬件候选工程量预算](docs/estimates-v1.7.json)**：模型/QEMU验证投入独立列示；旧预算中的模型单独产品路线已作废。
+- [正式调研与实施方案](docs/llvm-gpu-sanitizer-research.md)：23章、44项参考来源，包含详细背景与目标、五条真实GPU可部署候选路线、组件契约、工程预算和28个检测场景。
 - [项目背景](docs/llvm-gpu-sanitizer-research.md#background)与[建设目标](docs/llvm-gpu-sanitizer-research.md#goals)：建设动因、现有调试盲区、使用者、功能／质量目标、验收证据和优先级。
 - [厂商/LLVM详细机制](docs/llvm-gpu-sanitizer-research.md#vendor-deep-dive)与[各方案来源／融合／原创对照](docs/llvm-gpu-sanitizer-research.md#route-provenance-matrix)：NVIDIA runtime/compile-time、AMD GPU ASan、Intel UR、MUSA公开能力、LLVM shadow/tag与cuCatch/HiRace/GPUArmor等研究。
 - [三组件支持契约](docs/llvm-gpu-sanitizer-research.md#component-contracts)：编译器、KMD、UMD分别生产哪些信息、依赖什么接口，以及现有支持与新增修改的区别。
@@ -19,6 +21,12 @@
 - [验证基准与验收矩阵](docs/llvm-gpu-sanitizer-research.md#validation)、[研究进度](docs/research-progress.md)、[修订记录](docs/revision-history.md)、[文稿验证记录](docs/validation-report.json)。
 - [归档研究笔记](docs/research-notes/)：架构、论文及友商资料的过程记录与来源链接。
 
+## v1.7 生产硬件准入原则
+
+**Sanitizer的检查必须在实体GPU运行。** 允许的检测方案：Compiler生成的GPU ISA检查/Shadow、UMD运行期重写的GPU二进制检查、对象/时间身份设备检测、混合检测，以及目标实体GPU已支持的MMU/Tag/Bounds硬件。**仅在cmodel或QEMU GPU解释器中新增访存前回调，不会影响真实GPU，是无效的独立产品方案，现已从路线和预算中撤销。**
+
+推荐先交付B的真实GPU可执行LLVM设备检查器、UMD Shadow和KMD映射/完成契约，随后用已有QEMU ISA执行器**运行同一份插桩代码**进行预验证，最后实卡验收。C纯Runtime的生产Compiler可以不改；KMD需要支持但已有接口足够时也可以零新增。
+
 ## v1.6.1 澄清：纯运行时二进制插桩不要求修改编译器
 
 **NVIDIA-R风格的Runtime Binary Instrumentation：** 原始Kernel仍然使用未改动的既有编译器/已存在机器码。UMD的独立Runtime Binary Rewriter负责识别访存指令、机器码decode/encode、插入设备Patch、CFG重定位、资源统计和报告。可只读复用现有LLVM MC工具，但**没有强制修改生产Compiler的任务**；编译工具自己的设备Patch模块也不等于“修改编译器”。若缺少decoder，应在UMD插桩项目内自研并计费。旧§16中的C“Compiler”成本主要是历史GPU设备库的预算归属，不代表修改编译器；§16.5a已给出纯runtime路径的归属重分类。
@@ -27,7 +35,7 @@
 
 ## v1.6 厂商优先的 S01 研发路线
 
-新版不再把 S01 首先列成抽象的 A/B/C；优先讲 NVIDIA 默认运行时补丁、NVIDIA 编译期原对象分析和 AMDGPU LLVM ASan，再讨论模型oracle、区间表、GPU Guard Page、Tag、硬件Bounds和Hybrid。推荐以**已有QEMU GPU ISA解释器的独立oracle**验证S01，再实施**借鉴AMD/LLVM的设备Shadow**，最后补充**NVIDIA式编译期原对象Bounds**；只有闭源覆盖缺口值得投入时才建设运行时机器码patch框架。详见[独立S01实施指南](docs/S01-vendor-implementation-guide.md)。
+新版不再把 S01 首先列成抽象的 A/B/C；优先讲 NVIDIA 默认运行时补丁、NVIDIA 编译期原对象分析和 AMDGPU LLVM ASan，再讨论必须在GPU执行的区间表插桩、GPU Guard Page、实体GPU已支持的Tag/硬件Bounds和Hybrid。推荐先实施**借鉴AMD/LLVM的真实GPU设备Shadow**，再用已有QEMU执行**相同的插桩Binary**做预验证，最后补充**NVIDIA式编译期原对象Bounds**；只有闭源覆盖缺口值得投入时才建设运行时机器码patch框架。详见[独立S01实施指南](docs/S01-vendor-implementation-guide.md)。
 
 ## 新增：真实 GPU Docker + GitHub Actions 验证
 
@@ -46,11 +54,11 @@
 
 第4章深入比较NVIDIA memcheck的运行时/编译期、base-and-bounds及hybrid，AMD GPU ASan的Shadow/Redzone/device runtime，Intel oneAPI与Unified Runtime，MUSA公开产品能力，以及LLVM源码/HWASan；各机制附官方直达链接和限长原文摘录，明确已知事实与未公开实现的区别。
 
-A～F六路线与S01变体现在逐一标注**厂商/研究来源、融合的算法与自研GPU必须自行设计的接口/逻辑**。所谓原创仅指本项目工程方案，不宣称ASan、bounds、tag等底层算法学术首创。预算保留历史规划区间，但Q2基础和接入仅按真实缺口追加；[v1.2原始预算](docs/estimates-v1.2.json)保留作对照。
+旧版曾将模型独立检测错误列为产品路线，现已撤销；当前B～F路线与S01变体逐一标注**厂商/研究来源、融合的算法与自研GPU必须自行设计的接口/逻辑**。所谓原创仅指本项目工程方案，不宣称ASan、bounds、tag等底层算法学术首创。预算保留历史规划区间，但Q2基础和接入仅按真实缺口追加；[v1.2原始预算](docs/estimates-v1.2.json)保留作对照。
 
 ## 1.2版历史主要更新
 
-每条A～F路线分别给出编译器、KMD、UMD必需支持和新改代码的判断条件；D进一步分为D1对象边界与D2时间身份。设备检查库在GPU执行，归入编译器交付包；SDK/Host runtime、用户态driver和CLI按层实现，预算归入UMD责任包。该归属不要求改变现有代码仓库或运行边界。
+当前每条B～F真实硬件候选路线分别给出编译器、KMD、UMD必需支持和新改代码的判断条件；D进一步分为D1对象边界与D2时间身份。设备检查库在GPU执行，归入编译器交付包；SDK/Host runtime、用户态driver和CLI按层实现，预算归入UMD责任包。该归属不要求改变现有代码仓库或运行边界。
 
 功能级cmodel能否运行插桩代码，与是否实现独立检查oracle分开。QEMU配置按Q0/Q1/Q2/Q3比较，**本项目已确认属于Q2**；模型执行与真机、TCG CPU回调的观测能力不同，QEMU内部是否复用cmodel待审计。
 

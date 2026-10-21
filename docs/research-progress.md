@@ -1,5 +1,16 @@
 # GPU Sanitizer 研究进度
 
+## v1.7 · 2026-10-21 · 全仓库真实GPU可部署性审核
+
+**结论：仅在功能级cmodel或QEMU GPU ISA解释器内直接检查地址，不会在实体GPU上生效，不能是Sanitizer产品方案。** 已删除主稿原模型独立路线、专用预算与前置实施阶段；正式候选B/C/D/E/F必须由真实GPU设备指令或实体硬件MMU/Tag/Bounds检测。S01指南中的模型独立方案章节已删除；QEMU只验证**B/C/D/E生成的同一份实际GPU检查产物**，不能把QEMU专有hook计入真机功能。F1/F2没有真实芯片支持时仅限未来硬件研究。
+
+**仓库同步：** [硬件可部署性审计](hardware-deployability-audit.md)、[当前五路线预算](estimates-v1.7.json)、[主报告§9](llvm-gpu-sanitizer-research.md#hardware-deployment-gate)、[S01实施指南](S01-vendor-implementation-guide.md)、[28份CUDA/HIP样例README](../samples/)及[归档架构笔记](research-notes/architecture.md)。28份样例中原本误将能力编号当QEMU/KMD职责的表格也已更正。旧JSON模型候选键删除，历史可从Git提交追溯。
+
+**另一类问题也已澄清：** C纯runtime不需要改生产Compiler，独立UMD Binary Rewriter做GPU ISA decode/patch；B/D编译插桩则确实需要编译器输出设备检查代码；KMD为现有契约是否充分的条件项。验证脚本和GitHub CPU静态CI将添加防回归检查。
+
+**未完成：** 无用户目标GPU上的Compiler/UMD/KMD实际Sanitizer实施，无实体GPU、cmodel/QEMU执行结果或设备错误率性能数据；硬件验收只能明确标`HARDWARE_NOT_VERIFIED`。
+
+
 ## v1.6.1：S01 NVIDIA-R 纯Runtime组件边界修正（2026-10-21）
 
 经NVIDIA Compute Sanitizer官方手册核对，默认运行时二进制插桩的用户Kernel**不需要特殊编译参数，更不需要修改生产Compiler**。之前把Compiler/MC解码接口误写成“Compiler必须交付”。现已将ISA decode/encode、patch stub、relocation、寄存器/资源重算划为**UMD内独立Runtime Binary Rewriter**的工作；可以选择复用现有MC库而无需修改它。编译工具自有的Patch Callback需要现有编译器运行，但不意味着更改编译器源代码。
@@ -9,7 +20,7 @@
 
 ## 2026-10-21 · v1.6 S01按厂商实现的工程拆解
 
-已提交独立[S01厂商优先实施指南](S01-vendor-implementation-guide.md)：按照NVIDIA默认运行时二进制插桩、CUDA13.1+编译期原对象Base/Bounds、AMD LLVM GPU ASan＋Shadow/Redzone三种公开实现路径展开，逐路径给出Compiler、KMD、UMD、功能级cmodel、已有QEMU GPU ISA模型的具体修改、核心伪代码与公开官方来源。然后单列模型原生oracle、实时对象区间表、真实GPUVA Guard Page、Tag、硬件Bounds和Hybrid，明确自研实现与厂商未公开内部机制不能混同。
+已提交独立[S01厂商优先实施指南](S01-vendor-implementation-guide.md)：按照NVIDIA默认运行时二进制插桩、CUDA13.1+编译期原对象Base/Bounds、AMD LLVM GPU ASan＋Shadow/Redzone三种公开实现路径展开，逐路径给出Compiler、KMD、UMD、功能级cmodel、已有QEMU GPU ISA模型的具体修改、核心伪代码与公开官方来源。随后单列必须在GPU执行的设备区间表、真实GPUVA Guard Page、具备实际实体硬件支持的Tag/Bounds和Hybrid；模拟参考算法仅用于验收，明确自研实现与厂商未公开内部机制不能混同。
 
 文档与原S01 CUDA/HIP样例README/主调研报告已互相链接。**当前仍只有厂商公开资料与架构设计；没有在用户自研GPU上实现或验证Sanitizer，也没有CUDA/AMD实卡检测通过证据。** 建议首个代码原型：直接复用已存在QEMU GPU ISA执行器的Global Store生效前hook，构造64B头/尾及合法对照；之后实现LLVM Shadow真机路径，最后追加原对象D1。
 
@@ -44,12 +55,12 @@
 ## 结构与版本校验
 
 - 正文：3245 行（按末尾换行口径）、166464个JavaScript字符；GitHub blob SHA `12f28486054c67e5fa3b75995966507714e1df0d`。
-- 对引用、内部锚点、表格列数、围栏闭合、场景ID和A～F来源章节执行程序化检查；详细计数见[validation-report.json](validation-report.json)。
+- 对引用、内部锚点、表格列数、围栏闭合、场景ID和B～F真实GPU候选章节执行程序化检查；详细计数见[validation-report.json](validation-report.json)。
 - 所有实现片段均为目标无关的工程示意，**没有实际编译/运行，也没有真实GPU/cmodel/QEMU性能数据**。原论文与厂商结果有各自的限定平台。
 
 ## 下一步实现入口
 
-首先定位现有QEMU GPU ISA执行器中真实Global Load/Store的生效前访存hook，取得GPU PC/width/mask/space，同时核对Guest UMD/KMD如何传递逻辑对象大小与完成状态；以S01的首/末合法、头/尾越界及mask-off反例实现独立A0 oracle。随后在LLVM后端实现B2插桩和设备Shadow库，并让现有QEMU执行真正插桩产物；最后在真机核对边界、失败控制与性能。对QEMU已存在子模块不重复计费。
+**先实现真实GPU可执行的B设备Shadow检查产物**：LLVM Global Store插桩、UMD对象长度/Shadow及KMD必要接口；然后用已有QEMU运行同一份GPU ISA检查代码预验证S01合法/非法与mask场景，最后实体GPU核对报告/失败路径/性能。模型独有访存hook不是实现任务，已有GPU ISA执行器也不重复计费。
 
 ## 研究与修订入口
 
