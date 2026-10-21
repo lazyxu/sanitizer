@@ -1,7 +1,7 @@
 {
   "metadata": {
     "units": "kLOC; hand-written new or substantively modified lines; core and hand-written tests separated",
-    "status": "design estimates only; no repository SLOC measurement or implementation test execution claimed",
+    "status": "ARCHIVED PLANNING SNAPSHOT, not a current implementation quote; model-only route removed from current repository data",
     "baseline_file": "docs/llvm-gpu-sanitizer-research.md at commit 747eaac5cd1ed49d120868818b0fc9dbfc98e9ba",
     "baseline_chapter": 16,
     "range_arithmetic": "[a,b]+[c,d]=[a+c,b+d]; range endpoints are engineering planning envelopes, not statistical confidence intervals",
@@ -12,7 +12,16 @@
       "functional_cmodel": "old cmodel retained independently"
     },
     "runtime_note": "Device runtime executes on GPU; Compiler is budget ownership, not execution location. CLI/SDK need not be embedded in low-level UMD driver.",
-    "test_split_note": "Original extra-checker tests only had aggregate totals; current component test splits are proposed allocation, not recovered baseline measurements."
+    "test_split_note": "Original extra-checker tests only had aggregate totals; current component test splits are proposed allocation, not recovered baseline measurements.",
+    "deprecation": "Standalone cmodel/QEMU instruction interception is VALIDATION_ONLY and cannot detect errors in real GPU execution; removed as product candidate on 2026-10-21. Original raw JSON remains available in Git history.",
+    "eligible_product_routes": [
+      "B",
+      "C",
+      "D",
+      "E",
+      "F"
+    ],
+    "never_claim_model_is_product": true
   },
   "baseline_old_five_buckets": {
     "P": {
@@ -63,58 +72,6 @@
         ],
         "test": [
           2,
-          3
-        ]
-      }
-    },
-    "A": {
-      "Compiler": {
-        "core": [
-          1,
-          2
-        ],
-        "test": [
-          1,
-          2
-        ]
-      },
-      "Device_runtime": {
-        "core": [
-          0,
-          1
-        ],
-        "test": [
-          0,
-          1
-        ]
-      },
-      "Host_runtime_UMD": {
-        "core": [
-          1,
-          3
-        ],
-        "test": [
-          1,
-          3
-        ]
-      },
-      "cmodel": {
-        "core": [
-          6,
-          12
-        ],
-        "test": [
-          5,
-          10
-        ]
-      },
-      "Tooling": {
-        "core": [
-          1,
-          3
-        ],
-        "test": [
-          1,
           3
         ]
       }
@@ -423,48 +380,6 @@
         ]
       }
     },
-    "A": {
-      "Compiler": {
-        "core": [
-          1,
-          3
-        ],
-        "test": [
-          1,
-          3
-        ]
-      },
-      "KMD": {
-        "core": [
-          0,
-          0
-        ],
-        "test": [
-          0,
-          0
-        ]
-      },
-      "UMD": {
-        "core": [
-          2,
-          6
-        ],
-        "test": [
-          2,
-          6
-        ]
-      },
-      "functional_cmodel": {
-        "core": [
-          6,
-          12
-        ],
-        "test": [
-          5,
-          10
-        ]
-      }
-    },
     "B": {
       "Compiler": {
         "core": [
@@ -677,84 +592,6 @@
     }
   },
   "base_totals": {
-    "A": {
-      "components": {
-        "Compiler": {
-          "core": [
-            3,
-            7
-          ],
-          "test": [
-            3,
-            7
-          ]
-        },
-        "KMD": {
-          "core": [
-            0,
-            0
-          ],
-          "test": [
-            0,
-            0
-          ]
-        },
-        "UMD": {
-          "core": [
-            8,
-            17
-          ],
-          "test": [
-            7,
-            14
-          ]
-        },
-        "functional_cmodel": {
-          "core": [
-            7,
-            14
-          ],
-          "test": [
-            6,
-            12
-          ]
-        }
-      },
-      "production_components_subtotal": {
-        "core": [
-          11,
-          24
-        ],
-        "test": [
-          10,
-          21
-        ]
-      },
-      "functional_cmodel": {
-        "core": [
-          7,
-          14
-        ],
-        "test": [
-          6,
-          12
-        ]
-      },
-      "research_package_including_model": {
-        "core": [
-          18,
-          38
-        ],
-        "test": [
-          16,
-          33
-        ]
-      },
-      "core_plus_test": [
-        34,
-        71
-      ]
-    },
     "B": {
       "components": {
         "Compiler": {
@@ -1582,19 +1419,6 @@
       }
     },
     "route_possible_packages_and_all_missing_envelopes": {
-      "A": {
-        "packages": [],
-        "all_listed_missing_envelope": {
-          "core": [
-            0,
-            0
-          ],
-          "test": [
-            0,
-            0
-          ]
-        }
-      },
       "B": {
         "packages": [
           "K_M_mapping",
@@ -1770,16 +1594,6 @@
       ]
     },
     "Q2_route_unique_bridge_increments": {
-      "A": {
-        "core": [
-          2,
-          4
-        ],
-        "test": [
-          2,
-          5
-        ]
-      },
       "B": {
         "core": [
           2,
@@ -1874,16 +1688,6 @@
       }
     },
     "Q2_extra_by_route": {
-      "A": {
-        "core": [
-          16,
-          32
-        ],
-        "test": [
-          16,
-          35
-        ]
-      },
       "B": {
         "core": [
           16,
@@ -1936,16 +1740,6 @@
       }
     },
     "baseline_plus_Q2_by_route_existing_KMD": {
-      "A": {
-        "core": [
-          34,
-          70
-        ],
-        "test": [
-          32,
-          68
-        ]
-      },
       "B": {
         "core": [
           43,
@@ -2341,42 +2135,13 @@
     }
   },
   "verification": {
-    "checks": [
-      "old_to_new_component_sums_P",
-      "old_to_new_component_sums_A",
-      "old_to_new_component_sums_B",
-      "old_to_new_component_sums_C",
-      "old_to_new_component_sums_D",
-      "old_to_new_component_sums_E",
-      "old_to_new_component_sums_F",
-      "P_plus_route_A",
-      "P_plus_route_B",
-      "P_plus_route_C",
-      "P_plus_route_D",
-      "P_plus_route_E",
-      "P_plus_route_F",
-      "E_component_dedup_Compiler",
-      "E_component_dedup_KMD",
-      "E_component_dedup_UMD",
-      "E_component_dedup_functional_cmodel",
-      "abort_KMD_plus_firmware_matches_old_conditional",
-      "Q2_foundation_sum",
-      "Q2_E_bridge_dedup",
-      "Q2_full_total_A",
-      "Q2_full_total_B",
-      "Q2_full_total_C",
-      "Q2_full_total_D",
-      "Q2_full_total_E",
-      "Q2_full_total_F",
-      "checker_preserved_total_I1_bitmap",
-      "checker_preserved_total_S1_barrier_mask",
-      "checker_preserved_total_R1_shared_HB_FSM",
-      "checker_preserved_total_R1_global_cross_kernel_extra",
-      "checker_preserved_total_repeat_collision_mode"
-    ],
-    "scope": "range regrouping, arithmetic, Markdown values and table structure only; no implementation test execution claimed",
-    "passed_checks": 31,
-    "final_arithmetic_and_markdown_checks": 171,
-    "root_independent_arithmetic_and_table_checks": 163
+    "historical_arithmetic_checks_before_retirement": {
+      "scope": "range regrouping, arithmetic, Markdown values and table structure only; no implementation test execution claimed",
+      "checks": 31,
+      "reason": "PREVIOUSLY INCLUDED model-only route and is not the current validated route set"
+    },
+    "scope": "Current route keys only; product eligibility and sums must be revalidated against v1.7; no measured SLOC",
+    "pass": false,
+    "reason": "Superseded planning snapshot, no current product approval"
   }
 }
