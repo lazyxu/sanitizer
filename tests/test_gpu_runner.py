@@ -39,6 +39,21 @@ class ReportClassificationTests(unittest.TestCase):
     def test_masked_off_invalid_pointer_is_legal(self):
         self.assertEqual(runner.classify("cuda", "clean", "bad", 0, ""), "CLEAN_AS_EXPECTED")
 
+    def test_s01_cuda_does_not_pass_with_leak_report(self):
+        log = "========= Leaked 64 bytes at 0xabc"
+        self.assertEqual(runner.classify("cuda", "detect", "bad", 86, log, case="S01"),
+                         "MISMATCHED_GPU_DIAGNOSTIC")
+
+    def test_s01_rocm_requires_gpu_buffer_overflow_not_uaf(self):
+        log = "==123==ERROR: AddressSanitizer: heap-use-after-free on amdgpu device 0 at pc 0xabc"
+        self.assertEqual(runner.classify("rocm", "detect", "bad", 1, log, case="S01"),
+                         "MISMATCHED_GPU_DIAGNOSTIC")
+
+    def test_s01_cuda_precise_oob_accepts(self):
+        log = "========= Invalid __global__ write of size 4 bytes"
+        self.assertEqual(runner.classify("cuda", "detect", "bad", 86, log, case="S01"),
+                         "DETECTED_GPU")
+
     def test_bad_without_gpu_report_does_not_pass(self):
         self.assertEqual(runner.classify("cuda", "detect", "bad", 0, ""), "NOT_DETECTED")
 
