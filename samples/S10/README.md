@@ -35,22 +35,25 @@ uint8_t *q = import_nonowning(context_B, export_handle(p));
 owner_free(context_B, q);     // 错误二：B 无权调用拥有者释放接口
 ~~~
 
-**哪里不对、怎样检。** M6 需要验证原始基址、规范对象、allocator 类型、所有权和当前状态；“地址属于某个 live 对象”远远不够。A 可对 allocator／import 事件建立独立状态机，在模型重放中拒绝非法 free；B 或 E 的 runtime 拦截层可用同一类登记信息，在真正释放前报告并拒绝操作。后一能力来自 allocator 协议，单独给 load／store 加 shadow 并不能发现没有后续访存的错误。[L01][N02]
+**哪里不对、怎样检。** M6必须验证原始基址、规范对象、allocator类型、所有权及当前状态；“地址属于某个live对象”不够。**真实UMD/设备allocator的runtime API拦截和状态机**在实际释放前使用对象登记信息报告/拒绝非法free；cmodel/QEMU可用测试输入核对这一生产状态机，但不能替代它。仅给load/store添加shadow不能检测没有后续访存的非法释放。[L01][N02]
 
 **组件观测。** compiler／loader 保留调用点；deviceRT 若支持设备堆，须把设备侧 free 接入相同事件；UMD 将导入别名归一到同一对象，但保留映射拥有权与资源拥有权的差别；cmodel 核对请求的 allocator、context、base 与合法关闭动作。API 和底层 driver 回调必须去重，不能把一次拒绝误记成一次成功释放。
 
 **合法反例、修复及报告。** 内部指针可用于范围内访问，但释放时应传回 `p`；B 应 `close_import(q)`，最后由 A 在使用完成后释放 `p`。预期分别报告内部偏移 `+4` 和所有权／释放接口不匹配，附原 allocation site 与错误 API site。若 API 自身返回错误也应记录误用，不能要求一定发生设备 fault。未登记的自定义 allocator 或导入句柄只能标记覆盖缺口。
 
-## 组件与模型平台检查点
+## 生产方案与两类模型辅助验证职责
 
-| 层 | 需要的信息或修改 |
+**模型及QEMU仅验证实际GPU设备检查产物/真实硬件机制，不可作为独立Sanitizer产品方案。**
+
+| 角色 | 正确职责 |
 |---|---|
-| 功能级 cmodel | 传给释放接口的身份／所有权合法 |
-| QEMU 已有 GPU ISA 执行模型 | M6/A1 |
-| KMD | allocator、原始基址、owner |
+| **真实GPU生产Checker** | Compiler/UMD生成并使GPU执行设备检查ISA；或实体GPU硬件检查单元/MMU触发，附真实设备报告 |
+| 独立功能级cmodel（验证） | allocator/owner及基址契约输入；只用于预验证真实checker产物和oracle差分 |
+| **现有QEMU GPU ISA解释器（验证）** | 运行真实Guest用户态释放路径，观察ioctl是否应发生；不能用模型独有访存hook代替真实设备检查 |
+| KMD（生产） | 校验内核句柄和权限；逻辑子分配错误可能在UMD已被拦截；已充分支持的接口不需改源码 |
 
 ## 验收需要留下什么证据？
 
-在对应真实GPU上记录：1）硬件型号、驱动和CUDA/ROCm版本；2）编译命令、目标GPU架构及最终ISA访存；3）`--good`正常且无误报；4）`--bad`出现对应的**设备级**GPU检查器报告，或者明确归类为`UNSUPPORTED/NOT_DETECTED/PREREQUISITE_NOT_MET`；5）`results/<backend>/S10.*.log`日志及`summary.json`。CPU ASan、单纯Host API错误或GPU MMU硬件fault不能冒充准确检测到本案例的对象级语义。
+在对应真实GPU上记录：1）硬件型号、驱动和CUDA/ROCm版本；2）编译命令、目标GPU架构及最终ISA访存；3）`--good`正常且无误报；4）`--bad`出现对应的**设备级**GPU检查器报告，或者明确归类为`UNSUPPORTED/NOT_DETECTED/PREREQUISITE_NOT_MET`；5）`results/<backend>/S10.*.log`日志及`summary.json`。CPU ASan、Host API错误或模型独有hook不能冒充真实GPU设备检测；GPU MMU fault限于页级证据。
 
 **当前状态：只有源码/文档及CPU静态检查证据，尚无实际GPU编译和sanitizer检出数据。** [GPU CI启用方法](../../docs/gpu-actions-ci.md)说明如何在可信master的NVIDIA/AMD GPU Runner中自动验证。
