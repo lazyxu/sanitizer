@@ -1,14 +1,61 @@
-# S20：异步Free与跨Queue访问缺少依赖
+# S20：Async Free跨Queue缺依赖
 
-**真实GPU错误/边界**：运行顺序取决于stream调度；NVIDIA有stream ordered allocation race检测但并非所有配置都保证触发。
+## 可编译设备代码与一键运行
 
-- [CUDA独立源码](cuda.cu)，预期`conditional`，推荐工具`memcheck`。
-- [AMD HIP独立源码](amd.hip.cpp)，GPU ASan预期`unsupported`。
-- `--good` 为合法对照，`--bad` 为故障/特殊合法边界。
-- Docker内部运行：`python3 scripts/run_samples.py --backend cuda --case S20 --mode both` 或 `--backend rocm`。
+**这是一对独立的真实 GPU 源程序，不是CPU ASan演示。** [CUDA完整源码](cuda.cu)和[AMD HIP完整源码](amd.hip.cpp)分别具有设备kernel、Host入口和中文注释。运行时使用 `--good` 合法对照与 `--bad` 故障/边界场景；以GPU最终实际访存、设备sanitizer报告与原始日志作为验收证据。
 
-**危险用例：** 默认不执行`--bad`，需显式传`--allow-dangerous`，运行器有40秒timeout；错误可能导致设备reset。
+~~~bash
+# 已进入对应 Docker GPU 编译环境后，从仓库根目录执行：
+python3 scripts/run_samples.py --backend cuda --case S20 --mode both --strict
+python3 scripts/run_samples.py --backend rocm --case S20 --mode both --strict
+~~~
 
-**结果严格分级**：`detect`仅表示依据官方覆盖预计有GPU报告，未在本项目GPU实测；`conditional`表示GPU/版本/执行调度决定是否触发；`unsupported`不把无报告算通过；`clean`用于没有真实访存的mask场景；`api`只是GPU Runtime API错误。AMD的Host AddressSanitizer报告一律不算GPU Sanitizer命中。
+| 后端 | 厂商工具 | 当前预期级别 | 判断依据 |
+|---|---|---|---|
+| CUDA | NVIDIA Compute Sanitizer `memcheck` | `conditional` | CUDA stream-ordered free生命周期竞态依赖执行顺序，不能承诺必报。 |
+| AMD HIP | AMD GPU AddressSanitizer | `unsupported` | CUDA stream-ordered free生命周期竞态依赖执行顺序，不能承诺必报。 |
 
-参考：[CUDA Compute Sanitizer手册](https://docs.nvidia.com/compute-sanitizer/ComputeSanitizer/index.html)、[ROCm GPU ASan文档](https://rocm.docs.amd.com/projects/llvm-project/en/docs-7.2.4/conceptual/using-gpu-sanitizer.html)。
+**预期含义：** `detect` 是厂商官方能力下的期望，不是本项目已检出；`conditional` 需要GPU架构/ISA/执行时序支持；`unsupported` 表示当前选定工具不能保证；`api` 是GPU API错误但不构成GPU kernel内部sanitizer命中；`clean` 是用于排除误报的合法操作。
+**危险提示：** 该样例的错误分支可能造成GPU hang、context fault或reset；默认不自动执行bad，只有隔离硬件并明确传递`--allow-dangerous`才运行。
+
+## 真实场景、错误原因、可检测算法、修复对照及实现要求
+
+以下章节直接对应[主调研文档 §18.20](../../docs/llvm-gpu-sanitizer-research.md#case-s20)的正式原理与验收设计。**其中的CUDA风格伪代码和受控allocator不一定与本目录中可编译程序逐行相同**；两者须按相同违规语义而非源码文字对齐。实际运行前确认目标机器码保留相关访存，不可以假设未定义行为一定触发。
+
+### 18.20 S20：async free跨queue缺依赖与释放生效边界
+
+**前提与错误。** 两个独立queue；`read_only`只读取有效、已初始化的分配，从而隔离生命周期竞争。allocation发布已通过`ready`正确排序，唯一缺失的是q1最后一次使用到q0释放的依赖。`fixed`是Host端测试选择，两种版本分开运行。
+
+~~~c
+cudaMallocAsync(&p, N, q0);
+cudaMemsetAsync(p, 0, N, q0);
+cudaEventRecord(ready, q0);
+cudaStreamWaitEvent(q1, ready, 0);        // allocation和初始化均已发布
+read_only<<<1, 32, 0, q1>>>(p, out);
+if (fixed) {
+    cudaEventRecord(done, q1);
+    cudaStreamWaitEvent(q0, done, 0);     // 修复：最后使用先于free
+}
+cudaFreeAsync(p, q0);                    // BAD：fixed=false时无使用->free依赖
+cudaDeviceSynchronize();
+~~~
+
+**实现路线与观测点。** A同时记录对象epoch、命令DAG、free请求、生效与完成；访问和free无序时报生命周期竞争，free生效后执行的访问报UAF。E由runtime/UMD将free命令及依赖下发，B按设备顺序poison；D2再传播旧指针身份，以覆盖随后同VA复用。free提交不能立即全局poison，同queue排在free之前的合法访问应放行。[N02][N03]
+
+**修复、报告与边界。** `fixed=true`建立合法链；同queue中“使用→free”也是合法反例。CUDA规定free操作开始后不能继续使用；`retire complete`是确认退休、回收描述符及后续复用的证据，不应把非法访问边界拖到完成，更不能用Host API返回代替设备时刻。[N08] 报告对象/epoch、最后使用queue与launch、free提交点及缺失依赖；有完成证据时补报实际退休节点。仅监控API调用顺序会误报或漏报；B遇同VA新分配重新unpoison可能漏旧指针，D2仍需完整身份传播；隐藏free、外部queue或不可见依赖必须输出unknown。
+
+内存池若插入真实设备依赖，须纳入命令图；工具为诊断插入的同步不得伪造应用原本有序。
+
+## 组件与模型平台检查点
+
+| 层 | 需要的信息或修改 |
+|---|---|
+| 功能级 cmodel | 所有使用都先于释放生效 |
+| QEMU 已有 GPU ISA 执行模型 | M5/A1 |
+| KMD | 提交、free 开始与回收证据 |
+
+## 验收需要留下什么证据？
+
+在对应真实GPU上记录：1）硬件型号、驱动和CUDA/ROCm版本；2）编译命令、目标GPU架构及最终ISA访存；3）`--good`正常且无误报；4）`--bad`出现对应的**设备级**GPU检查器报告，或者明确归类为`UNSUPPORTED/NOT_DETECTED/PREREQUISITE_NOT_MET`；5）`results/<backend>/S20.*.log`日志及`summary.json`。CPU ASan、单纯Host API错误或GPU MMU硬件fault不能冒充准确检测到本案例的对象级语义。
+
+**当前状态：只有源码/文档及CPU静态检查证据，尚无实际GPU编译和sanitizer检出数据。** [GPU CI启用方法](../../docs/gpu-actions-ci.md)说明如何在可信master的NVIDIA/AMD GPU Runner中自动验证。

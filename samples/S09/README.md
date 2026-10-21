@@ -1,12 +1,68 @@
-# S09：GPUVA复用后的旧指针
+# S09：复用GPUVA旧指针
 
-**GPU场景**：新旧裸指针地址相同时普通address-check可能无法识别旧epoch；复用不保证发生
+## 可编译设备代码与一键运行
 
-- CUDA源码：[cuda.cu](cuda.cu)，NVIDIA预期：`unsupported`，工具：`memcheck`。
-- AMD HIP源码：[amd.hip.cpp](amd.hip.cpp)，GPU ASan预期：`unsupported`。
-- 正常用例：`--good`；错误用例：`--bad`。宿主代码只分配/提交和读取报告；GPU错误发生在`__global__`/设备访存，S10～S12为资源/API类独立分类。
-- 进入Docker后：`python3 scripts/run_samples.py --backend cuda --case S09 --mode both` 或将cuda换为rocm。
+**这是一对独立的真实 GPU 源程序，不是CPU ASan演示。** [CUDA完整源码](cuda.cu)和[AMD HIP完整源码](amd.hip.cpp)分别具有设备kernel、Host入口和中文注释。运行时使用 `--good` 合法对照与 `--bad` 故障/边界场景；以GPU最终实际访存、设备sanitizer报告与原始日志作为验收证据。
 
-**结果解释**：`detect`表示根据官方工具能力期待GPU报告，但未经用户GPU实测；`conditional`受GPU/编译器/内存模型影响；`unsupported`不保证有GPU报告；`api`仅GPU Runtime API错误，不计作GPU Kernel Sanitizer命中。未检测到时必须如实输出`NOT_DETECTED`。修复对照`--good`不应有GPU报告。
+~~~bash
+# 已进入对应 Docker GPU 编译环境后，从仓库根目录执行：
+python3 scripts/run_samples.py --backend cuda --case S09 --mode both --strict
+python3 scripts/run_samples.py --backend rocm --case S09 --mode both --strict
+~~~
 
-官方依据：[NVIDIA Compute Sanitizer](https://docs.nvidia.com/compute-sanitizer/ComputeSanitizer/index.html)；[AMD GPU ASan](https://rocm.docs.amd.com/projects/llvm-project/en/docs-7.2.4/conceptual/using-gpu-sanitizer.html)。
+| 后端 | 厂商工具 | 当前预期级别 | 判断依据 |
+|---|---|---|---|
+| CUDA | NVIDIA Compute Sanitizer `memcheck` | `unsupported` | 普通分配器不保证重用相同GPUVA；需要确定性的epoch身份检测。 |
+| AMD HIP | AMD GPU AddressSanitizer | `unsupported` | 普通分配器不保证重用相同GPUVA；需要确定性的epoch身份检测。 |
+
+**预期含义：** `detect` 是厂商官方能力下的期望，不是本项目已检出；`conditional` 需要GPU架构/ISA/执行时序支持；`unsupported` 表示当前选定工具不能保证；`api` 是GPU API错误但不构成GPU kernel内部sanitizer命中；`clean` 是用于排除误报的合法操作。
+
+
+## 真实场景、错误原因、可检测算法、修复对照及实现要求
+
+以下章节直接对应[主调研文档 §18.9](../../docs/llvm-gpu-sanitizer-research.md#case-s09)的正式原理与验收设计。**其中的CUDA风格伪代码和受控allocator不一定与本目录中可编译程序逐行相同**；两者须按相同违规语义而非源码文字对齐。实际运行前确认目标机器码保留相关访存，不可以假设未定义行为一定触发。
+
+### 18.9 S09：同一 GPUVA 被新对象复用后的旧指针
+
+**前提与错误代码。** `slot` 和 `out` 预先分配且不参与复用。先把 A 的指针存入设备 pointer slot，再退休 A，由受控 allocator 尝试让 B 复用同一个 64 B 槽位；必须核对实际 GPUVA 相等和 A dead／B live 两个生命周期事件。未观察到复用应标记夹具条件未满足，不得计为通过：
+
+~~~cpp
+__global__ void save_ptr(uint32_t **slot, uint32_t *p) {
+    if (threadIdx.x == 0) *slot = p; // D2 还须保存 A 的旁路时间身份
+}
+__global__ void use_saved(uint32_t **slot, uint32_t *out) {
+    if (threadIdx.x == 0) out[0] = (*slot)[0]; // 错误：解引用旧 A 指针
+}
+uint32_t *a = test_alloc(64);
+GPUVA old_va = gpuva(a);
+AllocationID old_id = test_identity_at_allocation(a); // 分配时保存，不能事后反查
+save_ptr<<<1,32>>>(slot, a);
+wait_all();
+test_free_and_wait(a);
+uint32_t *b = test_alloc_reusing(old_va, 64);
+AllocationID new_id = test_identity_at_allocation(b);
+require(gpuva(b) == old_va && new_id != old_id);
+require(test_is_dead(old_id) && test_is_live(new_id));
+fill_and_wait(b, 64);  // B 全部已初始化；仍保留 slot 中的旧 A 指针
+use_saved<<<1,32>>>(slot, out);
+~~~
+
+**哪里不对、怎样检。** 访问范围仍是新 B 的合法前 4 B，但指针预期 A 的生存期已经结束。D2 要让 pointer store／reload 传递 `(A_ID,A_epoch)`，与当前对象身份比较；A2 可对寄存器、内存槽和 allocator 事件独立跟踪同样的时间来源。普通分配表查询只得到 B 当前 generation，缺少指针预期值；B 的 unpoison、D1 的同尺寸 bounds 和 plain A／C 因而均不保证识别旧指针。[P01][L02]
+
+**组件观测。** compiler 保留 slot 的 pointer metadata 配对；deviceRT 避免载入时把旧指针重新标记为 B；UMD 发布新身份，并保持检查所需的旧描述符；cmodel 核对真实复用及保存／加载链。普通 `malloc` 是否复用不可假定；扩大 quarantine 只能推迟这一条件。
+
+**合法反例、修复及报告。** 独立运行通过正确携带 B 身份的 `b[0]` 应通过；修复是清除旧引用并分发新指针及其身份。报告应同时给出相同 GPUVA、预期 A 和当前 B 的 ID／epoch、两次分配与 A 的释放位置。未知 writer、身份丢失、tag 碰撞或 epoch 回绕必须作为保证边界，不能静默退回地址查询后仍声称完整 M5。
+
+## 组件与模型平台检查点
+
+| 层 | 需要的信息或修改 |
+|---|---|
+| 功能级 cmodel | 新旧裸地址相同但身份不同 |
+| QEMU 已有 GPU ISA 执行模型 | M5 |
+| KMD | 指针预期 epoch 与当前 epoch |
+
+## 验收需要留下什么证据？
+
+在对应真实GPU上记录：1）硬件型号、驱动和CUDA/ROCm版本；2）编译命令、目标GPU架构及最终ISA访存；3）`--good`正常且无误报；4）`--bad`出现对应的**设备级**GPU检查器报告，或者明确归类为`UNSUPPORTED/NOT_DETECTED/PREREQUISITE_NOT_MET`；5）`results/<backend>/S09.*.log`日志及`summary.json`。CPU ASan、单纯Host API错误或GPU MMU硬件fault不能冒充准确检测到本案例的对象级语义。
+
+**当前状态：只有源码/文档及CPU静态检查证据，尚无实际GPU编译和sanitizer检出数据。** [GPU CI启用方法](../../docs/gpu-actions-ci.md)说明如何在可信master的NVIDIA/AMD GPU Runner中自动验证。

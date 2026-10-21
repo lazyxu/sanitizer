@@ -1,12 +1,60 @@
-# S06：Shared/LDS局部数组越界
+# S06：Shared/LDS越界
 
-**GPU场景**：NVIDIA shared检测可用但特殊布局有限制；AMD LDS地址空间覆盖随实现变化
+## 可编译设备代码与一键运行
 
-- CUDA源码：[cuda.cu](cuda.cu)，NVIDIA预期：`conditional`，工具：`memcheck`。
-- AMD HIP源码：[amd.hip.cpp](amd.hip.cpp)，GPU ASan预期：`conditional`。
-- 正常用例：`--good`；错误用例：`--bad`。宿主代码只分配/提交和读取报告；GPU错误发生在`__global__`/设备访存，S10～S12为资源/API类独立分类。
-- 进入Docker后：`python3 scripts/run_samples.py --backend cuda --case S06 --mode both` 或将cuda换为rocm。
+**这是一对独立的真实 GPU 源程序，不是CPU ASan演示。** [CUDA完整源码](cuda.cu)和[AMD HIP完整源码](amd.hip.cpp)分别具有设备kernel、Host入口和中文注释。运行时使用 `--good` 合法对照与 `--bad` 故障/边界场景；以GPU最终实际访存、设备sanitizer报告与原始日志作为验收证据。
 
-**结果解释**：`detect`表示根据官方工具能力期待GPU报告，但未经用户GPU实测；`conditional`受GPU/编译器/内存模型影响；`unsupported`不保证有GPU报告；`api`仅GPU Runtime API错误，不计作GPU Kernel Sanitizer命中。未检测到时必须如实输出`NOT_DETECTED`。修复对照`--good`不应有GPU报告。
+~~~bash
+# 已进入对应 Docker GPU 编译环境后，从仓库根目录执行：
+python3 scripts/run_samples.py --backend cuda --case S06 --mode both --strict
+python3 scripts/run_samples.py --backend rocm --case S06 --mode both --strict
+~~~
 
-官方依据：[NVIDIA Compute Sanitizer](https://docs.nvidia.com/compute-sanitizer/ComputeSanitizer/index.html)；[AMD GPU ASan](https://rocm.docs.amd.com/projects/llvm-project/en/docs-7.2.4/conceptual/using-gpu-sanitizer.html)。
+| 后端 | 厂商工具 | 当前预期级别 | 判断依据 |
+|---|---|---|---|
+| CUDA | NVIDIA Compute Sanitizer `memcheck` | `conditional` | Shared/LDS对象与整体backing边界可能不同。 |
+| AMD HIP | AMD GPU AddressSanitizer | `conditional` | Shared/LDS对象与整体backing边界可能不同。 |
+
+**预期含义：** `detect` 是厂商官方能力下的期望，不是本项目已检出；`conditional` 需要GPU架构/ISA/执行时序支持；`unsupported` 表示当前选定工具不能保证；`api` 是GPU API错误但不构成GPU kernel内部sanitizer命中；`clean` 是用于排除误报的合法操作。
+
+
+## 真实场景、错误原因、可检测算法、修复对照及实现要求
+
+以下章节直接对应[主调研文档 §18.6](../../docs/llvm-gpu-sanitizer-research.md#case-s06)的正式原理与验收设计。**其中的CUDA风格伪代码和受控allocator不一定与本目录中可编译程序逐行相同**；两者须按相同违规语义而非源码文字对齐。实际运行前确认目标机器码保留相关访存，不可以假设未定义行为一定触发。
+
+### 18.6 S06：静态／动态 shared 越界与 block 身份
+
+**前提与错误代码。** 静态数组 `s` 只有 8 个 32 位元素；动态 shared 的应用请求长度是 24 B。两个 kernel 分别启动两个 block、每个 32 个线程，并只由各 block 的 thread 0 写，排除本例中的数据竞争干扰：
+
+~~~cpp
+__global__ void s06_static() {
+    __shared__ uint32_t s[8];
+    if (threadIdx.x == 0) s[8] = 1; // 错误：静态对象偏移 32，写 4 B
+}
+__global__ void s06_dynamic() {
+    extern __shared__ uint32_t d[];
+    if (threadIdx.x == 0) d[6] = 2; // 错误：动态请求仅 24 B，偏移 24
+}
+s06_static<<<2,32>>>();
+s06_dynamic<<<2,32,24>>>();
+~~~
+
+**哪里不对、怎样检。** 检查必须分别知道静态对象大小和本次 launch 的动态长度。A1 可使用 compiler 与访问关联的静态 shared 对象 map、UMD 的动态请求，按 `(launch,block,object)` 判范围；B 可为 static layout 加 redzone，并为动态区尾部 poison，但须同时更新实际资源占用和设备端布局。只检查整个 shared backing，可能漏掉静态对象跨入邻变量；此时需原对象关联／D1 来源，只有地址布局表仍不够，也不能拿额外预留空间扩充应用合法范围。[L05][L06]
+
+**组件观测。** compiler 输出最终布局而非优化前偏移；deviceRT 为不同 block 选择独立 shadow／对象上下文；UMD 传递请求的 24 B 及 sanitizer 额外占用；cmodel 让两个 block 中相同数值偏移分别指向不同对象实例。不能让 block 0 的状态误用到 block 1，也不能把不同 block 的 `s[0]` 当作共享同一对象。
+
+**合法反例、修复及报告。** 分别改为 `s[7]`、`d[5]`，两个 block 均应通过。错误报告须区分 static／dynamic shared、block ID、4 B 宽度与偏移 32／24；可以合并重复报告，但保留观察到的 block／错误计数。若错误策略在首个 block 后终止 launch，未执行 block 不计漏检。仅完成 global 插桩的 B／C 不具有本例覆盖。
+
+## 组件与模型平台检查点
+
+| 层 | 需要的信息或修改 |
+|---|---|
+| 功能级 cmodel | block 的共享对象边界 |
+| QEMU 已有 GPU ISA 执行模型 | M2/M3 |
+| KMD | launch/block 与共享布局 |
+
+## 验收需要留下什么证据？
+
+在对应真实GPU上记录：1）硬件型号、驱动和CUDA/ROCm版本；2）编译命令、目标GPU架构及最终ISA访存；3）`--good`正常且无误报；4）`--bad`出现对应的**设备级**GPU检查器报告，或者明确归类为`UNSUPPORTED/NOT_DETECTED/PREREQUISITE_NOT_MET`；5）`results/<backend>/S06.*.log`日志及`summary.json`。CPU ASan、单纯Host API错误或GPU MMU硬件fault不能冒充准确检测到本案例的对象级语义。
+
+**当前状态：只有源码/文档及CPU静态检查证据，尚无实际GPU编译和sanitizer检出数据。** [GPU CI启用方法](../../docs/gpu-actions-ci.md)说明如何在可信master的NVIDIA/AMD GPU Runner中自动验证。

@@ -1,12 +1,60 @@
-# S05：子分配与tensor view逻辑越界
+# S05：Tensor view逻辑子边界
 
-**GPU场景**：行步长含padding，逻辑列非法但物理地址仍属pool；需要view metadata
+## 可编译设备代码与一键运行
 
-- CUDA源码：[cuda.cu](cuda.cu)，NVIDIA预期：`unsupported`，工具：`memcheck`。
-- AMD HIP源码：[amd.hip.cpp](amd.hip.cpp)，GPU ASan预期：`unsupported`。
-- 正常用例：`--good`；错误用例：`--bad`。宿主代码只分配/提交和读取报告；GPU错误发生在`__global__`/设备访存，S10～S12为资源/API类独立分类。
-- 进入Docker后：`python3 scripts/run_samples.py --backend cuda --case S05 --mode both` 或将cuda换为rocm。
+**这是一对独立的真实 GPU 源程序，不是CPU ASan演示。** [CUDA完整源码](cuda.cu)和[AMD HIP完整源码](amd.hip.cpp)分别具有设备kernel、Host入口和中文注释。运行时使用 `--good` 合法对照与 `--bad` 故障/边界场景；以GPU最终实际访存、设备sanitizer报告与原始日志作为验收证据。
 
-**结果解释**：`detect`表示根据官方工具能力期待GPU报告，但未经用户GPU实测；`conditional`受GPU/编译器/内存模型影响；`unsupported`不保证有GPU报告；`api`仅GPU Runtime API错误，不计作GPU Kernel Sanitizer命中。未检测到时必须如实输出`NOT_DETECTED`。修复对照`--good`不应有GPU报告。
+~~~bash
+# 已进入对应 Docker GPU 编译环境后，从仓库根目录执行：
+python3 scripts/run_samples.py --backend cuda --case S05 --mode both --strict
+python3 scripts/run_samples.py --backend rocm --case S05 --mode both --strict
+~~~
 
-官方依据：[NVIDIA Compute Sanitizer](https://docs.nvidia.com/compute-sanitizer/ComputeSanitizer/index.html)；[AMD GPU ASan](https://rocm.docs.amd.com/projects/llvm-project/en/docs-7.2.4/conceptual/using-gpu-sanitizer.html)。
+| 后端 | 厂商工具 | 当前预期级别 | 判断依据 |
+|---|---|---|---|
+| CUDA | NVIDIA Compute Sanitizer `memcheck` | `unsupported` | Tensor view的列索引非法但物理GPUVA在合法pool里。 |
+| AMD HIP | AMD GPU AddressSanitizer | `unsupported` | Tensor view的列索引非法但物理GPUVA在合法pool里。 |
+
+**预期含义：** `detect` 是厂商官方能力下的期望，不是本项目已检出；`conditional` 需要GPU架构/ISA/执行时序支持；`unsupported` 表示当前选定工具不能保证；`api` 是GPU API错误但不构成GPU kernel内部sanitizer命中；`clean` 是用于排除误报的合法操作。
+
+
+## 真实场景、错误原因、可检测算法、修复对照及实现要求
+
+以下章节直接对应[主调研文档 §18.5](../../docs/llvm-gpu-sanitizer-research.md#case-s05)的正式原理与验收设计。**其中的CUDA风格伪代码和受控allocator不一定与本目录中可编译程序逐行相同**；两者须按相同违规语义而非源码文字对齐。实际运行前确认目标机器码保留相关访存，不可以假设未定义行为一定触发。
+
+### 18.5 S05：内存池子分配、granule 孔洞与 tensor view 边界
+
+**前提与错误代码。** 一个 128 B pool 全部可寻址；同一 8 B granule 中，子对象 A 占偏移 `[0,3)`、B 占 `[5,8)`，中间是未分配孔洞。另在 `pool+32` 注册 float view：2 行、3 列、行步长 4 元素。下列两个分支分别运行，`view_store` 的示意实现暂未检查索引：
+
+~~~cpp
+uint8_t *a = register_suballocation(pool, 0, 3);
+uint8_t *b = register_suballocation(pool, 5, 3);
+View v = register_view(pool + 32, /*rows=*/2, /*cols=*/3,
+                       /*row_stride=*/4, /*element_bytes=*/4);
+__global__ void s05(uint8_t *a, View v, int which) {
+    if (threadIdx.x != 0) return;
+    if (which == 0) a[4] = 1;           // 错误：进入逻辑孔洞，仍在 pool 内
+    else view_store(v, 0, 3, 1.0f);     // 错误：列 3；写到行间 padding
+}
+// 两次独立 launch：<<<1,32>>>，which 分别为 0、1。
+~~~
+
+**哪里不对、怎样检。** M4 需要子对象／view 契约。前一写超出 A 的 3 B；后一写位于 view 外包区间内，却不满足 `row<2 && col<3`。D1 扩展可为 A 收窄 bounds，为 view 保存形状、步长和索引检查；A2 可结合注册事件和访问的 view 身份作独立坐标判断。若降成裸指针且索引语义丢失，仅有外包范围不能还原任意 view 的逻辑约束。[P01][L05]
+
+**组件观测。** compiler 保留子对象身份与行列操作；deviceRT 查询对应逻辑描述符；UMD／框架登记 parent、子范围及生存期；cmodel 以合法元素集合对照访问。B 可用更细位图表达特定孔洞，但经典 1:8 的单字节编码不能表示本例“有效三字节、无效两字节、有效三字节”。全局 poison 也不能区分同地址上的多个重叠 view 权限。[L02]
+
+**合法反例、修复及报告。** `a[2]` 与 `view_store(v,0,2,...)` 应通过；合法的 pool 管理操作可持有 parent 范围，不能因逻辑孔洞被永久误禁。预期报告 parent／子对象 ID、错误偏移，或 `(row=0,col=3)` 与形状、步长。未登记子分配时只能报告 pool 级覆盖，不能将“地址在 128 B 内”当作 tensor 索引安全。
+
+## 组件与模型平台检查点
+
+| 层 | 需要的信息或修改 |
+|---|---|
+| 功能级 cmodel | 外层 allocation 合法，逻辑子边界非法 |
+| QEMU 已有 GPU ISA 执行模型 | M4 |
+| KMD | 子对象、维度、stride |
+
+## 验收需要留下什么证据？
+
+在对应真实GPU上记录：1）硬件型号、驱动和CUDA/ROCm版本；2）编译命令、目标GPU架构及最终ISA访存；3）`--good`正常且无误报；4）`--bad`出现对应的**设备级**GPU检查器报告，或者明确归类为`UNSUPPORTED/NOT_DETECTED/PREREQUISITE_NOT_MET`；5）`results/<backend>/S05.*.log`日志及`summary.json`。CPU ASan、单纯Host API错误或GPU MMU硬件fault不能冒充准确检测到本案例的对象级语义。
+
+**当前状态：只有源码/文档及CPU静态检查证据，尚无实际GPU编译和sanitizer检出数据。** [GPU CI启用方法](../../docs/gpu-actions-ci.md)说明如何在可信master的NVIDIA/AMD GPU Runner中自动验证。
