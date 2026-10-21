@@ -17,7 +17,6 @@ python3 scripts/run_samples.py --backend rocm --case S19 --mode both --strict
 
 **预期含义：** `detect` 是厂商官方能力下的期望，不是本项目已检出；`conditional` 需要GPU架构/ISA/执行时序支持；`unsupported` 表示当前选定工具不能保证；`api` 是GPU API错误但不构成GPU kernel内部sanitizer命中；`clean` 是用于排除误报的合法操作。
 
-
 **当前实验子范围限制：** HIP文件为同步复制功能对照，没有与CUDA cp.async等价的AMD原生异步指令；不能据此宣称AMD S19检测已实现。
 
 ## 真实场景、错误原因、可检测算法、修复对照及实现要求
@@ -49,16 +48,13 @@ __pipeline_wait_prior(0);                // 收尾等待不追溯修复过早读
 
 测试最终仍等待所有在途操作完成，以把过早读取与退出时资源生存期错误分开验证。
 
-## 生产方案与两类模型辅助验证职责
-
-**本场景只能由真实GPU设备代码或者已实现的硬件检查机制提供产品保证；模拟器和QEMU不能单独增加真机检测能力。**
+## 真实GPU生产职责
 
 | 角色 | 正确职责 |
 |---|---|
-| **真实GPU生产Checker** | 编译/运行时GPU检查ISA、GPU设备运行库、或受支持硬件MMU/Tag/Bounds；必须真机执行及报告 |
-| 独立功能级cmodel（验证） | copy group、完成、barrier phase与消费事件；用真实checker产物做语义预验证 |
-| **现有QEMU GPU ISA解释器（验证）** | GPU内部异步引擎与系统DMA事件分别接入；模型独有hook不得计GPU产品实现 |
-| KMD（生产） | 外部copy引擎完成只说明该引擎，不代替kernel内部wait语义；原接口满足契约时不新增代码 |
+| **真实GPU检查／Host API** | 仅实际GPU设备指令或实体GPU硬件检查产生产品检测证据；Host API误用须另列 |
+| **Compiler／Device Runtime／UMD** | 维护GPU检查代码、对象与生命周期、报告和覆盖状态 |
+| **KMD（生产）** | 外部copy引擎完成只说明该引擎，不代替kernel内部wait语义；原接口满足契约时不新增代码 |
 
 ## 验收需要留下什么证据？
 
