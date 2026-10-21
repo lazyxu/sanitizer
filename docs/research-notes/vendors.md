@@ -79,7 +79,7 @@ LLNL 的 rocmcc7.0.0 示例额外给 ASan 库 rpath；运行用 `HSA_XNACK=1 ASA
 
 1. 把友商能力表标成“公开文档能力与限制，核验于2026-10-20”，不用 SOTA、行业最强等排名。
 2. 把编译期对象边界、runtime allocation lifetime、UMD异步事件、report completeness分开比较；API error返回与内存实参合法性是不同检查。
-3. 以覆盖测试集验证自己的compiler/runtime/UMD/cmodel契约；“零错误”不等于已检查全部语义，特别要显式记录未插桩module/function/address-space、未建模指令、report溢出与fallback。
+3. 以覆盖测试集验证自己的Compiler/Device Runtime/UMD/KMD契约；“零错误”不等于已检查全部语义，特别要显式记录未插桩module/function/address-space、不支持的目标ISA指令、report溢出与fallback。
 4. 本次产品调查的事实与由这些事实导出的架构建议应分别标注，论文性能数据不可移植到商业产品/自研目标。
 
 ## 8. 关键来源导航
