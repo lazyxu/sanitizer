@@ -46,16 +46,19 @@ cudaDeviceSynchronize();
 
 内存池若插入真实设备依赖，须纳入命令图；工具为诊断插入的同步不得伪造应用原本有序。
 
-## 组件与模型平台检查点
+## 生产方案与两类模型辅助验证职责
 
-| 层 | 需要的信息或修改 |
+**本场景只能由真实GPU设备代码或者已实现的硬件检查机制提供产品保证；模拟器和QEMU不能单独增加真机检测能力。**
+
+| 角色 | 正确职责 |
 |---|---|
-| 功能级 cmodel | 所有使用都先于释放生效 |
-| QEMU 已有 GPU ISA 执行模型 | M5/A1 |
-| KMD | 提交、free 开始与回收证据 |
+| **真实GPU生产Checker** | 编译/运行时GPU检查ISA、GPU设备运行库、或受支持硬件MMU/Tag/Bounds；必须真机执行及报告 |
+| 独立功能级cmodel（验证） | allocation/free生效和访问依赖；用真实checker产物做语义预验证 |
+| **现有QEMU GPU ISA解释器（验证）** | 跑真实Guest队列、等待及内存池复用，核对开始／回收边界；模型独有hook不得计GPU产品实现 |
+| KMD（生产） | 提交完成、回收与错误证据；不擅自将free提交等同于全部访问失效；原接口满足契约时不新增代码 |
 
 ## 验收需要留下什么证据？
 
-在对应真实GPU上记录：1）硬件型号、驱动和CUDA/ROCm版本；2）编译命令、目标GPU架构及最终ISA访存；3）`--good`正常且无误报；4）`--bad`出现对应的**设备级**GPU检查器报告，或者明确归类为`UNSUPPORTED/NOT_DETECTED/PREREQUISITE_NOT_MET`；5）`results/<backend>/S20.*.log`日志及`summary.json`。CPU ASan、单纯Host API错误或GPU MMU硬件fault不能冒充准确检测到本案例的对象级语义。
+在对应真实GPU上记录：1）硬件型号、驱动和CUDA/ROCm版本；2）编译命令、目标GPU架构及最终ISA访存；3）`--good`正常且无误报；4）`--bad`出现对应的**设备级**GPU检查器报告，或者明确归类为`UNSUPPORTED/NOT_DETECTED/PREREQUISITE_NOT_MET`；5）`results/<backend>/S20.*.log`日志及`summary.json`。Host API或模拟器独有检查不能计作GPU设备检测；硬件fault不能保证对象级边界精度。
 
 **当前状态：只有源码/文档及CPU静态检查证据，尚无实际GPU编译和sanitizer检出数据。** [GPU CI启用方法](../../docs/gpu-actions-ci.md)说明如何在可信master的NVIDIA/AMD GPU Runner中自动验证。
