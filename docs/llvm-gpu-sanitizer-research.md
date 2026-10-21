@@ -1,8 +1,10 @@
 # 自研 LLVM GPU 后端 Sanitizer 技术调研与实施方案
 
-**版本：1.6 · 资料核验日期：2026-10-21 · 文档语言：中文**
+**版本：1.6.1 · 资料核验日期：2026-10-21 · 文档语言：中文**
 
 **用途：技术立项、编译器／驱动／架构联合评审、研发任务拆分与预算讨论。**
+
+**1.6.1 重要澄清：NVIDIA-R类纯运行时二进制插桩不需要修改生产Compiler或重编译应用；目标ISA解码／重新编码工具由UMD侧独立Runtime Binary Rewriter实现，可选复用既有MC库。此前把编译器和工具链复用混为一谈，现已纠正。**
 
 **1.6 版新增 S01 厂商实现说明：** [独立指南](S01-vendor-implementation-guide.md)先剖析 NVIDIA 默认运行时二进制插桩与 CUDA13.1+ 编译期Base/Bounds，再剖析 AMDGPU/ROCm 的 LLVM ASan＋Shadow/Redzone，最后逐个比较 cmodel、区间表、GPU MMU Guard Page、Tag、硬件Bounds及Hybrid。每条路线均给出 Compiler、KMD、UMD、功能级cmodel、已有QEMU GPU ISA模型的明确修改和核心伪代码，附官方链接及短原文。v1.5 的56份CUDA/HIP样例与GPU Actions文档保持不变，真实GPU验收仍未完成。历史版本参见[修订记录](revision-history.md)。
 
@@ -1221,9 +1223,10 @@ UMD 在模块加载或 JIT 产物生成后取得目标代码，解析指令与�
 
 | 路线 | 组件 | 必须支持的契约／交付物 | 是否必须新改代码及判断条件 |
 |---|---|---|---|
-| C：binary | 编译器 | 不要求应用重编译；可复用MC解码／编码和ISA描述；按本章归属提供device检查库／patch helper及其调用约定 | 前中端不必新增；MC已有能力可0新增，缺失部分按实际补齐。patch引擎在UMD列，避免MC或stub重复计费 |
+| C：binary | **生产Compiler（可保持零改动）** | 已编译GPU binary直接输入；不需要LLVM Pass、CodeGen或MC新增能力，也不要求重新编译原应用；既有反汇编/MC库可选复用 | **纯runtime模式修改生产Compiler代码=0**；即使自研工具需要写decoder，也不意味着必须改Compiler |
+| C：binary | **Runtime Binary Rewriter（UMD内独立模块）** | 必须有目标ISA解码、访存opcode/谓词/宽度语义、patch stub插入、re-encode、branch relocation、寄存器/scratch/resource重算及原PC映射 | 可使用只读MC库，或在UMD工具域自建；二者都不要求修改Compiler。未知opcode显式PARTIAL_COVERAGE |
 | C：binary | KMD | 接受经过许可的可执行代码资源、更新后的资源声明与正常提交；提供代码／数据映射寿命、完成及所选失败路径 | 现有正式加载／执行接口充分可0新增；仅在代码加载／权限／调试或终止接口缺失时新增正规契约，不默认要求KMD实现二进制重写 |
-| C：binary | UMD | loader／JIT取得目标代码，完成控制流重定位、资源重算、patch cache和卸载生命周期；保留原PC、覆盖与失败原因 | 需要二进制重写与管理能力；可复用已有框架。API wrapper本身不构成C；每个实际opcode及资源副作用必须处于支持集合 |
+| C：binary | UMD | module loader/JIT调用Runtime Binary Rewriter，维护分配、队列/事件、patch cache、报告和卸载生命周期；使用现有编译器另编译工具自己的设备Patch callback（不修改编译器） | 需要允许的二进制重写/装载接口，不可绕过代码签名、资源验证与KMD权限；API拦截本身不等于设备访存已经插桩 |
 
 ### 11.3 必须单独预算的工程风险
 
@@ -1254,7 +1257,7 @@ UMD 在模块加载或 JIT 产物生成后取得目标代码，解析指令与�
 
 **出处：** C借鉴NVIDIA公开Patching API的指令级callback模式[N03]及BARRACUDA的历史事件采集设计[P02]；**自研具体rewriter**（decode/encode、重定位、谓词、资源重算、PC-map/cache）不是NVIDIA未公开实现的复制品。C本身只决定如何采集检查点，实际判定还需B1/B2/D元数据。
 
-**组件：** Compiler/MC提供目标ISA编码与指令语义，KMD复用正规的代码映射/资源审计，UMD在module load/JIT patch并计算新资源；cmodel比较原代码与patch代码合法路径；**已有QEMU GPU ISA执行器**运行重写后二进制并检查predicate和barrier一致性，无需新建执行器。
+**组件：** **生产Compiler源码可完全不修改。** ISA解码、编码、重定位和资源重算均由**UMD内的独立Runtime Binary Rewriter**负责；复用既有MC库仅是可选优化，而不是先修改Compiler的前置依赖。KMD复用正规的代码映射/资源审计，UMD在module load/JIT patch并计算新资源；cmodel比较原代码与patch代码合法路径；**已有QEMU GPU ISA执行器**运行重写后二进制并检查predicate和barrier一致性，无需新建执行器。
 
 ~~~cpp
 for (Instruction i : decode(module)) {
@@ -1619,6 +1622,8 @@ KMD能力充分时可以复用现有接口，无需为三个checker分别增加�
 
 **功能级 cmodel 独立计费。** A 中它承载检测主体；B–F 中它主要承担参考语义、差分执行或新增指令语义验证。随后另列的 QEMU 全系统平台只计算系统设备接线与 guest 集成，不再次购买同一个 cmodel 检测引擎。
 
+**C纯runtime交付与历史统计口径必须分开：** §16.3原Compiler预算含GPU设备Patch代码，并非必须修改生产编译器；在纯C方案下Compiler新增源码=0、Runtime Binary Rewriter属于UMD，详情见§16.5a。下列历史分组保留便于复核，但不能按组件修改清单直接套用。
+
 本章先给出“**已有 KMD 契约足够**”的基础估算，以保持既有五项预算的数值可追溯；再给条件性 KMD 增强和 QEMU 平台投入。基础前提为已有可用 LLVM GPU 后端、UMD、功能级 GPU cmodel 和基础调试能力；C 另外要求已有成熟 decode/encode 和基本 patch 框架。基础表包含内部可发布版本的失败路径和工程化，不覆盖全部历史硬件、任意语言 ABI 或商业工具的全部优化。
 
 A 的主预算为 A0 地址检查、受控 A1 shared/stack 对象 map 和同步事件观察/接线；不是通用 A2 指针 provenance、全指令值传播、所有合法调度穷举或完整 HB 引擎。B–F 的主预算针对内存检查与公共设施；完整 init/race/sync 引擎见 §16.7。F 仅为已有硬件能力的软件使能，RTL、DV、硅片及完整硬件设计不属于本章软件 SLOC。
@@ -1652,12 +1657,12 @@ KMD 的“0”表示不新增该组件代码，不表示接口免于验证。调
 | B | KMD | 0 | 0 | 复用现有 GPUVA/映射、完成、错误回传及所选终止策略的契约；不足时按实际缺口选 K-M/K-E/K-A。 | 新增 KMD 测试为 0；对既有契约的端到端用例包含在 UMD/模型测试。 |
 | B | UMD | 5–11 | 4–9 | shadow 资源、poison/unpoison 排序、context/JIT 链接、池分配及 CLI 覆盖/资源不足报告。 | 异步 alloc/free、shadow 可见性、映射失败、卸载回收、日志满和合法别名。 |
 | B | 功能级 cmodel（单列） | 1–3 | 1–3 | 独立区间 oracle，核对 shadow 状态与应用命令的生效次序。 | 与插桩结果差分、边界精度、检测器自身访存分类和失败注入。 |
-| C | Compiler | 6–13 | 5–11 | 复用 MC/指令语义接口；设备 patch stub、寄存器保存恢复、metadata 查询与报告。 | stub 透明性、寄存器/谓词恢复、访问宽度和原子保持；不重计已有解码器。 |
+| C | **历史Compiler交付包（非编译器源码必改）** | 6–13 | 5–11 | 该分组中主要是GPU设备Patch stub和可选MC适配，**不表示生产Compiler必须修改**；纯runtime时可全部由UMD/运行时工具交付。 | Patch透明性、寄存器/谓词恢复、地址宽度和原子语义；不重计已有解码器。 |
 | C | KMD | 0 | 0 | 复用已有正规代码加载/执行、映射、完成及所选终止契约；调试接口仅在实现依赖时要求，缺口按需选 K-M/K-E/K-A/K-X。 | 新增 KMD 测试为 0；代码生命周期和故障归因的集成测试计在 UMD/模型。 |
 | C | UMD | 17–32 | 15–28 | 运行时重写、CFG/branch relocation、资源重算、patch cache、JIT/unload；CLI 恢复原 PC。 | 分支/调用/常量区重定位、并发加载、缓存版本、拒绝未知编码、资源声明及异常路径。 |
 | C | 功能级 cmodel（单列） | 2–5 | 2–5 | 原始代码与重写代码的独立差分执行；识别原指令和 stub 的语义差异。 | 编码、谓词、依赖等待、分支、特殊访存、异常路径的等价和错误反例。 |
 
-C 的运行时重写/patch 管理延续原预算归入 UMD。若团队将其抽成独立库，调整责任归属即可，不能在 Compiler 与 UMD 各计一份。A 中同步事件 tap 不等于已经交付完整 race/sync 分析；I1/S1/R1 按 §16.7 选定的工作包补充。
+**C（NVIDIA-R）务必区分“交付包归属”与“生产Compiler源码修改”。** 设备Patch是GPU执行的代码，可用未经修改的现有目标编译器构建工具CUBIN/Device Library；机器码decode/re-encode/CFG/resource修正由UMD Runtime Binary Rewriter实现。**纯runtime C实际修改生产Compiler源码可以为0**。原表把GPU设备Patch库及可选MC适配统计在历史Compiler包，不能将6–13kLOC解读为“必须修改LLVM后端”。按照实际负责人重分类时，应把此份工作迁入UMD或独立运行时工具责任包，不能在两边重复收费。A 中同步事件 tap 不等于已经交付完整 race/sync 分析；I1/S1/R1 按 §16.7 选定的工作包补充。
 
 ### 16.4 D／E／F 在 P 之上的新增量
 
@@ -1728,6 +1733,20 @@ UMD 责任包同样保留两个可追溯子项。原预算没有进一步将 SDK
 **A 的检测器主体就在功能 cmodel 中，三生产组件小计不足以交付完整 A。** B–F 的模型工作则用于研发参考、语义差分或功能验证；若项目另有等价验证资产，只能在逐工作包确认复用后扣除相应量，不能默认整包删除。
 
 所有基础总量均假设新增 KMD 为 0；缺失能力另加 §16.8，选择 QEMU 全系统验证再加 §16.9。也不能把 P＋B、P＋D、P＋C 的“从零总量”相加；公共 P、设备报告、对象表和其他共享实现会被重复计费。
+
+#### 16.5a 纯运行时C：将预算按实际修改的软件组件重新归属（历史总量不变）
+
+**【责任转列，不是新的SLOC实测】** 原P＋C含模型研发参考包的数值，按历史分组将一部分GPU设备Patch库/可选MC适配记在Compiler包。若要求**生产Compiler源码完全不改**，上述同一工作可以交付给UMD中的Runtime Binary Rewriter；旧参考成本区间可如下转列：
+
+| 实际修改组件/责任包 | 核心 kLOC（历史成本转列） | 手写测试 kLOC | 含义 |
+|---|---:|---:|---|
+| **生产Compiler的新增源码** | **0** | **0** | 可使用已有的nvcc/LLVM/目标汇编器编译设备Patch工具模块，但不改编译器本身；不重新编译用户程序 |
+| **UMD＋Runtime Binary Rewriter＋GPU设备Patch库** | **31–60** | **27–51** | 历史P＋C Compiler包 8–17/7–15 与UMD包 23–43/20–36合并转列；此表只改变归属 |
+| KMD（现有权限/映射/加载/终止接口已充分时） | 0 | 0 | 实际缺失的正规接口单独选§16.8条件包 |
+| 独立功能cmodel | 3–7 | 3–7 | 原始/重写binary对比和模型检测 |
+| **参考合计不变** | **34–67** | **30–58** | 与§16.5原P＋C数值一致，不重复计费 |
+
+**不能据此声称纯runtime从零实现就一定要这么多代码：** 旧P中若有纯C根本不需要的LLVM Pass条目，应在真正实施时从预算扣除；缺少现成decoder/encoder/patch基础设施时需要重新估算增量。**关键结论只是一条：运行时需要二进制插桩能力，但可以由UMD独立开发，不需要修改生产Compiler。**
 
 ### 16.6 E 的去重计算
 
