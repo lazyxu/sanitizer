@@ -53,7 +53,7 @@ link_device_library(mode, san_abi_version);
 emit_module_manifest(mode, supported_opcodes, addr_spaces, unchecked_sites);
 ~~~
 
-**无XNACK替代：**自研Pass不依赖XNACK编译目标；使用纯设备global metadata load。**无HMM替代：**Host内存中的指针不能被当成GPU指针传给设备，UMD必须提供实际GPUVA并在launch前完成descriptor上传与fence。此替代是新实现，不是“让现有ROCm官方ASan在不支持架构上可用”的命令行技巧。
+**无XNACK替代：**自研Pass不依赖XNACK编译目标；使用设备global metadata load读取预驻留的B2 Shadow，或使用B1 GPU端当前Live区间查询；如果来源可证明，D1可直接比较寄存器/参数base/limit。**B1/B2都不能仅凭地址判断恢复原对象来源**。**无HMM替代：**Host内存中的指针不能被当成GPU指针传给设备，UMD必须提供实际GPUVA并在launch前完成descriptor上传与fence。此替代是新实现，不是“让现有ROCm官方ASan在不支持架构上可用”的命令行技巧。
 
 ## 4. LLVM IR Pass：访存前检查（Compiler，方案B）
 
@@ -117,7 +117,7 @@ __device__ SanVerdict check_access(GpuVA addr, uint64_t bytes,
 }
 ~~~
 
-**无大片连续Shadow GPUVA：**UMD先为每个allocation建立device-local Shadow segment，设备端两级表由allocation区域映射到段起点；或使用GPU存储的排序区间表进行有界查找。只有在全查找链路可在真实GPU执行并在dispatch开始前可见时才能算设备检查。基于当前地址查live allocation的区间表是B1地址级检查，无法自动发现A指针访问live B；要D1原对象token才能发现。
+**无大片连续Shadow GPUVA：**UMD先为每个allocation建立device-local Shadow segment，设备端两级表由allocation区域映射到段起点；或使用GPU存储的排序区间表（B1，原方案I）进行有界查找。只有在全查找链路可在真实GPU执行并在dispatch开始前可见时才能算设备检查。基于当前地址查live allocation的区间表是B1地址级检查，无法自动发现A指针访问live B；要D1原对象token才能发现。
 
 **无自动页换入：**metadata必须全驻留且保证合法映射，缺页不做透明Host补救；分配/上传失败拒绝launch而不是访问空Shadow。若报告资源不足，设置sticky TOOL_FAILURE且阻止相应GPU访存。
 
@@ -180,7 +180,7 @@ DeviceResult on_san_error(Context& ctx, Access a) {
 
 ## 10. RTL/实体硬件：F0、F1、F2不是AMD软件ASan的必要条件
 
-- **F0 MMU Guard Page：**只有实体GPU GPUVM真正支持未映射页/权限fault、且分配按页边界布局时可用。页内4B越界不会因为Guard Page存在而自动故障；无MMU时使用真实GPU设备指令的Shadow/Bounds检查。
+- **F0 MMU Guard Page（原G；辅助能力，非独立完整Sanitizer）：**只有实体GPU GPUVM真正支持未映射页/权限fault、且分配按页边界布局时可用。页内4B越界不会因为Guard Page存在而自动故障；无MMU时使用真实GPU设备指令的Shadow/Bounds检查。
 - **F1 硬件Tag：**实体芯片需比较指针tag与memory tag并在正确ISA异常点处理，不允许把CPU ASan的软件Tag函数称为硬件支持。无硬件时使用D1的原对象Bounds，或在D2受控ABI内显式携带object_id/epoch并执行GPU软件比较。
 - **F2 硬件Bounds：**没有descriptor硬件比较单元时，Compiler以原本可执行的GPU integer/branch/load来比较base、limit、访问宽度。只有保留来源token才能提供真正的原对象检查，不能靠当前GPUVA反查。
 

@@ -1,5 +1,13 @@
 # 修订记录
 
+## v1.10 · 2026-10-21：无XNACK实施路径与“完整方案”准入重新划分
+
+- [S01厂商指南](S01-vendor-implementation-guide.md)现在**直接**列出：ROCm 7.2.4官方`xnack+` GPU ASan的硬件依赖；自研GPU在没有XNACK/HMM时，通过预映射Shadow、分段Shadow、GPU Live Allocation表及受控D1原对象参数比较实现真正设备检查的方案、组件职责和失败边界。`xnack-`编译正常不能算GPU ASan插桩成功。
+- 原**I**精确定义为**B1**：LLVM插桩的GPU端**当前Live Allocation区间表**，不携带原指针来源；不能与NVIDIA新编译期Original-Object Bounds或D1混同。首版默认B2 Shadow；B1为无Shadow的实现变体，插桩时机与检查语义正交。
+- 原**G**（GPU MMU Guard Page / F0）只保留为辅助页级保护、KMD真实GPU故障链路实验，不列独立完整S01产品候选；原T/F1、H/F2分别要求真实芯片Tag/Bounds，缺硬件时不可列现成方案；E是B/D/C的混合集成而非新的检查算法。Redzone、padding、Quarantine、Shadow映射也不额外立独立产品。
+- 同步第9/10/14/16章产品准入和F预算硬件前提、README/架构/组件/AMD文档、Guard Page样例说明和静态文档回归；预计代码量**不变**，变更的是方案/能力归类与芯片实现前提。
+- 只完成文档与静态验证；没有目标自研GPU代码/实卡Sanitizer检测率或性能证明。
+
 ## v1.8 · 2026-10-21：实体GPU五路线与全组件修改清单
 
 - 主报告只保留真实硬件可生效的B/C/D/E/F，正式产品准入、28场景对应关系、硬件验收和交付阶段全部按实体GPU重写。

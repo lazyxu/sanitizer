@@ -4,7 +4,7 @@
 
 ## 产品准入
 
-只保留B（LLVM插桩Shadow/对象区间）、C（UMD二进制运行期重写）、D（D1原对象Bounds/D2指针时间身份）、E（混合）、F（实际芯片具备的硬件保护）。每个检测结果必须在实体GPU执行的检查指令或真实硬件的MMU/Tag/Bounds路径中产生。CPU API拦截可用于Host非法free/leak，但不能据此声称GPU内部Load/Store越界已检查。
+只保留B（LLVM插桩的B2 Shadow/B1当前Live区间表）、C（UMD二进制运行期重写）、D（D1原对象Bounds/D2指针时间身份）、E（混合集成）、F（实际芯片具备的F1/F2 Tag/Bounds对象检查）。**F0 GPU MMU Guard Page只能辅助页级保护与fault测试，不能单独列完整Sanitizer方案**。每个检测结果必须在实体GPU执行的检查指令或真实硬件的MMU/Tag/Bounds路径中产生。CPU API拦截可用于Host非法free/leak，但不能据此声称GPU内部Load/Store越界已检查。
 
 ## 修改边界
 
@@ -15,7 +15,7 @@
 | D1 | 实际GPU设备代码按原对象 token 做bounds检查 | pointer provenance、phi/select、参数传播 | base/size/sidecar和对象注册 | metadata隔离及生存期 |
 | D2 | 实际GPU使用指针值与身份代次同步判定 | 已支持的指针copy/load/store/atomic传播 | object id/epoch、retirement、ABI | mapping、fault与metadata访问契约 |
 | E | 模块级GPU设备检查器/patch共用一套ABI | Compiler manifest与通用Pass | 模式协商、统一对象表、部分覆盖明确标记 | 共享契约并集，只计缺失增量 |
-| F0 | 实体GPU MMU页保护故障 | 通常不需要IR插桩 | GPUVA Guard Page策略和逻辑长度 | 实际页表/fault，**页粒度** |
+| F0（辅助，非独立完整方案） | 实体GPU MMU页保护故障 | 通常不需要IR插桩 | GPUVA Guard Page策略和逻辑长度 | 实际页表/fault，**只看页粒度，不是S01任意4B对象边界** |
 | F1/F2 | 实体GPU tag/bounds硬件逻辑 | 目标ISA选择或ABI | metadata/tag生命周期、失效 | 需要真实ISA/RTL/Firmware/硅片支持，缺失时UNSUPPORTED |
 
 KMD复用已有契约时增量源码可以为零，必须仍验证实际映射、权限、完成和故障链路。设备检查库由Compiler或UMD交付但必须在GPU上运行；Firmware/RTL不是KMD源码的别名。
@@ -27,7 +27,7 @@ KMD复用已有契约时增量源码可以为零，必须仍验证实际映射�
 | 编译IR中已有check，所以GPU已检测 | 必须反汇编最终ISA，实卡执行并产生设备报告 |
 | 只在UMD拦截分配就能发现GPU kernel内部越界 | UMD提供对象元数据，但访存检查必须由GPU执行 |
 | 按GPUVA当前归属反查能发现所有旧指针 | 不行。地址复用后需要D2来源与epoch传播；D1可提供受控原对象边界 |
-| Guard Page能检测每个4B头尾越界 | F0只在实际跨到受保护的GPU页时故障 |
+| Guard Page能检测每个4B头尾越界 | F0只在实际跨到受保护的GPU页时故障，**不构成独立S01产品路线** |
 | F1/F2只需一个SDK属性 | 没有真实芯片Tag/Bounds机制即不支持，需独立RTL/固件项目 |
 | Host提交顺序天然定义设备内所有HB | 不成立，Racecheck需实际设备scope/order/barrier事件 |
 | 同一个GPU lane报错后立即return很安全 | 可能使其他lane陷入barrier等待；必须证明可靠dispatch/context终止 |

@@ -24,11 +24,11 @@
 
 | 路线 | 主要检测位置与新增工作 | 能力边界 | 适合用途 |
 |---|---|---|---|
-| B LLVM ASan 式 shadow | IR 内存访问插桩、target address-space/mask lowering、device shadow 查询、UMD poison/unpoison 与 redzone/quarantine | 基于 addressability；不保证任意跨对象跳跃或地址复用后的旧指针；共享/私有空间不能照搬 global 线性映射 | 有源码的日常测试主线、较低 ABI 改动 |
+| B LLVM地址检查：B2 Shadow/B1区间表 | IR内存访问插桩、target address-space/mask lowering、device B2 shadow或B1当前Live区间查询、UMD metadata/poison与redzone/quarantine | 基于 addressability；不保证任意跨对象跳跃或地址复用后的旧指针；共享/私有空间不能照搬 global 线性映射 | 有源码的日常测试主线、较低 ABI 改动 |
 | C runtime binary patching | 模块装载时 decode、插入 check、寄存器/谓词保存、代码重定位与 PC 映射；独立 code cache；host patch policy | 可覆盖无源码二进制的已支持 ISA 访存，但没法恢复被丢失的 source object 与 pointer provenance；不能把“不认识的 opcode”视为已覆盖 | 第三方库、JIT 产物、无法重编译模块的补洞 |
 | D object bounds + temporal provenance | 指针 identity/epoch 与 bounds 的编译器传播；pointer shadow 或变更指针表示；跨 call/memory/atomic/ABI 的一致性 | 支持链路内可以识别跨 live object 与复用后旧指针；整数伪造、外部 ABI、未知布局必须有严格语义或公开降级 | 精度需求高、可控制编译闭包的模块 |
-| E hybrid | 本预算定义为 B 主线 + D 受控模块 + C 有限 fallback，公共生命周期、报告与 coverage manifest | 每条访问必须标明当前保证等级；C fallback 不获得 D 的身份能力；不允许模式切换时静默“重新赋予当前对象身份” | 可持续产品路线，逐步把高价值链路升级为 D |
-| F hardware assisted | 若 ISA 已有 tag/bounds 支持：编译器 emit、allocator/tag lifecycle、UMD context、异常上报；若没有则另有硬件项目 | 随机小 tag 存在碰撞；capability/descriptor 精度由 ISA 决定；raw/untagged/DMA 路径仍可能绕过 | 下一代架构协同或已有硬件能力的使能 |
+| E hybrid（集成策略） | 本预算定义为 B 主线 + D 受控模块 + C 有限 fallback，公共生命周期、报告与 coverage manifest | 每条访问必须标明当前保证等级；C fallback 不获得 D 的身份能力；不允许模式切换时静默“重新赋予当前对象身份” | 可持续产品路线，逐步把高价值链路升级为 D |
+| F hardware assisted（F1/F2条件性） | 仅当目标芯片有Tag/Bounds检查能力：编译器emit、allocator/tag生命周期、UMD context、异常上报；否则必须另立硬件项目；F0页保护只作辅助 | 随机小 tag 存在碰撞；capability/descriptor 精度由 ISA 决定；raw/untagged/DMA 路径仍可能绕过 | 下一代架构协同或已有硬件能力的使能 |
 
 ### C路线职责纠正（纯Runtime不要求修改Compiler）
 

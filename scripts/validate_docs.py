@@ -116,6 +116,61 @@ root_readme = read("README.md")
 budget = load_json("docs/estimates-v1.8.json")
 report = load_json("docs/validation-report.json")
 manifest = load_json("samples/manifest.json")
+
+# 概念/实施层检查必须独立于名称检查：不能把I/G/T/H重新包装为完整新产品。
+s01 = guide
+check("### 2.4 无 XNACK" in s01 and "B2_SHADOW" in s01
+      and "B1_CURRENT_LIVE_INTERVAL" in s01
+      and "D1_ORIGINAL_OBJECT_BOUNDS" in s01,
+      "S01必须直接回答没有XNACK时的真实GPU B2/B1/D1软件实现路径")
+check("ROCm 7.2.4" in s01 and "xnack-" in s01,
+      "S01必须区分官方ROCm GPU ASan的xnack支持与自研实现")
+check("### 3.1 B1（原I）" in s01
+      and "### 3.2 F0：" in s01
+      and "### 3.3 F1 Tag" in s01
+      and "### 3.4 F2" in s01
+      and "### 3.5 E：" in s01,
+      "I/G/T/H/E需分别按B1实现变体、F0辅助、F1/F2硬件、E集成分类")
+old_headline_regex = re.compile(
+    r"^#{2,4}\s+\d+(?:\.\d+)*\s+(?:方案|路线)\s*[IGTH](?=\s|[:：]|$)",
+    re.M
+)
+for doc_path in (
+    "docs/S01-vendor-implementation-guide.md",
+    "docs/llvm-gpu-sanitizer-research.md",
+    "docs/amd-gpu-asan-hardware-fallback.md",
+    "docs/real-gpu-components-implementation.md",
+    "README.md",
+):
+    check(old_headline_regex.search(read(doc_path)) is None,
+          "不得将I/G/T/H重新写成独立产品方案章节：" + doc_path)
+# 不能误删合法的对象A/B来源与原对象Bounds示例。
+for required in (
+    "D1", "原对象", "当前Live", "辅助", "Shadow",
+):
+    check(required in s01, "S01缺少来源/当前表/辅助硬件语义：" + required)
+check("F0（原G）" in s01 and "不作为独立完整方案" in main
+      and "F0页保护仅辅助" in root_readme,
+      "F0/G必须是辅助GPU页保护，而不是完整4B对象检测产品")
+check("D1 original" in s01 or "D1原对象" in s01,
+      "必须分清B1当前Live表和D1 original-object provenance")
+check("I是B1" in s01 and "E是混合交付策略" in s01,
+      "旧I不得独立立项，E不得宣称独立检测算法")
+check("F1" in budget.get("eligibility", "") and "F2" in budget.get("eligibility", "")
+      and "auxiliary" in budget.get("hardware_delivery", {}).get("F0", "").lower(),
+      "预算F必须依赖F1/F2真实硬件；F0不能单独进入F完整产品估算")
+taxonomy = budget.get("route_taxonomy", {})
+check(taxonomy.get("B1", "").lower().find("current-live") >= 0
+      and "auxiliary" in taxonomy.get("F0", "").lower()
+      and "integration" in taxonomy.get("E", "").lower(),
+      "预算路线标签须把B1/I、F0/G和E准确归类")
+# 审计规则的正反例：旧G独立标题必须拒绝，当前B1和S04对象A/B必须接受。
+check(bool(old_headline_regex.search("### 3.2 " + "方案G：GPU MMU Guard Page")),
+      "已废弃的独立G标题必须被防回归规则拦截")
+check(not old_headline_regex.search("### 3.2 F0：辅助页保护")
+      and not old_headline_regex.search("### 18.4 S04：对象 A 访问对象 B"),
+      "语义防回归规则不得误判F0辅助和对象A/B合法示例")
+
 amd_guide = read("docs/amd-gpu-asan-hardware-fallback.md")
 for required in (
     "XNACK", "HMM", "无XNACK", "无HMM", "无MMU", "无硬件", "Compiler",

@@ -4,7 +4,7 @@
 
 本文件只讨论能够随应用代码在**实体 GPU 执行**的设备检查器，或由实体 GPU 已具备的 MMU/Tag/Bounds 机制执行的检查。软件责任以 Compiler、KMD、UMD 三组计费；Device Runtime 虽由工具链或 UMD 交付，其检查指令**实际在 GPU 执行**。设备固件、RTL/硬件设计、CLI/测试作为跨组件专项，不能混为编译器功能。
 
-正式候选只有 **B（LLVM Shadow）、C（UMD 运行时二进制重写）、D（D1 原对象 Bounds/D2 指针时间身份）、E（混合）、F（实体硬件辅助）**。仅在真实硬件具有相应接口时启用 F0/F1/F2；F0 页保护没有对象内字节级检查保证。单独 Initcheck、Racecheck、Synccheck 不可等价为一次 AddressSanitizer 检查。
+正式交付形式分为**B（LLVM设备地址检查：B2 Shadow或B1当前Live区间）、C（UMD运行时二进制重写）、D（D1原对象Bounds/D2指针时间身份）、E（B/D/C混合集成）、F（真实Tag/Bounds硬件具备时的条件性路线）**。**原I归B1；G/F0 GPU MMU Guard Page只做辅助页保护，不独立满足完整S01；软件Tag归D2，F1/F2必须有真实芯片功能**。单独 Initcheck、Racecheck、Synccheck 不可等价为一次 AddressSanitizer 检查。
 
 ## 1. 检测执行与 Host/Device 信任链
 
@@ -222,7 +222,7 @@ void handleSanitizerFault(HwFault f) {
 
 ## 9. RTL/实体 GPU MMU/Tag/Bounds（仅真实硬件已有或另行实现 F）
 
-**F0 Guard Page**：实际 GPU MMU 让越页的地址违反 PTE 权限并产生真实 fault；只能验证**页粒度**。未触及未映射页的对象越界，F0 不保证检出。
+**F0 Guard Page（辅助，不是完整独立方案）**：实际GPU MMU让越页地址违反PTE权限并产生真实fault，只能验证**页粒度**。即使是S01 64B尾后4B，若仍处于合法映射页，也可能完全不触发；不能归入完整对象越界的检出统计。
 
 **F1 Tag / F2 Bounds**：需要 ISA/RTL/metadata SRAM 或可达内存、同步失效、context 保存恢复、cache/TLB 一致性及可诊断 fault；在目标硬件没有相应机制前标为 FUTURE_HARDWARE / NOT_SUPPORTED，不能把软件 helper 命名成硬件检查。
 
@@ -266,7 +266,7 @@ def evaluate(target, case, checker):
 
 ## 11. B～F 的选择与组件总结
 
-| 组件 / 责任主体 | B Shadow | C Binary | D1/D2 | E 混合 | F 硬件辅助 |
+| 组件 / 责任主体 | B2 Shadow／B1区间 | C Binary | D1/D2 | E 混合集成 | F1/F2条件性硬件 |
 |---|---|---|---|---|---|
 | Compiler/LLVM GPU | 访存 Pass、实际 ISA 覆盖 | **生产 Compiler 零改动可行** | provenance／指针身份传播 | 插桩、manifest、跨模式 ABI | 新指令/intrinsic（有硬件时） |
 | GPU Device Runtime | Shadow check、report | patch stub 调用设备 checker | Bounds／身份 check、pointer metadata | 统一 ABI，防重复检查 | 必要的软件元数据与报告 |
@@ -275,7 +275,7 @@ def evaluate(target, case, checker):
 | UMD/Host Runtime | launch/async/report | 模块加载与 patch cache | 参数、graph、外部 ABI | 按模块协商等级 | 模式开启和硬件报告 |
 | KMD | metadata BO/GPUVA/complete | 可执行代码权限/映射 | metadata/context/retire | 前述契约并集 | context/fault/硬件元数据控制 |
 | Firmware | 按实际 abort/fault 缺口 | 同左 | 同左 | 同左 | 新异常/失效/重置状态机 |
-| 实体 GPU 硬件 | 执行插桩指令 | 执行改写指令 | 执行 Bounds/identity 代码 | 执行混合检查 | **实际 MMU/Tag/Bounds 机制** |
+| 实体 GPU 硬件 | 执行插桩指令 | 执行改写指令 | 执行 Bounds/identity 代码 | 执行由B/D/C组合的检查 | **实际Tag/Bounds硬件；F0 MMU Guard仅辅助** |
 | CLI/CI | 诊断/覆盖 | 原 PC 映射和拒绝标记 | 来源未知、epoch边界 | 覆盖等级汇总 | 实际 hardware feature 检测 |
 
 ### 实施优先级与可交付证据

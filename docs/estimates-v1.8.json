@@ -3,9 +3,9 @@
   "as_of": "2026-10-21",
   "status": "UNMEASURED_DESIGN_ESTIMATE; REAL_GPU_NOT_TESTED",
   "unit": "kLOC newly written or substantively modified; ranges are planning envelopes",
-  "eligibility": "B,C,D,E require device ISA checks running on physical GPU; F requires real GPU MMU/Tag/Bounds mechanisms; F0 page granular",
+  "eligibility": "B (B2 GPU Shadow or B1 current-live intervals), C, D and E require actual GPU ISA checks and device-side resources. B1 is not D1 provenance. E is an integration/delivery strategy, not a new memory-checking predicate. Standalone object-checking F requires real physical F1 Tag or F2 Bounds mechanisms; F0 GPU MMU Guard Page is auxiliary page-granularity protection/fault testing, not a complete S01 object sanitizer.",
   "responsibility": "Compiler includes delivered GPU Device Runtime but it executes on device. C pure-runtime requires no production Compiler changes; device stubs and binary rewriter counted in UMD.",
-  "budget_scope": "P included exactly once per standalone route; KMD assumed reused; new KMD interfaces added by confirmed gaps only; no new RTL/Firmware/ASIC costs",
+  "budget_scope": "P included once per production delivery route; B1/B2 are B variants, not separately added route budgets. E integration shares B/D/C components. F budget assumes actual F1/F2 object-checking silicon or separately delivered new hardware; F0-alone not eligible. KMD assumed reused, add only verified missing contracts; RTL/Firmware/ASIC excluded.",
   "production": {
     "P": {
       "compiler": {
@@ -639,9 +639,9 @@
     }
   },
   "hardware_delivery": {
-    "F0": "Real GPU MMU mappings/fault; page-level only",
-    "F1": "Physical GPU Tag ISA/metadata/invalidations required",
-    "F2": "Physical GPU bounds/metadata mechanism required",
+    "F0": "AUXILIARY_ONLY: real GPU MMU guard page/fault is page granularity; cannot independently fulfill S01 4-byte object boundary checking or qualify for standalone P+F object-check budget",
+    "F1": "CONDITIONAL: actual physical Tag comparison ISA/metadata/invalidations required; tag collision and granule boundaries may not detect S01 4-byte errors",
+    "F2": "CONDITIONAL: actual physical GPU Bounds/metadata mechanism required; original object provenance must also be available for D1-level checks",
     "absent_hardware": "UNSUPPORTED; RTL/ASIC and firmware separately scoped"
   },
   "verification": {
@@ -649,5 +649,16 @@
     "source_code_implemented": false,
     "arithmetic_verified": true,
     "comment": "only structure and arithmetic can be validated by scripts; all measurement status unknown"
+  },
+  "route_taxonomy": {
+    "B1": "Compiler-inserted GPU current-live-allocation interval lookup without Shadow, address validity only (old I); B implementation variant",
+    "B2": "Compiler-inserted GPU Shadow/Redzone, address validity only; recommended S01 initial B implementation",
+    "D1": "Compiler-preserved original-object base/bounds (provenance) checked on actual GPU; A-to-live-B access coverage where known",
+    "D2": "Pointer value plus allocation identity/epoch propagation, temporal provenance within declared ABI coverage",
+    "C": "Independent UMD Runtime Binary Rewriter inserts GPU checker stubs in selected existing binaries; insertion time changes, not address-check guarantee by itself",
+    "E": "Hybrid B/D/C module and ABI integration strategy, not independent address-check predicate",
+    "F0": "Only auxiliary GPU MMU guard page (former G); never full independent object-byte sanitizer",
+    "F1": "Actual hardware Tag mechanism only when silicon supports it; software tag method belongs to instrumented software checkers",
+    "F2": "Actual hardware Bounds/metadata only if silicon supports it; otherwise separately scoped RTL/ASIC project"
   }
 }

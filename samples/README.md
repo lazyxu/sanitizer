@@ -107,9 +107,9 @@ CPU-only静态工作流有成功记录，仅表明清单、语法和虚构日志
 
 以上部分样例**仅验证原28场景的一个子情况**；源文件README明确限定，例如S19的HIP源码不具备与CUDA`cp.async`等价的硬件原语，S23未覆盖texture/surface所有边界模式，S26真正混合编译单元需要另加构建夹具，S28尚没有工具内部故障注入能力。不能把“源文件存在”写成“完整场景已经验收”。
 
-## 4. GPU Guard Page是真的存在吗？
+## 4. GPU Guard Page辅助页保护：能不能取代完整Sanitizer？
 
-**存在，而且有官方GPU专用API。** 本仓库额外提供[CUDA+HIP GPU VMM Guard Page完整实验源码](experiments/gpu-guard-page/)。不是调用CPU`mprotect`，而是GPUVA保留两页、只映射前一页，后一页保持不可访问，让真正的GPU Kernel越过页尾时产生GPU MMU fault。
+**不能取代。只有真实GPU支持VMM时才可作为辅助页级保护及KMD fault验证，不独立计完整S01字节级Sanitizer方案。** 本仓库额外提供[CUDA+HIP GPU VMM Guard Page完整实验源码](experiments/gpu-guard-page/)。不是调用CPU`mprotect`，而是GPUVA保留两页、只映射前一页，后一页保持不可访问，让真正的GPU Kernel越过页尾时产生GPU MMU fault。
 
 - [CUDA Driver Virtual Memory](https://docs.nvidia.com/cuda/archive/13.4.2/cuda-driver-api/cuda_driver_api/group__CUDA__VA.html)：`cuMemAddressReserve / cuMemCreate / cuMemMap / cuMemSetAccess`。
 - [HIP GPU Virtual Memory Management](https://rocm.docs.amd.com/projects/HIP/en/latest/how-to/hip_runtime_api/memory_management/virtual_memory.html)：`hipMemAddressReserve / hipMemCreate / hipMemMap / hipMemSetAccess`。
