@@ -777,25 +777,25 @@ KVM 的 Guest CPU 加速方式与 Q1／Q2／Q3 的 GPU 接入方式应分开记�
 
 类似地，在 Guest OS 内核启用 KASAN，可以用于 KMD 的内核内存错误测试；它不自动为 GPU kernel 的 lane、对象边界与时间身份插桩。三类工具可以协同使用，报告应注明发现的是 Host 模型错误、Guest KMD 错误，还是目标 GPU 程序错误。
 
-#### 7.7.6 现有QEMU GPU ISA执行器的最小Sanitizer接入示例
+#### 7.7.6 现有QEMU GPU ISA执行器对真实设备检查产物的观测（仅用于验证）
 
-**当前已有的能力：QEMU全系统平台能执行目标GPU ISA（用户确认）；需要实现的是Sanitizer事件/元数据/错误接口，而非重写GPU ISA模拟器。** 目标ISA访存是否经过独立功能级cmodel、能否区分active lane、每个opcode的实际字节范围、GPUVA转换及异步完成，仍要到源码核查。
+**平台事实：** QEMU全系统平台能够执行目标GPU ISA（用户确认）；本项目**不在模拟器中新建独立安全判定器作为Sanitizer产品**。必须先用B/C/D/E路线生成真实GPU可执行的检查ISA/设备库；QEMU执行**同一份已插桩产物**并观察其执行和诊断。GPU模型是否准确保留active lane、字节宽度、GPUVA以及异步时序，仍需源码核实。
 
 ~~~cpp
-// 伪接口：安装在现有GPU ISA解释器的内存语义真正生效之前。
-struct GpuAccess {
+// 非侵入式验证观察接口：绝不返回安全判定，不改变程序访存结果。
+// GPU访存能否执行，取决于被测的真实设备Checker指令，而非此观察函数。
+struct GpuAccessObservation {
     uint64_t context_id, launch_id, original_pc, gpuva;
     uint32_t block_id, lane_id, bytes, byte_enable;
     uint32_t addr_space, kind, opcode;
 };
-SanVerdict before_gpu_memory_effect(
-    const GpuAccess& access,
-    const AllocationSnapshot& objects);
+void trace_gpu_execution_for_validation(const GpuAccessObservation& observed);
+void trace_device_checker_report_for_validation(const DeviceSanReport& reported);
 ~~~
 
-**正确验证链路：** 首先由真实Compiler/UMD生成B/C/D/E能在实体GPU执行的检查指令及元数据；现有QEMU GPU ISA模型随后**执行同一产物**，观察device helper与Guest报告是否正确。模型侧参考oracle可用于对照，但它不能替代设备检查器；单纯Host DMA/CPU TCG回调也不能验证Kernel内部检查。
+**正确验证链路：** Compiler/UMD生成能在真实GPU执行的检查代码与元数据→QEMU执行相同Binary→观察目标设备检查指令的Shadow/Bounds查询、失败动作及Guest报告。模型参考oracle若额外存在，也只能用于差分核对，不能代替设备检查器或计入生产功能。Host DMA/CPU TCG回调也不能替代真实GPU ISA检查。
 
-**独立性要求：** QEMU GPU执行器若与功能级cmodel共用同一套代码，仍可验证多出的Guest驱动链路，但不能把两种启动方式视为两个独立ISA oracle；应另外用不同实现的区间参考检查器核对。
+**独立性要求：** QEMU与独立cmodel若复用同一个GPU执行器，两种启动方式只能算一次GPU指令语义实现；系统联调覆盖范围可分别记录，但不能算成两份独立Checker的实现或验收。
 
 ## 8. 跨组件公共架构与接口
 
@@ -1063,7 +1063,7 @@ GPU模型在**验证阶段**记录dispatch/context、GPU PC、地址空间、地
 | 现有QEMU与独立功能级cmodel关系 | 尚不明确；核对是否同一个执行器/共享模拟代码，避免重复开发及伪独立验证 |
 | Guest GPUVA/MMU与对象长度 | 尚未核验；确认GPUVA→Guest物理地址、BO、逻辑请求长度和子分配信息都能关联 |
 | Guest UMD/KMD与错误回传 | 尚未核验；为Sanitizer增加完成前报告、fault/context关联与缓冲资源失败分类 |
-| S01第一批验收 | 在既有GPU ISA执行器上跑合法首/末元素、头/尾越界、masked-off无效lane，并核对Guest报告 |
+| S01预验证 | **先获得B或C产生的真实GPU可执行检查Binary**，再在既有GPU ISA执行器运行它；验证合法首/末、头/尾越界、masked-off lane及Guest设备报告 |
 
 **没有读取目标QEMU实际源码，不把以上“待查”冒称为“尚未实现”。** 下列预算只计确认缺失的事件钩子、报告桥或Guest集成；不按从零建设Q2平台收费。
 
@@ -1073,7 +1073,7 @@ GPU模型在**验证阶段**记录dispatch/context、GPU PC、地址空间、地
 
 ### 9.1 模型侧检查不能作为生产Sanitizer路线
 
-**【已确认的工程边界】** 在功能级cmodel或QEMU GPU ISA解释器内部增加`before_gpu_memory_effect()`，只会在模型执行时调用。真实GPU运行原始、未插桩Kernel不会经过这个Host/模拟器函数，**所以不能在真机生效，也不是可接受的独立产品候选方案**。原先的**模型独立检测产品**、阶段与预算已经撤销；模型参考测试只能辅助验证实体GPU检查器。
+**【已确认的工程边界】** 在功能级cmodel或QEMU GPU ISA解释器内部新增Host侧访存安全判定，只会在模拟执行时调用。真实GPU运行原始、未插桩Kernel不会经过这个Host/模拟器函数，**所以不能在真机生效，也不是可接受的独立产品候选方案**。原先的**模型独立检测产品**、阶段与预算已经撤销；模型参考测试只能辅助验证实体GPU检查器。
 
 | 允许纳入正式产品的方案 | 真正在哪执行检查 | 准入要求 |
 |---|---|---|
@@ -1673,7 +1673,7 @@ UMD 责任包同样保留两个可追溯子项。原预算没有进一步将 SDK
 
 ### 16.5 从 sanitizer 零起点建设的基础总量
 
-“零起点”只指 sanitizer 功能本身，仍要求 §16.1 所述现有工具链、驱动和 GPU 模型基础。每个方案的两行是不同统计边界，**不能相加**。既有第16章的 18–38、27–53 等核心区间对应“含功能 cmodel 的研发参考包”；不是三生产组件的软件小计。
+“零起点”只指 sanitizer 功能本身，仍要求 §16.1 所述现有工具链、驱动和 GPU 模型基础。每个方案的两行是不同统计边界，**不能相加**。以下B～F核心区间是设计估算，分别列出三生产组件小计和**可选模型验证投入**；后者不属于GPU生产Checker的额外检测能力，也不能算成真机已验证。
 
 | 方案 | 统计边界 | 核心 kLOC | 手写测试 kLOC | 核心＋测试 kLOC |
 | --- | --- | --- | --- | --- |
@@ -1702,7 +1702,7 @@ UMD 责任包同样保留两个可追溯子项。原预算没有进一步将 SDK
 | **生产Compiler的新增源码** | **0** | **0** | 可使用已有的nvcc/LLVM/目标汇编器编译设备Patch工具模块，但不改编译器本身；不重新编译用户程序 |
 | **UMD＋Runtime Binary Rewriter＋GPU设备Patch库** | **31–60** | **27–51** | 历史P＋C Compiler包 8–17/7–15 与UMD包 23–43/20–36合并转列；此表只改变归属 |
 | KMD（现有权限/映射/加载/终止接口已充分时） | 0 | 0 | 实际缺失的正规接口单独选§16.8条件包 |
-| 独立功能cmodel | 3–7 | 3–7 | 原始/重写binary对比和模型检测 |
+| 独立功能cmodel（仅验证） | 3–7 | 3–7 | 执行并比较真实GPU Binary/Device Checker的模拟结果 |
 | **参考合计不变** | **34–67** | **30–58** | 与§16.5原P＋C数值一致，不重复计费 |
 
 **不能据此声称纯runtime从零实现就一定要这么多代码：** 旧P中若有纯C根本不需要的LLVM Pass条目，应在真正实施时从预算扣除；缺少现成decoder/encoder/patch基础设施时需要重新估算增量。**关键结论只是一条：运行时需要二进制插桩能力，但可以由UMD独立开发，不需要修改生产Compiler。**
@@ -2045,7 +2045,7 @@ __global__ void s01(uint32_t *a, bool tail) {
 | E编译＋patch | NVIDIA Hybrid[N02][N05]＋B/D/C融合 | Compiler manifest；UMD混合选择；KMD使用统一资源 | 检查跨模块模式切换、coverage与来源降级 |
 | F0/F1/F2 | GPUVM页保护[K01]／LLVM HWASan Tag[L04]／GPUArmor[P04] | F0映射；F1/F2需新的tag/bounds协议或硬件项目 | F0验现有GPU MMU；F1/F2新增硬件指令时才扩展模型语义 |
 
-**最先提交的工作包必须是真实GPU可部署代码：** LLVM在Global Store前插入设备Shadow检查，UMD发布64B逻辑分配与Redzone，KMD复用映射/执行契约，产生真实GPU可以运行的插桩二进制。**随后**在现有QEMU GPU ISA执行器上运行**同一份**检查产物，验证`a[0]`/`a[15]`合法、`a[-1]`/`a[16]`报错；QEMU独有`before_gpu_memory_effect()`不作为产品实现。最终必须真机复验。
+**最先提交的工作包必须是真实GPU可部署代码：** LLVM在Global Store前插入设备Shadow检查，UMD发布64B逻辑分配与Redzone，KMD复用映射/执行契约，产生真实GPU可以运行的插桩二进制。**随后**在现有QEMU GPU ISA执行器上运行**同一份**检查产物，验证`a[0]`/`a[15]`合法、`a[-1]`/`a[16]`报错；QEMU独有的访存安全判断不能作为产品实现。最终必须真机复验。
 
 <a id="case-s02"></a>
 

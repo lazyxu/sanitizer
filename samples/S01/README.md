@@ -71,7 +71,7 @@ __global__ void s01(uint32_t *a, bool tail) {
 | E编译＋patch | NVIDIA Hybrid[N02][N05]＋B/D/C融合 | Compiler manifest；UMD混合选择；KMD使用统一资源 | 检查跨模块模式切换、coverage与来源降级 |
 | F0/F1/F2 | GPUVM页保护[K01]／LLVM HWASan Tag[L04]／GPUArmor[P04] | F0映射；F1/F2需新的tag/bounds协议或硬件项目 | F0验现有GPU MMU；F1/F2新增硬件指令时才扩展模型语义 |
 
-**最先提交的工作包必须是真实GPU可部署代码：** LLVM在Global Store前插入设备Shadow检查，UMD发布64B逻辑分配与Redzone，KMD复用映射/执行契约，产生真实GPU可以运行的插桩二进制。**随后**在现有QEMU GPU ISA执行器上运行**同一份**检查产物，验证`a[0]`/`a[15]`合法、`a[-1]`/`a[16]`报错；QEMU独有`before_gpu_memory_effect()`不作为产品实现。最终必须真机复验。
+**最先提交的工作包必须是真实GPU可部署代码：** LLVM在Global Store前插入设备Shadow检查，UMD发布64B逻辑分配与Redzone，KMD复用映射/执行契约，产生真实GPU可以运行的插桩二进制。**随后**在现有QEMU GPU ISA执行器上运行**同一份**检查产物，验证`a[0]`/`a[15]`合法、`a[-1]`/`a[16]`报错；QEMU独有的访存安全判断不能作为产品实现。最终必须真机复验。
 
 ## 生产方案与两类模型辅助验证职责
 

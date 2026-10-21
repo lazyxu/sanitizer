@@ -43,6 +43,10 @@ require("真实GPU" in audit and "QEMU" in audit,
 require("## 9. 路线 A" not in main, "不得恢复模型侧产品路线")
 require("A 是 cmodel" not in main and "不把六条路线都写成无条件支持" not in main,
         "不得在场景总述恢复已废弃的六路线/A模型产品分类")
+require("SanVerdict before_gpu_memory_effect(" not in main,
+        "模拟器验证观察函数不能输出生产安全判定")
+require("void trace_gpu_execution_for_validation(" in main,
+        "第7.7.6应使用不改变GPU内存语义的验证观察接口")
 require("M1可以直接在Q2运行S01正反例" not in main,
         "M1必须先交付真实GPU检测产物，再由QEMU运行相同产物")
 require("模型能检" not in main,
@@ -86,6 +90,19 @@ for p in ("docs/estimates-v1.2.json", "docs/estimates-v1.3.json",
     require("A" not in data.get("conditional_KMD", {}).get(
             "route_possible_packages_and_all_missing_envelopes", {}),
             f"{p}的条件KMD预算仍含A路线")
+
+# 额外检查报告自身不得将过时产品路线标为成功，防止预算主表虽改、验证摘要仍矛盾。
+try:
+    report = json.loads(text("docs/validation-report.json"))
+except json.JSONDecodeError:
+    errors.append("docs/validation-report.json无效JSON")
+    report = {}
+require(set(report.get("route_totals_core_test_combined", {})) == {"B","C","D","E","F"},
+        "验证报告产品预算必须仅保留B/C/D/E/F")
+require(report.get("checks", {}).get("all_six_routes_have_compiler_KMD_UMD_and_cmodel_QEMU_tables") != "pass",
+        "验证报告不得继续把已撤销的六路线标记为pass")
+require("six" not in str(report.get("checks", {}).get("baseline_cost_totals", "")).lower(),
+        "旧六路线估算不能充作当前产品验证")
 
 require("| A cmodel |" not in archive and "### A：cmodel" not in archive,
         "归档架构不得仍把模型检查列为产品方案或独立章节")
