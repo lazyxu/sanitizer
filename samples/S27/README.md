@@ -44,19 +44,16 @@ cudaStreamSynchronize(s);
 
 **修复、报告与边界。** 让p存活至所有replay完成，或在受支持更新入口同时替换节点指针和身份。连续合法replay应具有不同执行ID、相同仍live对象epoch；graph内alloc/free节点每次建立新的分配生存期时，才生成相应新allocation epoch，不能机械地按replay全量换epoch。[N08] 报告graph/exec/replay/node ID、旧对象与free位置、若复用则给当前对象身份。B在地址仍poison时可报UAF，复用unpoison后可能漏；未跟踪节点参数更新、间接指针或device-side graph launch时须降级，不能假定每个设备发起replay都有Host回调。[N03]
 
-## 生产方案与两类模型辅助验证职责
+## 实体GPU生产组件职责
 
-**只有可在真实GPU执行的设备检查/实体硬件检查才能作为本场景Sanitizer；cmodel及QEMU仅验证。**
+**实体GPU设备Checker或已有硬件机制必须实际产生检测与故障报告。**
 
 | 角色 | 正确职责 |
 |---|---|
 | **真实GPU生产Checker** | Compiler/UMD生成可部署GPU ISA设备检查器或实体GPU硬件检查单元生效；真机记录对应错误 |
-| 独立功能级cmodel（验证） | 执行ID、对象epoch及graph依赖；模型提供测试证据，不提供新增硬件检测能力 |
-| **现有QEMU GPU ISA解释器（验证）** | Guest捕获/重放与设备侧launch接通，不能只盯Host回调；不把模型自有检查hook计入产品 |
 | KMD（生产） | 提交和资源生存期；每轮launch不自动产生新allocation身份；原有接口足够时零改动 |
 
 ## 验收需要留下什么证据？
 
-在对应真实GPU上记录：1）硬件型号、驱动和CUDA/ROCm版本；2）编译命令、目标GPU架构及最终ISA访存；3）`--good`正常且无误报；4）`--bad`出现对应的**设备级**GPU检查器报告，或者明确归类为`UNSUPPORTED/NOT_DETECTED/PREREQUISITE_NOT_MET`；5）`results/<backend>/S27.*.log`日志及`summary.json`。CPU ASan、Host API错误或QEMU模型独有检测都不能冒充真实GPU检查器；GPU硬件fault不代表具备完整逻辑对象边界信息。
 
 **当前状态：只有源码/文档及CPU静态检查证据，尚无实际GPU编译和sanitizer检出数据。** [GPU CI启用方法](../../docs/gpu-actions-ci.md)说明如何在可信master的NVIDIA/AMD GPU Runner中自动验证。
