@@ -33,7 +33,7 @@ test_free_and_wait(p);       // 第一次合法释放，状态变为 dead
 test_free_and_wait(alias);   // 错误：再次释放同一 allocation instance
 ~~~
 
-**哪里不对、怎样检。** 第二次调用试图再次结束同一对象的生命周期。**真实UMD allocator/driver的状态机**维护allocation ID、成功释放事件与tombstone，在调用底层释放前检查并报告`dead -> free`非法转移；设备侧allocator应有对应设备运行库插桩。模型重放可测试该状态机，但模型自身检测不构成产品方案。仅shadow poison不能检测没有后续访问的double free。[L01][N02]
+**哪里不对、怎样检。** 第二次调用试图再次结束同一对象的生命周期。**真实UMD allocator/driver的状态机**维护allocation ID、成功释放事件与tombstone，在调用底层释放前检查并报告`dead -> free`非法转移；设备侧allocator应有对应设备运行库插桩。仅shadow poison不能检测没有后续访问的double free。[L01][N02]
 
 **组件观测。** compiler／deviceRT 为设备侧释放保留调用点并可靠发布状态，Host 释放则由 runtime 拦截；UMD 区分请求 ID、成功提交及退休完成，对嵌套回调去重。并发 free 还需在对象状态上执行一致的仲裁，不能让两个请求都基于旧 live 状态通过后才写 dead。
 
