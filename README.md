@@ -2,7 +2,7 @@
 
 本仓库保存面向自研GPU和LLVM后端的sanitizer技术调研与架构实施建议。生产软件按**编译器、KMD（Kernel-Mode Driver，内核态驱动）、UMD（User-Mode Driver，用户态驱动）**分工；功能级cmodel与基于QEMU的全系统虚拟平台分别分析。
 
-**当前版本1.6（2026-10-21）：增加 S01「NVIDIA、AMD、其他方案」的厂商优先工程实施指南。既有56份 CUDA/HIP 样例与两厂商 GPU CI 不变；GPU 硬件检测尚无实际验收记录。**
+**当前版本1.6.1（2026-10-21）：增加 S01「NVIDIA、AMD、其他方案」的厂商优先工程实施指南。既有56份 CUDA/HIP 样例与两厂商 GPU CI 不变；GPU 硬件检测尚无实际验收记录。**
 
 ## 阅读入口
 
@@ -18,6 +18,12 @@
 - [检测场景与实例分析](docs/llvm-gpu-sanitizer-research.md#detection-scenarios)：S01～S28逐例说明错误位置、检测方案、组件配合、修复／合法对照、报告与限制；[逐场景KMD和平台对应表](docs/llvm-gpu-sanitizer-research.md#scenario-platforms)补充每例的执行与观测条件。
 - [验证基准与验收矩阵](docs/llvm-gpu-sanitizer-research.md#validation)、[研究进度](docs/research-progress.md)、[修订记录](docs/revision-history.md)、[文稿验证记录](docs/validation-report.json)。
 - [归档研究笔记](docs/research-notes/)：架构、论文及友商资料的过程记录与来源链接。
+
+## v1.6.1 澄清：纯运行时二进制插桩不要求修改编译器
+
+**NVIDIA-R风格的Runtime Binary Instrumentation：** 原始Kernel仍然使用未改动的既有编译器/已存在机器码。UMD的独立Runtime Binary Rewriter负责识别访存指令、机器码decode/encode、插入设备Patch、CFG重定位、资源统计和报告。可只读复用现有LLVM MC工具，但**没有强制修改生产Compiler的任务**；编译工具自己的设备Patch模块也不等于“修改编译器”。若缺少decoder，应在UMD插桩项目内自研并计费。旧§16中的C“Compiler”成本主要是历史GPU设备库的预算归属，不代表修改编译器；§16.5a已给出纯runtime路径的归属重分类。
+
+详细见[S01 NVIDIA-R纠正后的组件表](docs/S01-vendor-implementation-guide.md)及[主报告§11/§16](docs/llvm-gpu-sanitizer-research.md)。
 
 ## v1.6 厂商优先的 S01 研发路线
 

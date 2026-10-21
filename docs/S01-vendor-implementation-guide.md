@@ -85,7 +85,7 @@ Host报告（kernel、PC、block/thread、GPUVA、字节宽度、allocation）
 
 NVIDIA 公开的 Patching API 示例使用 `sanitizerPatchInstructions`、`sanitizerPatchModule`、`sanitizerSetCallbackData`，其设备访问回调携带 `pc`、`ptr`、`accessSize`、`flags` 等。**这些是可公开使用的 NVIDIA工具API，不代表自研 GPU现成拥有该API；也不是 NVIDIA 内部完整重写器源码。**
 
-### 1.2.1 “不要求特殊编译”到底意味着什么？
+#### 1.2.1 “不要求特殊编译”到底意味着什么？
 
 **【官方事实】** [NVIDIA Compute Sanitizer 用户手册 — Compilation Options](https://docs.nvidia.com/compute-sanitizer/ComputeSanitizer/index.html#compilation-options)：
 

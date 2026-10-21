@@ -1,5 +1,15 @@
 # 文稿修订记录
 
+## v1.6.1 · 2026-10-21
+
+针对“运行时二进制插桩不要求特殊编译，为何仍要求修改编译器”的正确质疑，纠正下列误导：
+
+1. [NVIDIA-R厂商指南](S01-vendor-implementation-guide.md)区分原始应用编译、编译工具自己的Patch CUBIN、已有LLVM MC库可选复用，以及**UMD独立Runtime Binary Rewriter**；这四者不能统称为“修改Compiler”。
+2. 运行时C路线的生产Compiler新修改明确**0（已有编译器足够时）**。设备Patch/ISA decoder/encoder/CFG/relocation和资源更新均可由独立UMD运行时工具负责；不要求新增LLVM Pass、CodeGen或MC。缺少合法代码加载权限、ISA工具时按实际平台缺口重新评估。
+3. 主报告§11和§16及S01样例中的“Compiler/MC必须提供decoder”表述同步更正。原C Compiler预算是设备Patch库及可选MC的**历史交付包分组**，不是强制编译器源码修改。§16.5a展示从原C预算重新归属到UMD/Runtime的分组方法（总量不变；不是新测量），避免重复计费。
+4. NVIDIA官方手册确认默认工具不需要特殊编译标志；Patching API确实可以使用**现有**nvcc把工具回调编译为补丁模块；这都不证明必须修改原始用户编译器。本轮仅文稿更正，没有编译或运行实际GPU检测器。
+
+
 ## v1.6 · 2026-10-21
 
 1. 新增[独立 S01 按厂商实施指南](S01-vendor-implementation-guide.md)，而非用A/B/C抽象分类作首要目录：NVIDIA默认运行时二进制插桩与当前有效分配检查；NVIDIA CUDA13.1+编译期fat-pointer原对象bounds；AMD GPU ASan的LLVM插桩/Shadow/Redzone/设备运行库配合。

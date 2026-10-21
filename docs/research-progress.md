@@ -1,5 +1,12 @@
 # GPU Sanitizer 研究进度
 
+## v1.6.1：S01 NVIDIA-R 纯Runtime组件边界修正（2026-10-21）
+
+经NVIDIA Compute Sanitizer官方手册核对，默认运行时二进制插桩的用户Kernel**不需要特殊编译参数，更不需要修改生产Compiler**。之前把Compiler/MC解码接口误写成“Compiler必须交付”。现已将ISA decode/encode、patch stub、relocation、寄存器/资源重算划为**UMD内独立Runtime Binary Rewriter**的工作；可以选择复用现有MC库而无需修改它。编译工具自有的Patch Callback需要现有编译器运行，但不意味着更改编译器源代码。
+
+已修正[S01厂商指南](S01-vendor-implementation-guide.md)、[主报告§11/§16](llvm-gpu-sanitizer-research.md)和[samples/S01](../samples/S01/README.md)。§16.5a列历史P＋C成本**仅重新划归**运行时交付包，保持总量、不重计编译器；没有源码审计或新SLOC实测。未修改本项目真实Compiler/KMD/UMD/QEMU代码，GPU执行/硬件验证状态无变化。
+
+
 ## 2026-10-21 · v1.6 S01按厂商实现的工程拆解
 
 已提交独立[S01厂商优先实施指南](S01-vendor-implementation-guide.md)：按照NVIDIA默认运行时二进制插桩、CUDA13.1+编译期原对象Base/Bounds、AMD LLVM GPU ASan＋Shadow/Redzone三种公开实现路径展开，逐路径给出Compiler、KMD、UMD、功能级cmodel、已有QEMU GPU ISA模型的具体修改、核心伪代码与公开官方来源。然后单列模型原生oracle、实时对象区间表、真实GPUVA Guard Page、Tag、硬件Bounds和Hybrid，明确自研实现与厂商未公开内部机制不能混同。
