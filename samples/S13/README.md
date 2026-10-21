@@ -40,15 +40,13 @@ cudaStreamSynchronize(s);
 
 **修复、报告与边界。** 独立运行`fixed=true`版本，完整有序memset后的读取应无报；另测仅补写byte 3后读取4字节合法、读取8字节仍非法。报告至少给出`dst+3`、读取宽度、未定义byte mask、源allocation和copy链。不得把“向内存store一个来源未定义的寄存器”当作值级定义性已正确实现；完整MSan传播另立能力。若copy engine不可见、只按word标记初始化、未跟踪Host来源或实际指令被消除，均需单列漏检边界。
 
-## 生产方案与两类模型辅助验证职责
+## 实体GPU生产组件职责
 
-**模型及QEMU仅验证实际GPU设备检查产物/真实硬件机制，不可作为独立Sanitizer产品方案。**
+**只能由实体GPU实际执行设备检查器或已有硬件机制提供产品检测，实卡证据是验收依据。**
 
 | 角色 | 正确职责 |
 |---|---|
 | **真实GPU生产Checker** | Compiler/UMD生成并使GPU执行设备检查ISA；或实体GPU硬件检查单元/MMU触发，附真实设备报告 |
-| 独立功能级cmodel（验证） | byte定义性、真实store及copy来源传播；只用于预验证真实checker产物和oracle差分 |
-| **现有QEMU GPU ISA解释器（验证）** | copy engine与Guest命令完成驱动位图更新；不能用模型独有访存hook代替真实设备检查 |
 | KMD（生产） | DMA/copy完成和失败；不凭分配成功认定内容已定义；已充分支持的接口不需改源码 |
 
 ## 验收需要留下什么证据？
