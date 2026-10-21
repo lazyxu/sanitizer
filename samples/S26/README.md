@@ -41,20 +41,23 @@ kernel void prebuilt_library_kernel(int32_t* p, int n) {
 
 **哪里不对、应检测什么。** 应用确实有一次非法访问，但只在调用方插桩，无法观察库内每次访存。没有报告只能说明检查器没有看到错误，不能说明库安全。模块 manifest 至少应声明检查器、地址空间、指令覆盖及 ABI 版本；JIT 产物同样必须登记。NVIDIA 的 hybrid 也有编译单元／module 内函数粒度限制，不能据其名字假定任意未插桩函数都会自动补齐。[N05]
 
-**实现方案与组件。** 最直接是重编译库，使用与调用方兼容的 B/D 插桩。无法重编译时，C/E 在模块加载或 JIT 完成后进行受支持 opcode 的二进制插桩，共享 UMD 对象表及报告协议。A 可在模型支持全部库指令时独立观察实际访存。UMD/loader 必须检查覆盖声明并区分“成功加载”和“获得检查覆盖”；tooling 显示未覆盖模块。binary fallback 能检查地址不意味着能恢复已丢失的原对象／历史指针身份，D2 降级需单列。
+**实现方案与组件。** 首选重编译库并使用兼容B/D设备插桩；无法重编译时C/E在模块加载/JIT后重写受支持的目标GPU opcode并共享UMD对象表。**模型能解释库指令不等于真机该库已经插桩。** UMD必须记录实际模块覆盖，区分成功加载与检查生效；工具显示未覆盖模块，Binary Fallback不能恢复原对象/时间身份时必须降级。
 
 **修复、合法反例与预期报告。** 库中改用 `p[n-1]` 是合法反例。对可插桩的错误版，应报告库内 PC、模块名和 4 B 越界；对暂不支持的二进制，应明确 `unsupported-module` 或拒绝该检查模式，不能输出无条件 clean。验收同时运行“已插桩→未插桩→已插桩”的指针返回链，确认 unknown 身份不会被包装成强保证。
 
-## 组件与模型平台检查点
+## 生产方案与两类模型辅助验证职责
 
-| 层 | 需要的信息或修改 |
+**只有可在真实GPU执行的设备检查/实体硬件检查才能作为本场景Sanitizer；cmodel及QEMU仅验证。**
+
+| 角色 | 正确职责 |
 |---|---|
-| 功能级 cmodel | 真实访问是否进入检查范围 |
-| QEMU 已有 GPU ISA 执行模型 | 覆盖完整性 |
-| KMD | 模块 manifest、opcode 与 ABI |
+| **真实GPU生产Checker** | Compiler/UMD生成可部署GPU ISA设备检查器或实体GPU硬件检查单元生效；真机记录对应错误 |
+| 独立功能级cmodel（验证） | 支持实际生成ISA；覆盖清单与原PC映射；模型提供测试证据，不提供新增硬件检测能力 |
+| **现有QEMU GPU ISA解释器（验证）** | Guest loader执行compile/patch选择，Guest KMD合法加载；不把模型自有检查hook计入产品 |
+| KMD（生产） | 正规代码加载、可执行映射与资源校验；不默认允许任意patch；原有接口足够时零改动 |
 
 ## 验收需要留下什么证据？
 
-在对应真实GPU上记录：1）硬件型号、驱动和CUDA/ROCm版本；2）编译命令、目标GPU架构及最终ISA访存；3）`--good`正常且无误报；4）`--bad`出现对应的**设备级**GPU检查器报告，或者明确归类为`UNSUPPORTED/NOT_DETECTED/PREREQUISITE_NOT_MET`；5）`results/<backend>/S26.*.log`日志及`summary.json`。CPU ASan、单纯Host API错误或GPU MMU硬件fault不能冒充准确检测到本案例的对象级语义。
+在对应真实GPU上记录：1）硬件型号、驱动和CUDA/ROCm版本；2）编译命令、目标GPU架构及最终ISA访存；3）`--good`正常且无误报；4）`--bad`出现对应的**设备级**GPU检查器报告，或者明确归类为`UNSUPPORTED/NOT_DETECTED/PREREQUISITE_NOT_MET`；5）`results/<backend>/S26.*.log`日志及`summary.json`。CPU ASan、Host API错误或QEMU模型独有检测都不能冒充真实GPU检查器；GPU硬件fault不代表具备完整逻辑对象边界信息。
 
 **当前状态：只有源码/文档及CPU静态检查证据，尚无实际GPU编译和sanitizer检出数据。** [GPU CI启用方法](../../docs/gpu-actions-ci.md)说明如何在可信master的NVIDIA/AMD GPU Runner中自动验证。

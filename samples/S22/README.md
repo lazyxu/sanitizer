@@ -37,20 +37,23 @@ masked_store_f32(addr, 1.0f, active);  // 合法：实际只有 i=8、9 写内�
 
 **哪里不对、应检测什么。** 原例程序没有空间错误；若检查器对所有 8 个地址无条件访问 shadow 并报警，是检查器引入的错误。LLVM masked memory 的关闭元素不执行对应访存，VP 操作还要结合显式向量长度 EVL；不能用“访问完整向量后 select”替代原语义。[L05] 若一个 GPU lane 内还有向量元素，实际检查集合应同时考虑逻辑 lane、指令谓词、元素 mask 和 `element_index < EVL`，不能把硬件 EXEC 当成全部逻辑条件。
 
-**实现方案与组件。** B 在 IR 层保留 mask/EVL，必要时分元素检查或生成有条件的范围检查；后端负责让检查与真实访存使用相同的有效集合。C/E 从机器指令谓词和目标执行模式恢复同一集合。A 在模型的真正访存回调上检查，不把被取消的地址计算当成访存。D/F 同样必须服从 mask，不能因为加入 bounds/tag 就无条件执行检查。被关闭 lane／元素中的无效或 poison 地址不得驱动额外 metadata 访存、分支或错误报告；本合法反例不对启用元素自身已有 poison／未定义行为作保证，安全的纯地址算术可以保留。
+**实现方案与组件。** B在LLVM IR中保留mask/EVL，按真实GPU活动元素插入检查；C/E从目标机器码谓词和执行模式恢复同一集合。D及真正存在的F硬件同样必须服从mask，不能无条件检查被屏蔽元素。**模型只能对照这些真实GPU检查行为**，不能在解释器回调中自作判定并宣布产品通过。被关闭lane的非法地址不应触发额外设备metadata访问或错误报告。
 
 **修复、合法反例与预期报告。** 原例预期零错误、有效访问数为 2；`<=` 变体应只把 i=10 对应的 4 B 访问报告为 OOB。同时验证全零 mask、部分 mask 及 gather/scatter。EVL 合法对照可选“起始下标 8、向量长度 8、元素 mask 全真、EVL=2”，同样只能访问两个元素。此例也检验 race/init 插桩不能为关闭元素制造虚构的读写事件。
 
-## 组件与模型平台检查点
+## 生产方案与两类模型辅助验证职责
 
-| 层 | 需要的信息或修改 |
+**只有可在真实GPU执行的设备检查/实体硬件检查才能作为本场景Sanitizer；cmodel及QEMU仅验证。**
+
+| 角色 | 正确职责 |
 |---|---|
-| 功能级 cmodel | 关闭的元素不产生虚构访存 |
-| QEMU 已有 GPU ISA 执行模型 | 合法反例；M/R/I 插桩正确性 |
-| KMD | lane、predicate、元素 mask、EVL |
+| **真实GPU生产Checker** | Compiler/UMD生成可部署GPU ISA设备检查器或实体GPU硬件检查单元生效；真机记录对应错误 |
+| 独立功能级cmodel（验证） | 只观察实际启用lane/元素；模型提供测试证据，不提供新增硬件检测能力 |
+| **现有QEMU GPU ISA解释器（验证）** | 检查与GPU访存mask一致，避免QEMU桥接层强行全向量访问；不把模型自有检查hook计入产品 |
+| KMD（生产） | 无需逐元素新接口；通常不拥有向量EVL语义；原有接口足够时零改动 |
 
 ## 验收需要留下什么证据？
 
-在对应真实GPU上记录：1）硬件型号、驱动和CUDA/ROCm版本；2）编译命令、目标GPU架构及最终ISA访存；3）`--good`正常且无误报；4）`--bad`出现对应的**设备级**GPU检查器报告，或者明确归类为`UNSUPPORTED/NOT_DETECTED/PREREQUISITE_NOT_MET`；5）`results/<backend>/S22.*.log`日志及`summary.json`。CPU ASan、单纯Host API错误或GPU MMU硬件fault不能冒充准确检测到本案例的对象级语义。
+在对应真实GPU上记录：1）硬件型号、驱动和CUDA/ROCm版本；2）编译命令、目标GPU架构及最终ISA访存；3）`--good`正常且无误报；4）`--bad`出现对应的**设备级**GPU检查器报告，或者明确归类为`UNSUPPORTED/NOT_DETECTED/PREREQUISITE_NOT_MET`；5）`results/<backend>/S22.*.log`日志及`summary.json`。CPU ASan、Host API错误或QEMU模型独有检测都不能冒充真实GPU检查器；GPU硬件fault不代表具备完整逻辑对象边界信息。
 
 **当前状态：只有源码/文档及CPU静态检查证据，尚无实际GPU编译和sanitizer检出数据。** [GPU CI启用方法](../../docs/gpu-actions-ci.md)说明如何在可信master的NVIDIA/AMD GPU Runner中自动验证。

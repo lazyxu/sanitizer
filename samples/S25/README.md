@@ -46,16 +46,19 @@ check_temporal(v, id);       // 工具错误：把不属于同一次发布的二
 
 **修复、合法反例与预期报告。** 修复检查器，原合法程序应零误报。另设“保存旧指针→释放A→同地址新对象”的受控变体：旧身份应报 M5，新发布身份应通过。未知 writer 或无法证明成对一致时应报告 `provenance-unavailable`／覆盖不足，不能伪造当前 epoch 后宣布时间安全。
 
-## 组件与模型平台检查点
+## 生产方案与两类模型辅助验证职责
 
-| 层 | 需要的信息或修改 |
+**只有可在真实GPU执行的设备检查/实体硬件检查才能作为本场景Sanitizer；cmodel及QEMU仅验证。**
+
+| 角色 | 正确职责 |
 |---|---|
-| 功能级 cmodel | 指针值与身份来自同次发布 |
-| QEMU 已有 GPU ISA 执行模型 | 合法反例；D2 正确性 |
-| KMD | 原子配对、发布序号、epoch |
+| **真实GPU生产Checker** | Compiler/UMD生成可部署GPU ISA设备检查器或实体GPU硬件检查单元生效；真机记录对应错误 |
+| 独立功能级cmodel（验证） | 实际D2设备传播的指针值/身份配对协议；模型oracle仅用于对照；模型提供测试证据，不提供新增硬件检测能力 |
+| **现有QEMU GPU ISA解释器（验证）** | 同时验证Guest库边界与GPU原子协议；完整保存发布序号；不把模型自有检查hook计入产品 |
+| KMD（生产） | 只提供分配生命周期和映射，不能替代原子发布身份；原有接口足够时零改动 |
 
 ## 验收需要留下什么证据？
 
-在对应真实GPU上记录：1）硬件型号、驱动和CUDA/ROCm版本；2）编译命令、目标GPU架构及最终ISA访存；3）`--good`正常且无误报；4）`--bad`出现对应的**设备级**GPU检查器报告，或者明确归类为`UNSUPPORTED/NOT_DETECTED/PREREQUISITE_NOT_MET`；5）`results/<backend>/S25.*.log`日志及`summary.json`。CPU ASan、单纯Host API错误或GPU MMU硬件fault不能冒充准确检测到本案例的对象级语义。
+在对应真实GPU上记录：1）硬件型号、驱动和CUDA/ROCm版本；2）编译命令、目标GPU架构及最终ISA访存；3）`--good`正常且无误报；4）`--bad`出现对应的**设备级**GPU检查器报告，或者明确归类为`UNSUPPORTED/NOT_DETECTED/PREREQUISITE_NOT_MET`；5）`results/<backend>/S25.*.log`日志及`summary.json`。CPU ASan、Host API错误或QEMU模型独有检测都不能冒充真实GPU检查器；GPU硬件fault不代表具备完整逻辑对象边界信息。
 
 **当前状态：只有源码/文档及CPU静态检查证据，尚无实际GPU编译和sanitizer检出数据。** [GPU CI启用方法](../../docs/gpu-actions-ci.md)说明如何在可信master的NVIDIA/AMD GPU Runner中自动验证。

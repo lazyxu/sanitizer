@@ -43,16 +43,19 @@ write_on_device(peer,  b, q1, 4);         // BAD②：同对象写写，无跨de
 
 **修复、报告与边界。** CPU写前等待GPU完成；peer/IPC使用目标支持的跨设备／进程事件或完成协议，并遵守别名一致性规则。system-scope release/acquire只在该内存、地址宽度、对齐及互连支持相互原子性时成为合法反例，device-scope不能同步CPU；驻留、prefetch或映射成功都不建立HB。[N08] 报告CPU/两GPU端PC、device/context、两VA到同对象的关系及缺失同步。若peer未授权，应报权限/不可访问错误，不能以此代称数据race。不可见CPU访问、IPC另一进程、别名漏登记或概率观测窗口未命中均限制覆盖。
 
-## 组件与模型平台检查点
+## 生产方案与两类模型辅助验证职责
 
-| 层 | 需要的信息或修改 |
+**只有可在真实GPU执行的设备检查/实体硬件检查才能作为本场景Sanitizer；cmodel及QEMU仅验证。**
+
+| 角色 | 正确职责 |
 |---|---|
-| 功能级 cmodel | 可访问性、一致性和跨处理器顺序 |
-| QEMU 已有 GPU ISA 执行模型 | R1/A1/M5 |
-| KMD | 系统 scope、规范对象、映射 |
+| **真实GPU生产Checker** | Compiler/UMD生成可部署GPU ISA设备检查器或实体GPU硬件检查单元生效；真机记录对应错误 |
+| 独立功能级cmodel（验证） | 规范对象、CPU事件和系统同步模型；模型提供测试证据，不提供新增硬件检测能力 |
+| **现有QEMU GPU ISA解释器（验证）** | 关联Guest CPU、GPU与外部映射；KVM下另有CPU观测方案；不把模型自有检查hook计入产品 |
+| KMD（生产） | 共享BO、导入映射、权限及外部同步；不能单凭同址推断所有权；原有接口足够时零改动 |
 
 ## 验收需要留下什么证据？
 
-在对应真实GPU上记录：1）硬件型号、驱动和CUDA/ROCm版本；2）编译命令、目标GPU架构及最终ISA访存；3）`--good`正常且无误报；4）`--bad`出现对应的**设备级**GPU检查器报告，或者明确归类为`UNSUPPORTED/NOT_DETECTED/PREREQUISITE_NOT_MET`；5）`results/<backend>/S24.*.log`日志及`summary.json`。CPU ASan、单纯Host API错误或GPU MMU硬件fault不能冒充准确检测到本案例的对象级语义。
+在对应真实GPU上记录：1）硬件型号、驱动和CUDA/ROCm版本；2）编译命令、目标GPU架构及最终ISA访存；3）`--good`正常且无误报；4）`--bad`出现对应的**设备级**GPU检查器报告，或者明确归类为`UNSUPPORTED/NOT_DETECTED/PREREQUISITE_NOT_MET`；5）`results/<backend>/S24.*.log`日志及`summary.json`。CPU ASan、Host API错误或QEMU模型独有检测都不能冒充真实GPU检查器；GPU硬件fault不代表具备完整逻辑对象边界信息。
 
 **当前状态：只有源码/文档及CPU静态检查证据，尚无实际GPU编译和sanitizer检出数据。** [GPU CI启用方法](../../docs/gpu-actions-ci.md)说明如何在可信master的NVIDIA/AMD GPU Runner中自动验证。
