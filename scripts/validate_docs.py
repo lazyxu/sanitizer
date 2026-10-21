@@ -1,172 +1,203 @@
 #!/usr/bin/env python3
-"""文档防回归检查：生产Sanitizer必须在真实GPU执行。
+"""GPU Sanitizer文档、案例、生产预算一致性审计。
 
-该脚本只检查仓库文本与预算索引一致性，绝不运行或声称GPU检测。
+这只检查仓库结构，不会执行GPU kernel，也不意味着目标GPU功能已实现。
 """
 from __future__ import annotations
+
 import hashlib
 import json
 from pathlib import Path
 import re
 import sys
+from urllib.parse import unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
-errors: list[str] = []
+FAILURES: list[str] = []
 
-def require(test: bool, explanation: str) -> None:
-    if not test:
-        errors.append(explanation)
 
-def text(path: str) -> str:
-    target = ROOT / path
-    if not target.is_file():
-        errors.append(f"缺失文件：{path}")
+def check(ok: bool, why: str) -> None:
+    if not ok:
+        FAILURES.append(why)
+
+
+def read(path: str) -> str:
+    p = ROOT / path
+    if not p.is_file():
+        FAILURES.append(f"缺失文件：{path}")
         return ""
-    return target.read_text(encoding="utf-8")
+    return p.read_text(encoding="utf-8")
 
-main = text("docs/llvm-gpu-sanitizer-research.md")
-guide = text("docs/S01-vendor-implementation-guide.md")
-archive = text("docs/research-notes/architecture.md")
-readme = text("README.md")
-audit = text("docs/hardware-deployability-audit.md")
-manifest_text = text("samples/manifest.json")
-try:
-    manifest = json.loads(manifest_text)
-except json.JSONDecodeError:
-    errors.append("samples/manifest.json非法JSON")
-    manifest = {"cases": []}
 
-# 1. 任何当前生产方案不得仅驻留模拟器。
-require("## 9. 真实GPU部署准入与模型验证边界" in main,
-        "主稿第9章必须明确真实硬件准入")
-require("真实GPU" in audit and "QEMU" in audit,
-        "全仓库硬件准入审计应存在")
-require("## 9. 路线 A" not in main, "不得恢复模型侧产品路线")
-require("A 是 cmodel" not in main and "不把六条路线都写成无条件支持" not in main,
-        "不得在场景总述恢复已废弃的六路线/A模型产品分类")
-require("SanVerdict before_gpu_memory_effect(" not in main,
-        "模拟器验证观察函数不能输出生产安全判定")
-require("void trace_gpu_execution_for_validation(" in main,
-        "第7.7.6应使用不改变GPU内存语义的验证观察接口")
-require("M1可以直接在Q2运行S01正反例" not in main,
-        "M1必须先交付真实GPU检测产物，再由QEMU运行相同产物")
-require("模型能检" not in main,
-        "第18.29场景表不得暗示独立模型检测算产品能力")
-require("### 3.1 方案M" not in guide and "方案M：" not in guide,
-        "不得恢复S01模型原生检测候选方案")
-require("| S01-0 模型基线 |" not in guide,
-        "S01 P0必须是实际GPU设备检查原型，不能仅有模型")
-require("S01-0 **真实GPU设备代码原型**" in guide,
-        "S01指南必须以真实GPU检查代码作为第一实施阶段")
-
-# 2. 厂商运行时与编译期边界，不能反向修改Compiler依赖。
-require("生产Compiler源码无需修改" in main or "生产Compiler源码可以为0" in main,
-        "C纯Runtime不应强制要求修改Compiler")
-require("生产编译器" in guide and "不要求修改" in guide,
-        "NVIDIA-R需明确生产编译器零修改")
-require("LLVM" in main and "Shadow" in main,
-        "B编译期设备Shadow应保留生产方案")
-
-# 3. 所有结构化预算只包含可实际部署到GPU的产品路线。
-for p in ("docs/estimates-v1.2.json", "docs/estimates-v1.3.json",
-          "docs/estimates-v1.7.json"):
+def load_json(path: str) -> dict:
+    data = read(path)
     try:
-        data = json.loads(text(p))
-    except json.JSONDecodeError:
-        errors.append(f"预算JSON无法解析：{p}")
-        continue
-    allowed = {"B", "C", "D", "E", "F"}
-    for bucket in ("baseline_old_five_buckets", "regrouped_base_and_route_increments",
-                   "base_totals", "conditional_KMD"):
-        obj = data.get(bucket, {})
-        if isinstance(obj, dict):
-            keys = set(obj) if bucket == "base_totals" else set(obj)
-            require("A" not in keys, f"{p}中仍保留模型-only的产品A键: {bucket}")
-    require(set(data.get("base_totals", {})) == allowed,
-            f"{p}产品总量必须恰为B/C/D/E/F")
-    q = data.get("QEMU", {})
-    for sub in ("Q2_route_unique_bridge_increments", "Q2_extra_by_route",
-                "baseline_plus_Q2_by_route_existing_KMD"):
-        require("A" not in q.get(sub, {}), f"{p}的QEMU.{sub}仍含A产品路线")
-    require("A" not in data.get("conditional_KMD", {}).get(
-            "route_possible_packages_and_all_missing_envelopes", {}),
-            f"{p}的条件KMD预算仍含A路线")
+        obj = json.loads(data)
+        check(isinstance(obj, dict), f"{path}顶层必须为object")
+        return obj if isinstance(obj, dict) else {}
+    except json.JSONDecodeError as e:
+        FAILURES.append(f"无效JSON {path}: {e}")
+        return {}
 
-# 额外检查报告自身不得将过时产品路线标为成功，防止预算主表虽改、验证摘要仍矛盾。
+
+def add_range(*pairs: list[int]) -> list[int]:
+    return [sum(x[0] for x in pairs), sum(x[1] for x in pairs)]
+
+
+def match_routes(k: str, wanted: set[str]) -> None:
+    check(set(k) == wanted, f"候选路线必须只有{sorted(wanted)}，实得{sorted(set(k))}")
+
+
+# 连字符串也防止让旧平台描述重新进入当前文稿。
+legacy_words = (
+    "cm" + "odel",
+    "qe" + "mu",
+    "模拟" + "器",
+    "仿" + "真器",
+)
+text_suffixes = {".md", ".json", ".py", ".sh", ".yaml", ".yml"}
+for p in ROOT.rglob("*"):
+    if not p.is_file() or p.suffix not in text_suffixes or ".git" in p.parts:
+        continue
+    try:
+        body = p.read_text(encoding="utf-8")
+    except UnicodeError:
+        FAILURES.append(f"无法按UTF-8读取：{p.relative_to(ROOT)}")
+        continue
+    # 排除本脚本定义的拆分词字面量；本脚本不能使用这些完整敏感名称。
+    for needle in legacy_words:
+        if needle.lower() in body.lower():
+            FAILURES.append(f"残留已撤销平台说明：{p.relative_to(ROOT)}，关键词 {needle}")
+            break
+    check(not re.search(r"(?:路线|方案)\s*A\b|第六(?:条|种)方案", body),
+          f"{p.relative_to(ROOT)}中不得再出现额外产品路线")
+
+main = read("docs/llvm-gpu-sanitizer-research.md")
+guide = read("docs/S01-vendor-implementation-guide.md")
+implant = read("docs/real-gpu-components-implementation.md")
+audit = read("docs/hardware-deployability-audit.md")
+root_readme = read("README.md")
+budget = load_json("docs/estimates-v1.8.json")
+report = load_json("docs/validation-report.json")
+manifest = load_json("samples/manifest.json")
+
+# 当前文稿、实际GPU执行入口与全部生产责任主体。
+chapters = [int(x) for x in re.findall(r"^## (\d+)\. ", main, re.M)]
+check(chapters == list(range(1, 24)), "主稿章节应为1–23，不能缺章/重复")
+check("## 9. 真实GPU部署准入" in main, "§9应要求实体GPU检测生效")
+check("### 18.29 28个场景的真实GPU生产职责与验收映射" in main,
+      "§18.29必须有28个真实GPU组件映射")
+check("Compiler" in implant and "Firmware" in implant and "RTL" in implant
+      and "KMD" in implant and "UMD" in implant and "GPU Device Runtime" in implant,
+      "逐组件指南必须包含Compiler/Device Runtime/UMD/KMD/Firmware/RTL")
+for num in range(2, 12):
+    check(bool(re.search(rf"^## {num}\. ", implant, re.M)),
+          f"逐组件指南缺少§{num}代码/汇总章节")
+check("Runtime Binary Rewriter" in implant and "生产 Compiler" in implant,
+      "纯C的独立UMD Rewriter与生产Compiler职责缺失")
+check("S01-0 **真实GPU设备代码原型**" in guide,
+      "S01首次必须交付可在GPU实际运行的设备代码")
+check("GPU_NOT_RUN" in audit and "UNSUPPORTED" in audit,
+      "硬件审计必须声明真实GPU未运行与不可用能力")
+check("real-gpu-components-implementation.md" in root_readme,
+      "README必须链接逐组件修改代码")
+
+# S01～S28 主稿正例/反例、样例与生产责任映射。
+headings = re.findall(r"^### 18\.(\d+)\s+S(\d{2})[：:]", main, re.M)
+check(len(headings) == 28, "主稿必须恰好保留28个错误场景")
+for i, (seq, suffix) in enumerate(headings, start=1):
+    check(int(seq) == i and int(suffix) == i, f"主稿场景顺序异常：S{i:02d}")
+
+part = main.split("### 18.29 28个场景的真实GPU生产职责与验收映射")
+matrix = part[1].split("### 18.30")[0] if len(part) > 1 else ""
+mapped = re.findall(r"^\|\s*\[(S\d{2})\]\(#case-s\d{2}\)", matrix, re.M)
+expected = [f"S{i:02d}" for i in range(1, 29)]
+check(mapped == expected, "§18.29必须按S01～S28覆盖全部28项，不重漏")
+check(len(manifest.get("cases", [])) == 28, "samples/manifest.json需要28案例")
+
+for case in expected:
+    doc = read(f"samples/{case}/README.md")
+    check(f"### 18.{int(case[1:])} {case}" in doc or case == "S01",
+          f"{case}说明中缺少真实场景细节")
+    check("## 验收需要留下什么证据？" in doc and "GPU_NOT_RUN" in doc,
+          f"{case}必须有明确的实卡验收与未运行分类")
+    check("## 实体GPU生产组件职责" in doc or case == "S01",
+          f"{case}需要生产设备检查器与KMD/UMD职责")
+    for filename in ("README.md", "cuda.cu", "amd.hip.cpp"):
+        check((ROOT / "samples" / case / filename).is_file(),
+              f"缺少样例：samples/{case}/{filename}")
+
+# 只计算可交付生产软件，C纯Runtime的Compiler新增源码可以为零。
+routes = budget.get("production", {}).get("routes", {})
+check(set(routes) == {"B", "C", "D", "E", "F"},
+      "预算产品方案只能是B/C/D/E/F")
+check(budget.get("verification", {}).get("hardware_benchmark_status") in (None, "NOT_RUN"),
+      "不得声明不存在的GPU硬件测量")
+for key, route in routes.items():
+    try:
+        totals = route["productionTotals"]
+        comps = [route["Compiler"], route["KMD"], route["UMD"]]
+        for kind in ("core", "test"):
+            expected_sum = add_range(*(v[kind] for v in comps))
+            check(totals[kind] == expected_sum, f"{key} {kind}按生产组件加总不符")
+        check(totals["combined"] == add_range(totals["core"], totals["test"]),
+              f"{key}的核心＋测试不符")
+    except (KeyError, TypeError) as e:
+        FAILURES.append(f"{key}生产预算结构缺失: {e}")
+
+check(routes.get("C", {}).get("Compiler", {}).get("core") == [0, 0],
+      "纯Runtime C的生产Compiler源码预算必须为零")
+split = budget.get("hybrid_E_dedup", {})
 try:
-    report = json.loads(text("docs/validation-report.json"))
-except json.JSONDecodeError:
-    errors.append("docs/validation-report.json无效JSON")
-    report = {}
-require(set(report.get("route_totals_core_test_combined", {})) == {"B","C","D","E","F"},
-        "验证报告产品预算必须仅保留B/C/D/E/F")
-require(report.get("checks", {}).get("all_six_routes_have_compiler_KMD_UMD_and_cmodel_QEMU_tables") != "pass",
-        "验证报告不得继续把已撤销的六路线标记为pass")
-require("six" not in str(report.get("checks", {}).get("baseline_cost_totals", "")).lower(),
-        "旧六路线估算不能充作当前产品验证")
-require("all_six_routes_have_compiler_KMD_UMD_and_cmodel_QEMU_tables" not in report.get("checks", {}),
-        "已撤销的六路线成功标记必须从验证报告移除")
-require(report.get("checks", {}).get("current_product_route_set", "").startswith("B/C/D/E/F"),
-        "验证报告必须明确当前只有B/C/D/E/F产品路线")
-require(report.get("v17_hardware_deployability_audit", {}).get("active_product_routes")
-        == ["B", "C", "D", "E", "F"],
-        "当前验证报告中的GPU产品路线应与真实硬件准入一致")
-# Git存储的是“blob <UTF8字节数>\0 + 文件字节”的SHA-1，
-# 校验验证报告引用的确实是这次构建的主报告，而不是旧版本的成功结论。
+    for kind in ("core", "test"):
+        check(split["total"][kind] ==
+              add_range(*(split[k][kind] for k in
+                          ("P", "B_increment", "D_unique", "C_subset", "cross_mode"))),
+              f"E跨模式去重公式{kind}不一致")
+        check(split["total"][kind] == routes["E"]["productionTotals"][kind],
+              f"E去重合计和总体预算{kind}不一致")
+except (KeyError, TypeError) as e:
+    FAILURES.append(f"E去重预算字段错误：{e}")
+for k, obj in budget.get("additional_checkers", {}).items():
+    try:
+        for kind in ("core", "test"):
+            check(obj["total"][kind] ==
+                  add_range(obj["Compiler"][kind], obj["UMD"][kind]),
+                  f"额外checker {k}/{kind}预算加总不符")
+    except (KeyError, TypeError) as e:
+        FAILURES.append(f"额外checker {k}字段缺失：{e}")
+
+# 报告与当前主稿内容保持一致；仅称文档结构审计，不宣称GPU功能验收。
 main_bytes = main.encode("utf-8")
-git_blob = hashlib.sha1(
+blob_sha = hashlib.sha1(
     f"blob {len(main_bytes)}\0".encode("ascii") + main_bytes
 ).hexdigest()
-require(report.get("github_blob_sha") == git_blob,
-        "验证报告必须指向当前主报告的Git blob SHA，不能沿用旧版本检查记录")
+check(report.get("main_document_blob_sha") == blob_sha,
+      "审计报告引用的主稿SHA已过期")
+check(report.get("product_routes") == ["B", "C", "D", "E", "F"],
+      "审计报告产品路线不一致")
+check(report.get("physical_gpu_checker_result") == "GPU_NOT_RUN",
+      "尚无自研目标GPU运行结果，不得标称已检出")
+check(report.get("chapter_count") == len(chapters) and
+      report.get("scenarios_count") == len(headings),
+      "审计报告的章节或场景数量已过期")
 
-require("| A cmodel |" not in archive and "### A：cmodel" not in archive,
-        "归档架构不得仍把模型检查列为产品方案或独立章节")
-require("| P＋A |" not in main and "P＋A |" not in archive,
-        "现行主稿/归档不得保留模型产品预算行")
+# Markdown相对链接必须指向真实存在的仓库文件/目录；不依赖历史预算。
+markdowns = [ROOT / "README.md"] + list((ROOT / "docs").rglob("*.md")) + list((ROOT / "samples").rglob("README.md"))
+for doc in markdowns:
+    txt = doc.read_text(encoding="utf-8")
+    for target in re.findall(r"\]\(([^)\n]+)\)", txt):
+        target = target.split(' "', 1)[0]
+        if target.startswith(("#", "/", "http:", "https:", "mailto:", "data:")):
+            continue
+        local = unquote(target.split("#", 1)[0])
+        check((doc.parent / local).exists(),
+              f"失效链接：{doc.relative_to(ROOT)} -> {target}")
 
-# 4. 同步28个场景与样例中的正确三组件/QEMU表。
-require(len(manifest.get("cases", [])) == 28, "manifest必须有28场景")
-raw = main.split("### 18.29 场景与三组件、双平台的对应关系")
-mapping = raw[1].split("## 19. 验证基准")[0] if len(raw) > 1 else ""
-rows = {}
-for row in mapping.splitlines():
-    match = re.match(r"^\|\s*\[(S\d{2})\]\(#case-s\d{2}\)", row)
-    if match:
-        parts = [v.strip() for v in row.strip().split("|")[1:-1]]
-        if len(parts) == 4:
-            rows[match.group(1)] = parts
-
-require(len(rows) == 28, "主稿§18.29必须覆盖28组平台职责")
-
-for i in range(1, 29):
-    case = f"S{i:02d}"
-    md = text(f"samples/{case}/README.md")
-    require("## 生产方案与两类模型辅助验证职责" in md,
-            f"{case}缺少真机Checker/验证分工")
-    require("真实GPU生产Checker" in md,
-            f"{case}没有实际GPU Checker")
-    require("模型" in md and "验证" in md,
-            f"{case}应说明模型仅验证")
-    require("QEMU" in md and "KMD" in md, f"{case}缺少平台和驱动说明")
-    require(not re.search(r"\bA0\b|\bA2\b|方案M|路线 A 的", md),
-            f"{case}遗留模型独立检测路线")
-    if case in rows:
-        require(rows[case][1] in md and rows[case][2] in md and rows[case][3] in md,
-                f"{case}的平台职责必须准确来自主稿§18.29，不能误用场景能力编号")
-    for name in ("cuda.cu", "amd.hip.cpp"):
-        require((ROOT / "samples" / case / name).is_file(),
-                f"{case}的{name}不存在")
-
-# 5. 模型与硬件、CPU与GPU的验收状态不可混淆。
-require("HARDWARE_NOT_VERIFIED" in audit, "审计必须记录GPU未完成验收")
-require("GPU CI" in readme or "GPU Actions" in readme,
-        "项目README必须继续给出真实GPU CI入口")
-
-if errors:
-    for problem in errors:
-        print("DOC_AUDIT_FAILURE:", problem, file=sys.stderr)
+if FAILURES:
+    for error in FAILURES:
+        print("DOC_AUDIT_FAILURE:", error, file=sys.stderr)
     sys.exit(1)
 
-print("DOC_AUDIT_PASS: B/C/D/E/F为真机候选；模拟器仅验证；28案例平台映射与预算无已撤销产品路线。")
-print("这是文本/引用/结构审计；没有在GPU执行Sanitizer，也没有测试目标KMD/UMD。")
+print("DOC_AUDIT_PASS: 仅B/C/D/E/F实体GPU方案，逐组件伪代码、28场景与生产预算结构自洽")
+print("注意：此脚本未编译或运行自研GPU检查器，不产生真实性能或设备检出结论")

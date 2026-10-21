@@ -45,21 +45,19 @@ __mbarrier_test_wait(&b, t0);             // BAD②：token早于立即前一pha
 
 **修复、报告与边界。** 用例①把完整block barrier移到全员必经位置，或采用语义匹配的子组同步；用例②只使用当前或立即前一phase的有效token。报告barrier PC/ID、期望／实际参与集合、等待链或token/current phase。[N08] 不将普通barrier之前的任意return一概判错，退出线程必须按目标规范处理。NVIDIA当前synccheck的错误类、架构适用范围和barrier跟踪容量只是产品对照；自研“完整参与集合及phase验证”是目标能力。仅超时或缺失退出观测时，结论必须保留为疑似阻塞／覆盖不足。[N02]
 
-若目标token仅编码phase parity，phase 0与phase 2可能具有相同值，纯token值或当前硬件状态不能保证识别这种ABA。A须额外保留token来源phase；E要保证旧token识别，须传播barrier身份和完整phase代数等sidecar。缺少该来源／epoch信息时，只能声明部分错配检测，不能宣称完整phase覆盖。
+若目标token仅编码phase parity，phase 0与phase 2可能具有相同值，纯token值或当前硬件状态不能保证识别这种ABA。真实GPU Synccheck需额外保留token来源phase；E要保证旧token识别，须传播barrier身份和完整phase代数等sidecar。缺少该来源／epoch信息时，只能声明部分错配检测，不能宣称完整phase覆盖。
 
-## 生产方案与两类模型辅助验证职责
+## 实体GPU生产组件职责
 
-**本场景只能由真实GPU设备代码或者已实现的硬件检查机制提供产品保证；模拟器和QEMU不能单独增加真机检测能力。**
+**产品检测必须由实体GPU执行对应设备Checker或真实硬件机制，正式验收需要实卡设备报告。**
 
 | 角色 | 正确职责 |
 |---|---|
 | **真实GPU生产Checker** | 编译/运行时GPU检查ISA、GPU设备运行库、或受支持硬件MMU/Tag/Bounds；必须真机执行及报告 |
-| 独立功能级cmodel（验证） | live参与集合、完整phase来源与等待依赖；用真实checker产物做语义预验证 |
-| **现有QEMU GPU ISA解释器（验证）** | 模型违规→IRQ/故障→Guest终止链；注入与真实检测分开；模型独有hook不得计GPU产品实现 |
 | KMD（生产） | 有效终止／reset和错误通知；超时不等于证明phase错误；原接口满足契约时不新增代码 |
 
 ## 验收需要留下什么证据？
 
-在对应真实GPU上记录：1）硬件型号、驱动和CUDA/ROCm版本；2）编译命令、目标GPU架构及最终ISA访存；3）`--good`正常且无误报；4）`--bad`出现对应的**设备级**GPU检查器报告，或者明确归类为`UNSUPPORTED/NOT_DETECTED/PREREQUISITE_NOT_MET`；5）`results/<backend>/S17.*.log`日志及`summary.json`。Host API或模拟器独有检查不能计作GPU设备检测；硬件fault不能保证对象级边界精度。
+在目标实体GPU运行错误与合法对照；保存硬件型号、驱动/Firmware、Compiler、最终目标ISA、设备原始PC与原始错误日志。发生在UMD/Host allocator API的错误仅能归类`HOST_API_DETECTED`；只有GPU内部实际执行并产生设备检测证据才能标记`GPU_DETECTED`。`GPU_NOT_RUN`、`UNSUPPORTED`、`PARTIAL_COVERAGE`、`TOOL_FAILURE`必须分别保留。
 
 **当前状态：只有源码/文档及CPU静态检查证据，尚无实际GPU编译和sanitizer检出数据。** [GPU CI启用方法](../../docs/gpu-actions-ci.md)说明如何在可信master的NVIDIA/AMD GPU Runner中自动验证。
