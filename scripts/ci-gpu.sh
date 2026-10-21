@@ -62,23 +62,26 @@ else
 fi
 
 run_cases() {
+  local id="$1"; shift
   docker "${docker_args[@]}" "$image" \
     python3 scripts/run_samples.py --backend "$backend" "$@" --strict
+  # 每次runner都会更新summary.json，逐样例保存，避免S01/S13被S14覆盖。
+  cp "$ROOT/results/$backend/summary.json" "$ROOT/results/$backend/summary-$id.json"
 }
 case "$suite" in
   smoke)
-    run_cases --case S01 --mode both
+    run_cases S01 --case S01 --mode both
     if [[ "$backend" == cuda ]]; then
-      run_cases --case S13 --mode both
-      run_cases --case S14 --mode both
+      run_cases S13 --case S13 --mode both
+      run_cases S14 --case S14 --mode both
     fi
     ;;
   compile-all)
-    run_cases --case all --compile-only
+    run_cases compile-all --case all --compile-only
     ;;
   safe-all)
     # 所有源代码编译；危险bad与不支持bad按manifest跳过，不可记为检测成功。
-    run_cases --case all --mode both
+    run_cases safe-all --case all --mode both
     ;;
 esac
 echo "GPU validation complete: backend=$backend suite=$suite"
