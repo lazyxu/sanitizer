@@ -126,11 +126,15 @@ check("### 2.4 无 XNACK" in s01 and "B2_SHADOW" in s01
 check("ROCm 7.2.4" in s01 and "xnack-" in s01,
       "S01必须区分官方ROCm GPU ASan的xnack支持与自研实现")
 check("### 3.1 B1（原I）" in s01
-      and "### 3.2 F0：" in s01
-      and "### 3.3 F1 Tag" in s01
-      and "### 3.4 F2" in s01
-      and "### 3.5 E：" in s01,
+      and "### 3.2 硬件与页保护辅助机制" in s01
+      and "**F0 GPU MMU Guard Page" in s01
+      and "**F1 硬件Tag" in s01
+      and "**F2 专用硬件Bounds" in s01
+      and "### 3.3 E：" in s01,
       "I/G/T/H/E需分别按B1实现变体、F0辅助、F1/F2硬件、E集成分类")
+no_standalone_hardware_option = re.compile(r"^### 3\.[0-9]+\s+F[012](?=\s|[:：])", re.M)
+check(no_standalone_hardware_option.search(s01) is None,
+      "F0/F1/F2应合并为硬件与页保护能力审查，不可再单独列为完整选项")
 old_headline_regex = re.compile(
     r"^#{2,4}\s+\d+(?:\.\d+)*\s+(?:方案|路线)\s*[IGTH](?=\s|[:：]|$)",
     re.M

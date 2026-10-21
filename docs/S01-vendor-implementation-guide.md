@@ -501,27 +501,27 @@ SanVerdict check_current_live_interval(GPUVA addr, uint64_t n,
 
 **为什么不单列方案I**：它是B的**无Shadow实现选项**，与B2经典1:8 Shadow/Redzone在数据表示和性能上不同；两者本质上都只判断当前GPU地址可访问性，不能凭“编译期”提升语义。第一版默认仍以B2 Shadow为主；目标缺少合适的Shadow GPUVA但能GPU查询预映射Live表时才选B1。每访存有序查表成本可能比Shadow高，必须同条件实卡测量。
 
-### 3.2 F0：GPU MMU Guard Page仅作辅助保护/故障实验（原G，取消独立方案）
+### 3.2 硬件与页保护辅助机制统一审查：F0／F1／F2
 
-依赖真实GPU GPUVM/MMU、页级权限及fault回传；通常不必修改Compiler。UMD Reserve GPUVA，Map第一硬件页为可读写，第二页仅Reserve而不Map；由GPU访问第一页最后4字节`p[0]`合法，`p[1]`触达第二页则产生GPU页错误。KMD需核查真实GPU fault及context隔离，不能把CPU `mprotect` 当成设备页故障。
+**F0 GPU MMU Guard Page（原G；辅助，不是独立产品）：** 依赖真实GPU GPUVM/MMU、页级权限及fault回传；通常不必修改Compiler。UMD Reserve GPUVA，Map第一硬件页为可读写，第二页仅Reserve而不Map；由GPU访问第一页最后4字节`p[0]`合法，`p[1]`触达第二页则产生GPU页错误。KMD需核查真实GPU fault及context隔离，不能把CPU `mprotect` 当成设备页故障。
 
 **问题不是“能不能抓到越界”，而是“能抓哪些越界”**：在已映射4KiB或更大页面中放置64B对象，`a[16]`可能仍在同页，Guard Page完全看不到逻辑64B边界；如果访问进入另一个已映射页也不产生保护错误。因此F0不能单独满足本指南S01 4B头尾检测，也不能检查原对象、子分配/视图或复用后UAF。**只算F0辅助特性，不统计为独立完整Sanitizer选项。**
 
 保留[CUDA/HIP真实GPU VMM Guard Page实验](../samples/experiments/gpu-guard-page/README.md)用于GPU故障链路、映射和权限验证，默认不跑危险bad，未真机执行仍GPU_NOT_RUN。目标没有VMM就明确F0=UNSUPPORTED，若GPU仍能读预映射metadata，则B1/B2/D1软件检查不受此限制。
 
-### 3.3 F1 Tag：实体硬件已有才算硬件检查能力（原T）
+**F1 硬件Tag（原T；条件性能力）：**
 
 参考[LLVM HWASan设计](https://clang.llvm.org/docs/HardwareAssistedAddressSanitizerDesign.html)：将pointer tag与对象/内存granule tag比较。若真实GPU已有硬件Tag/访问检查，Compiler/UMD/KMD/Firmware需接入实际ISA、分配/释放Tag失效、context状态及真实fault；可以交付**其声明粒度内**的F1硬件检查。**Tag碰撞、同一granule内的小幅越界、未标记指针等并不必然可检出，不能宣称等价完整字节级S01。**
 
 如果硬件没有Tag，软件Tag需要GPU端插桩、device sidecar和报告；这种表示应归D2的指针身份或相关软件检查算法，**不是给不存在的F1硬件开一个软件选项**。仅修改UMD allocator标签而没有GPU访存前的比较也不构成Sanitizer。
 
-### 3.4 F2：专用硬件Bounds/Metadata是条件性交付（原H）
+**F2 专用硬件Bounds/Metadata（原H；条件性未来交付）：**
 
 如果目标GPU已经有GPU端Bounds指令/比较器、真实对象descriptor接口、异常/终止及metadata失效，则Compiler选择指令，UMD维护对象及版本，KMD/Firmware接通context和fault；可以作为具备该能力的硬件路线交付。**当前芯片没有就必须另立ISA/RTL/DV/Firmware/硅片工作包，不能当作可直接选择的现有产品方案。**
 
 即使硬件查得快，如果只检查“当前GPUVA落入哪个live对象”，仍不能发现A→live B；想要更强的D1原对象界限，必须把expected object来源传至检查指令。没有硬件时用GPU普通指令实现B1/B2/D1软件检查，不得把软件Bounds称为F2。
 
-### 3.5 E：Hybrid模块覆盖与能力协商，不是新的地址检查算法
+### 3.3 E：Hybrid模块覆盖与能力协商，不是新的地址检查算法
 
 借鉴NVIDIA Hybrid机制：有B/D编译期插桩的模块直接加载，未插桩但ISA可重写的模块由C进行Runtime Binary Rewriter补充，未知/未覆盖模块声明PARTIAL_COVERAGE或按严格策略拒绝。UMD统一metadata、module manifest、debug PC和检查器ABI：
 
