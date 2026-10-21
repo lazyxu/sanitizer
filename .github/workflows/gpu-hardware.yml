@@ -1,0 +1,106 @@
+# GPU验证只能在明确配置的可信GPU Runner执行。普通ubuntu-latest绝不是GPU。
+# 不在pull_request/pull_request_target执行不可信代码，详见docs/gpu-actions-ci.md。
+name: GPU Sanitizer hardware validation (NVIDIA / AMD)
+on:
+  workflow_dispatch:
+    inputs:
+      backend:
+        description: '真实GPU后端'
+        required: true
+        default: both
+        type: choice
+        options: [both, cuda, rocm]
+      suite:
+        description: 'smoke=设备检测; compile-all=仅编译全部; safe-all=全部安全场景'
+        required: true
+        default: smoke
+        type: choice
+        options: [smoke, compile-all, safe-all]
+  push:
+    branches: [master]
+    paths:
+      - 'samples/**'
+      - 'scripts/**'
+      - 'docker/**'
+      - '.github/workflows/gpu-hardware.yml'
+  schedule:
+    - cron: '17 2 * * 0'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gpu-hardware-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: false
+
+jobs:
+  nvidia:
+    name: NVIDIA CUDA - real GPU
+    # 未设置变量则跳过，不会把普通CPU CI报告为GPU成功。
+    if: >-
+      ${{
+        vars.GPU_CI_ENABLED == 'true' &&
+        github.ref == 'refs/heads/master' &&
+        (github.event_name != 'workflow_dispatch' ||
+         inputs.backend == 'both' || inputs.backend == 'cuda')
+      }}
+    runs-on: [self-hosted, linux, x64, gpu-nvidia]
+    timeout-minutes: 100
+    env:
+      CUDA_ARCH: ${{ vars.GPU_CUDA_ARCH }}
+      GPU_SUITE: ${{ github.event_name == 'workflow_dispatch' && inputs.suite || 'smoke' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check real NVIDIA GPU and Docker
+        run: |
+          set -euo pipefail
+          nvidia-smi --query-gpu=name,driver_version,compute_cap --format=csv,noheader
+          docker version --format '{{.Server.Version}}'
+      - name: Build CUDA container and run GPU sanitizer
+        run: bash scripts/ci-gpu.sh cuda "$GPU_SUITE"
+      - name: Upload NVIDIA results even if GPU checker fails
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nvidia-gpu-results-${{ github.run_id }}
+          path: results/cuda/
+          if-no-files-found: warn
+          retention-days: 14
+
+  amd:
+    name: AMD ROCm - real GPU ASan
+    if: >-
+      ${{
+        vars.GPU_CI_ENABLED == 'true' &&
+        github.ref == 'refs/heads/master' &&
+        (github.event_name != 'workflow_dispatch' ||
+         inputs.backend == 'both' || inputs.backend == 'rocm')
+      }}
+    runs-on: [self-hosted, linux, x64, gpu-amd-xnack]
+    timeout-minutes: 100
+    env:
+      ROCM_ARCH: ${{ vars.GPU_ROCM_ARCH }}
+      HSA_XNACK: '1'
+      GPU_SUITE: ${{ github.event_name == 'workflow_dispatch' && inputs.suite || 'smoke' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check AMD KFD/DRM and XNACK target
+        run: |
+          set -euo pipefail
+          test -e /dev/kfd
+          test -d /dev/dri
+          case "$ROCM_ARCH" in
+            gfx*:xnack+) echo "ROCM_ARCH=$ROCM_ARCH" ;;
+            *) echo 'Configure GPU_ROCM_ARCH as actually supported gfx...:xnack+' >&2; exit 3 ;;
+          esac
+          docker version --format '{{.Server.Version}}'
+      - name: Build ROCm container and run device GPU ASan
+        run: bash scripts/ci-gpu.sh rocm "$GPU_SUITE"
+      - name: Upload AMD results even if GPU checker fails
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: amd-gpu-results-${{ github.run_id }}
+          path: results/rocm/
+          if-no-files-found: warn
+          retention-days: 14
