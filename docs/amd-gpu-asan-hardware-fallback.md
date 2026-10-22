@@ -23,10 +23,11 @@
 
 | 条件 | AMD官方GPU ASan | 自研GPU必需吗 | 缺失时可部署的实现 | 代价和不能补回的保证 |
 |---|---|---|---|---|
-| XNACK / retryable page fault | 文档要求受支持的xnack+目标和运行配置 | **不是Shadow算法本身必需** | GPU本地或设备可见显式Shadow，预分配或逐分配显式映射，dispatch前全部驻留 | 不做按需换页；不能直接运行官方ROCm xnack+构建或声称AMD工具通过 |
+| XNACK / retryable page fault | 官方 GPU ASan 要求受支持的 `xnack+` 目标；XNACK 提供可恢复缺页后的 GPU 访存重试 | **不是Shadow算法本身必需** | 将所需 Shadow 在设备访存前分配、映射、初始化并完成 ready fence | 不能依赖 Kernel 执行中缺页后补页并重试；不能直接当作官方 ROCm `xnack+` 运行环境 |
 | Linux HMM / 共享虚拟内存 | 官方环境需HMM及兼容内核 | **不是自研离散GPU的普遍必需项** | Host维护对象账本，拷贝GPU Shadow/descriptor快照，按queue fence生效；设备端直接读固定GPUVA | 失去透明统一内存；须实现上传/下载与同步 |
 | GPU能Load有效元数据 | GPU Device Runtime必需的基本能力 | **是** | 用global/constant/设备本地内存中映射的表查询，或可信硬件metadata通路 | 若GPU完全不能从合法设备内存读到元数据，软件Shadow无法部署；UNSUPPORTED |
-| 完整GPUVA预留 / Sparse VMM | 有助于大地址空间Shadow布局 | 不是必需 | 按allocation建立Shadow段、Radix/区间descriptor表、两级索引 | 查询比平坦Shadow慢；未知/失配必须拒绝或PARTIAL |
+| 专用 Shadow 检查硬件指令 | AMD GPU ASan 的基础 Shadow 检查由编译器插桩生成普通设备读取与判断，不要求专门指令 | **不是必需** | 使用现有 GPU Global Load、整数运算、比较和控制流 | 额外指令、寄存器与缓存开销，AMD 软件路径也有；不能把缺少专用指令视为相对 AMD 的独有缺陷 |
+| 完整GPUVA预留 / Sparse VMM | 有助于大地址空间的 Shadow 布局 | 不是必需 | 根据已登记区域建立映射；可用软件 Radix/两级索引或硬件稀疏 GPUVA 映射 | 软件额外索引通常增加查询工作，Cache/TLB 和整体性能必须实测；未登记的合法来源应标 PARTIAL，不得误判为应用越界 |
 | GPU硬件Tag比较指令 | 普通AMD Shadow方案不以专用Tag为前提 | 不是B/D必需 | D1传原对象base/limit；D2显式(pointer identity,epoch)及元数据查询 | RAW指针未知来源只能降级；不能宣称有硬件Tag隔离 |
 | GPU硬件Bounds单元 | 普通AMD Shadow不要求 | 不是B/D必需 | 每条实际访存前插入设备Bounds/Shadow helper | 额外指令/寄存器/带宽，不能保证未插桩代码安全 |
 | Device atomics和内存发布语义 | report ring/并发Shadow元数据需要同步原语 | 至少需要**一种可证明的并发协议** | 每lane或每block的独立固定报告槽、Host在完成后合并；shadow写更新使用有序命令 | 少量报告/高内存开销；缺少可证明发布语义时无法可靠报告 |
@@ -36,6 +37,30 @@
 | 足够设备显存 | Shadow、Redzone和报表都要资源 | 必须有可满足最小方案的存储 | 对象区间检查、紧凑descriptor、分配级Shadow、限量报告；限制支持集合 | 若资源不足则TOOL_FAILURE，不得静默回退成CLEAN |
 
 **需要强调：**“没有XNACK”与“GPU没有访存能力”不是一回事。对自研目标，正常GPU global load能读取预映射设备Shadow就可以实现B软件检测；若既无法建立合法设备地址映射，也无设备load或可调用helper，则无法靠Host模拟替代实体GPU检查。
+
+### 2.1 XNACK 的具体功能及其与 HMM 的区别
+
+**XNACK 是 AMD GPU 的可恢复缺页重试能力（retryable page fault）**：当 GPU 执行一条访存指令，遇到**可由驱动/系统恢复**的缺页（例如有效页面暂时不驻留、需要建立映射或迁移）时，相关系统组件处理故障，然后 GPU 可以重试原来的访存。**Page Fault 不代表每次都新分配物理内存**；处理动作也可能是映射已有物理页或将已有页面从 CPU 内存迁移至设备。参考 [AMD HIP 统一内存/XNACK说明](https://rocm.docs.amd.com/projects/HIP/en/docs-6.3.3/how-to/hip_runtime_api/memory_management/unified_memory.html) 和 [ROCm GPU Memory](https://rocm.docs.amd.com/en/docs-6.1.5/conceptual/gpu-memory.html)。
+
+**HMM（Linux Heterogeneous Memory Management）不是 XNACK 硬件，也不是 Shadow 分配器**。HMM 为设备镜像 CPU 进程地址空间、追踪 CPU 页表变化及内存迁移提供内核机制；它与支持可恢复缺页的 GPU 硬件和具体设备驱动协同使用。详见 [Linux 内核 HMM 文档](https://kernel.org/doc/html/latest/mm/hmm.html)。`HSA_XNACK=1` 只能在硬件和运行配置本来支持的前提下启用对应能力，不能为没有 XNACK 的芯片创造重试功能。
+
+**XNACK 也不能自动判断 Shadow 的合法性。** 如果非法指针映射到一个没有受管理的 Shadow 地址，GPU 即使具有重试能力，也不一定存在可恢复的页面；驱动更不会自动知道应当写入 `0x00`、`0x05` 还是 Poison。ROCm 官方 GPU ASan 依赖支持的 `xnack+`/HMM 环境，是**官方实现的部署要求**，不能推出每个 Shadow 物理页都必然通过第一次 GPU Page Fault 才分配。没有 XNACK 的自研 GPU 可以在访问前显式准备 Shadow，但不能依赖执行中的故障补页、透明换入或自动重试。
+
+### 2.2 没有 XNACK 且没有等效缺页重试机制：Shadow 的三项核心取舍
+
+以下只比较**受自研 `gpuMalloc/gpuFree` 管理的 GPU Global Memory**；不讨论与 XNACK 无关的 LLVM 插桩覆盖、算法语义或 GPU 错误报告。先区分 **GPUVA 虚拟地址预留**和**Shadow 物理显存实际提交**：两者不是一回事。
+
+| 选择 | 显存与性能 | 未跟踪非法地址的后果 | 约束与适用情况 |
+|---|---|---|---|
+| **① 全量物理 Shadow 预分配** | 为整个目标 GPUVA 覆盖区提前提交物理 Shadow，寻址通常简单，但巨大空闲区域浪费 HBM | 如果全部查询区域确实有映射且正确 Poison，可直接读取；不能仅凭物理容量推断合法性 | 例如 48-bit GPUVA 有 256 TiB 虚拟范围，经典 1:8 Shadow 对应 **32 TiB 逻辑 Shadow**，整块实存预分配通常不可行。只**预留虚拟地址**并不等于提交 32 TiB 物理显存 |
+| **② 随 `gpuMalloc` 分配 Shadow，按直接地址公式读取** | 只为受管理对象及必要的保护区域准备物理 Shadow，显存节省、常见有效地址的读取路径简单 | 野指针落在**未建立 Shadow 映射**的区域时，检查器直接执行 Shadow Load 可能先发生不可恢复的设备 Fault；同页已映射但状态不正确时也可能误判 | 64B 对象对应 8 个基础 Shadow 字节，但并非每个额外字节都需要单独一个物理页；未映射地址不能盲读 |
+| **③ 按需物理 Shadow + 安全的两级 Shadow 索引** | 根目录及必要索引节点始终有效映射；先判定索引和对象覆盖状态，再访问叶子 Shadow。软件多一次或多次元数据访问，可能增加延迟和缓存压力 | 未登记范围在 Shadow Load 之前被识别，因此不会先盲读未映射叶子页 | 通常更安全、节省物理 Shadow，但性能要做同条件实测；不是保证一定比所有平坦映射慢 |
+
+**对比 S01：** `gpuMalloc(64)` 的有效范围及右侧保护区域如果已经映射、Poison 已就绪，则 `a[16]` 对应的 Shadow 可被正常读取并报告越界，**不需要 XNACK**。但访问远离任何已登记区域的野指针（如示意地址 `0xDEADBEEF`）时，②的直接公式可能映射到不存在的 Shadow 页，③则先检查始终可访问的目录，避免非法 Shadow Load。若本次检测范围不限于 `gpuMalloc`，对尚未登记但可能合法的外部内存应标记 **UNSUPPORTED/PARTIAL_COVERAGE**，不能自动定性为应用 OOB。
+
+**额外选择，不应误算成独立第四种检查算法：** 如果 GPU MMU 本来支持稀疏 GPUVA，可以预留广阔的**虚拟** Shadow 范围，仅为已管理区域提供物理后备；部分场景能利用页表/TLB 避免显式的软件两级查找。不过，没有可恢复缺页时仍需保证真正发出的 Shadow Load 对应有效映射，或在读取前安全拒绝未映射地址。页表稀疏映射并不能凭空让任意野指针对应合法可读的 Poison 数据。
+
+**归纳：** ①主要付出物理显存，②可能在未映射 Shadow 上直接 Fault，③通常增加显式索引开销。已驻留 Shadow 若在 Kernel 仍可能访问时被透明换出，也不能再依赖 XNACK 缺页重试；要么保持驻留，要么在后续使用前显式迁回。三种方式均可用于不具备 XNACK/HMM 的自研 B2，但都不等于能够直接运行 AMD 官方 GPU ASan。
 
 ## 3. Clang/Driver与构建系统
 
