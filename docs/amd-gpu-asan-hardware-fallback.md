@@ -4,7 +4,7 @@
 
 本指南区分两件事：(1) AMD ROCm 7.2.4 当前官方 GPU ASan 的已支持环境；(2) 自研LLVM GPU后端可以采取的等效软件检查架构。两者不能互相推导硬件支持。产品检查的执行点始终是真实GPU上的load/store/atomic之前的设备指令或真实MMU硬件，绝非仅有Host API拦截。
 
-**定位**：这是三种基础空间参考配置中的**② AMD-B2**的逐组件技术实施，主要借鉴AMD ROCm/LLVM Shadow与Redzone。其余**①NV-R Runtime Binary**、**③NV-C Original-Object Bounds**与能力比较在[核心统一分类](core-design-comparison.md)。本指南的B1当前区间表是实现变体（原I），**不等于第三种基础参考NV-C的Original-Object Bounds**；D2是时间身份增强，F0辅助页保护不独立计数，E是混合集成策略。没有XNACK的自研Shadow不是官方ROCm现成实现。
+**定位**：这是三种基础空间参考配置中的**② AMD-B2**的逐组件技术实施，主要借鉴AMD ROCm/LLVM Shadow与Redzone。其余**①NV-R Runtime Binary**、**③NV-C Original-Object Bounds**与能力比较在[核心统一分类](core-design-comparison.md)。本指南的B1当前区间表是实现变体（原I），**不等于第三种基础参考NV-C的Original-Object Bounds**；D2是时间身份增强，E是混合集成策略。没有XNACK的自研Shadow不是官方ROCm现成实现。
 
 ## 1. AMD当前实现的可核实事实
 
