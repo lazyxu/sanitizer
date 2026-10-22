@@ -38,7 +38,7 @@ surface_store_u32(surface, x_byte=64*4, y=0, value=7, mode=TRAP);
 // 错误：最后一个有效像素的 x_byte 为 63*4；这里已超出行宽。
 ~~~
 
-**哪里不对、应检测什么。** A 的地址可能已映射且在 allocation 内，但写权限不允许。B 不能只检查底层 pitch allocation：行尾 padding 即使在物理分配内，也未必是合法像素。检查应理解维度、格式、坐标单位、mip/layer 和边界模式。PTX 对 surface 的边界处理提供明确模式；目标 ISA 的合法 clamp/zero 等行为必须按其语义处理，不能把所有超出原始坐标范围的操作都报为非法访存。[N09]
+**哪里不对、应检测什么。** A 的地址可能已映射且在 allocation 内，但写权限不允许。B 不能只检查底层 pitch allocation：行尾 行步长空白区域 即使在物理分配内，也未必是合法像素。检查应理解维度、格式、坐标单位、mip/layer 和边界模式。PTX 对 surface 的边界处理提供明确模式；目标 ISA 的合法 clamp/zero 等行为必须按其语义处理，不能把所有超出原始坐标范围的操作都报为非法访存。[N09]
 
 **实现方案与组件。** GPU设备检查器在实际资源访存ISA前检查资源描述符和权限。Compiler＋UMD＋device runtime 可提供资源类插桩：加载时登记只读符号，创建资源时登记格式、维度与权限，在 texture/surface intrinsic 前检查参数。C/E 若覆盖资源 opcode，可查询同一描述符；只实现线性地址 shadow 的 B 不能自动获得这项能力。D 可以为显式资源 view 保留逻辑边界；F 的权限或坐标 fault 可作为硬件信号，但报告工具仍需关联资源 ID 和源码。
 
@@ -51,7 +51,7 @@ surface_store_u32(surface, x_byte=64*4, y=0, value=7, mode=TRAP);
 | 角色 | 正确职责 |
 |---|---|
 | **真实GPU生产Checker** | Compiler/UMD生成可部署GPU ISA设备检查器或实体GPU硬件检查单元生效；真机记录对应错误 |
-| KMD（生产） | 映射权限与资源授权；padding和合法坐标需上层/ISA信息；原有接口足够时零改动 |
+| KMD（生产） | 映射权限与资源授权；行步长空白区域和合法坐标需上层/ISA信息；原有接口足够时零改动 |
 
 ## 验收需要留下什么证据？
 
