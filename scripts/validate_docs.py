@@ -234,6 +234,24 @@ for required in (
 ):
     check(required.lower() in amd_guide.lower(),
           "AMD指南未解释硬件缺失路径或组件: " + required)
+# XNACK与Shadow三种映射取舍必须保留，避免把GPU缺页恢复误说成Shadow合法性判断。
+for required in (
+    "### 2.1 XNACK 的具体功能",
+    "### 2.2 没有 XNACK",
+    "可恢复缺页",
+    "GPUVA 虚拟地址预留",
+    "① 全量物理 Shadow 预分配",
+    "② 随 `gpuMalloc` 分配 Shadow",
+    "③ 按需物理 Shadow + 安全的两级 Shadow 索引",
+    "未建立 Shadow 映射",
+    "XNACK 也不能自动判断 Shadow 的合法性",
+):
+    check(required in amd_guide,
+          "AMD缺XNACK指南遗漏关键功能或三项Shadow映射取舍: " + required)
+check("三类映射取舍" in guide and "可恢复GPU缺页" in guide,
+      "S01指南需引用XNACK含义及三项Shadow映射取舍")
+check("不新增第四种" in canonical,
+      "核心分类不能把XNACK Shadow映射策略另算新算法")
 check("amd-gpu-asan-hardware-fallback.md" in root_readme
       and "amd-gpu-asan-hardware-fallback.md" in guide
       and "amd-gpu-asan-hardware-fallback.md" in main,

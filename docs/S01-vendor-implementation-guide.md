@@ -396,6 +396,8 @@ for (Instruction* I : sites) {
 - **直接使用 AMD ROCm 7.2.4 官方 GPU ASan：没有受支持的 `xnack+` / HMM 环境时，不能按官方流程获得设备插桩。** 官方[编译与运行要求](https://rocm.docs.amd.com/projects/llvm-project/en/docs-7.2.4/conceptual/using-gpu-sanitizer.html)明确说明，`xnack-` 目标可能警告并忽略设备 `-fsanitize=address` 插桩，程序能运行不意味着GPU访存受检查；只写 `HSA_XNACK=1` 也不会让不支持XNACK的芯片获得硬件功能。
 - **借鉴AMD Shadow算法，在自研LLVM GPU后端重新实现：可以不依赖XNACK。** 真实必需条件是最终GPU ISA能执行检查（或受控原对象Bounds比较），所用metadata/Report在设备GPUVA中合法可达，UMD/KMD能够在dispatch前建立映射、驻留和fence顺序，且有安全的错误报告/访存屏蔽或终止协议。必须自研Pass、设备库与运行时，而不是修改一个ROCm环境变量。
 
+**XNACK的准确功能及B2显存取舍：** XNACK支持可恢复GPU缺页后的访存重试，不是自动为任意野指针分配带正确Poison的Shadow；HMM属于Linux地址空间镜像及迁移机制。没有等效缺页重试时，Shadow主要有三类映射取舍：**全量物理Shadow预分配（显存浪费）**、**随`gpuMalloc`分配且直接寻址（野指针可能触发未映射Shadow Fault）**、**按需物理Shadow加安全两级索引（更多查询开销）**。大范围GPUVA虚拟预留不等于物理显存全量分配，硬件稀疏映射也可替代部分软件索引；详细限定、示例和官方引用统一放在[AMD指南第2节](amd-gpu-asan-hardware-fallback.md)。
+
 | 无XNACK时的实现选择 | 必要的GPU/软件能力 | 可以提供的保证 | 代价与明确缺口 |
 |---|---|---|---|
 | **B2：预映射GPU Shadow（推荐）** | GPU能读取预驻留的Shadow BO；LLVM设备Load/Store插桩；UMD Poison/发布fence | 声明支持的字节范围地址检查、Poison期UAF | 显存/带宽开销；A→存活B可能漏；与官方ROCm运行库不同 |
