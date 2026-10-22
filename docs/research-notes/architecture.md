@@ -14,7 +14,7 @@
 可用能力应分四层，不可把它们统称为“全内存安全”：
 
 1. **映射/权限合法**：GPUVA 是否映射，页/segment 是否允许此次访问。
-2. **地址可访问**：该字节此时是否属于任何 live allocation，是否落入 poisoned redzone 或 free 区间。
+2. **地址可访问**：该字节此时是否属于任何 live allocation，是否落入 poisoned区域 或 free 区间。
 3. **对象 bounds**：这次访问是否仍在产生此指针的原对象允许范围内；跳到另一个 live object 也可被判错。
 4. **temporal provenance**：指针所携带的 allocation identity/epoch 是否仍匹配其原对象；必须能识别同地址复用。
 
@@ -24,11 +24,11 @@
 
 | 路线 | 主要检测位置与新增工作 | 能力边界 | 适合用途 |
 |---|---|---|---|
-| B LLVM地址检查：B2 Shadow/B1区间表 | IR内存访问插桩、target address-space/mask lowering、device B2 shadow或B1当前Live区间查询、UMD metadata/poison与redzone/quarantine | 基于 addressability；不保证任意跨对象跳跃或地址复用后的旧指针；共享/私有空间不能照搬 global 线性映射 | 有源码的日常测试主线、较低 ABI 改动 |
+| B LLVM地址检查：B2 Shadow/B1区间表 | IR内存访问插桩、target address-space/mask lowering、device B2 shadow或B1当前Live区间查询、UMD metadata/poison与Poison状态 | 基于 addressability；不保证任意跨对象跳跃或地址复用后的旧指针；共享/私有空间不能照搬 global 线性映射 | 有源码的日常测试主线、较低 ABI 改动 |
 | C runtime binary patching（①NV-R插桩形式） | 模块装载时 decode、插入 check、寄存器/谓词保存、代码重定位与 PC 映射；独立 code cache；host patch policy | 可覆盖无源码二进制的已支持 ISA 访存，但没法恢复被丢失的 source object 与 pointer provenance；不能把“不认识的 opcode”视为已覆盖 | 第三方库、JIT 产物、无法重编译模块的补洞 |
 | D（③NV-C/D1原对象Bounds＋D2时间身份） | 指针 identity/epoch 与 bounds 的编译器传播；pointer shadow 或变更指针表示；跨 call/memory/atomic/ABI 的一致性 | 支持链路内可以识别跨 live object 与复用后旧指针；整数伪造、外部 ABI、未知布局必须有严格语义或公开降级 | 精度需求高、可控制编译闭包的模块 |
 | E hybrid（集成策略） | 本预算定义为 B 主线 + D 受控模块 + C 有限 fallback，公共生命周期、报告与 coverage manifest | 每条访问必须标明当前保证等级；C fallback 不获得 D 的身份能力；不允许模式切换时静默“重新赋予当前对象身份” | 可持续产品路线，逐步把高价值链路升级为 D |
-| F hardware assisted（F1/F2条件性） | 仅当目标芯片有Tag/Bounds检查能力：编译器emit、allocator/tag生命周期、UMD context、异常上报；否则必须另立硬件项目；F0页保护只作辅助 | 随机小 tag 存在碰撞；capability/descriptor 精度由 ISA 决定；raw/untagged/DMA 路径仍可能绕过 | 下一代架构协同或已有硬件能力的使能 |
+| F hardware assisted（F1/F2条件性） | 仅当目标芯片有Tag/Bounds检查能力：编译器emit、allocator/tag生命周期、UMD context、异常上报；否则必须另立硬件项目 | 随机小 tag 存在碰撞；capability/descriptor 精度由 ISA 决定；raw/untagged/DMA 路径仍可能绕过 | 下一代架构协同或已有硬件能力的使能 |
 
 ### C路线职责纠正（纯Runtime不要求修改Compiler）
 
@@ -95,7 +95,7 @@ HWASan 设计文档讨论 tag granule、short granules 及随机碰撞。t 位�
 | target lowering / MIR（寄存器分配前为主） | mask lowering、generic 分类、专用访存、调用约定、target check pseudo；记录来源/coverage | 可控寄存器分配并保留执行状态；识别最终地址空间 | 大部分源对象/指针来源已被压低 |
 | late MIR / MC | 审核 legalization、spill/reload、frame access、libcall expansion 等新增访存；必要的最小补插桩；最终 site→PC map | 发现 IR 插桩之后的覆盖洞；检查最终 opcode 集 | 不能从一个机器地址重新推导 C++ 原对象身份 |
 
-没有普适的“唯一正确 pass 时点”。建议内存检查靠近完成常规优化之后、关键 target lowering 之前；D 的身份传播则需要更早与优化交互。用 target late audit 判定每条最终 memory instruction 来自已验证源访问、sanitizer 自身可信访问、编译器管理 backing-storage，还是未覆盖。对新增 spill 的 backing range 检查有价值，但不等价于恢复所有 source stack object redzone。
+没有普适的“唯一正确 pass 时点”。建议内存检查靠近完成常规优化之后、关键 target lowering 之前；D 的身份传播则需要更早与优化交互。用 target late audit 判定每条最终 memory instruction 来自已验证源访问、sanitizer 自身可信访问、编译器管理 backing-storage，还是未覆盖。对新增 spill 的 backing range 检查有价值，但不等价于恢复所有 source stack object边界。
 
 内部 metadata/report/shadow 访问须标记并排除递归插桩；其边界也需用独立单元测试以及实体GPU正反例验证。不能将任意带 `nosanitize` 标记的未知用户访问当成已检测。
 
@@ -135,17 +135,15 @@ LLVM LangRef 规定 masked-off lane 不访问内存；VP 用 mask 与 EVL 共同
 
 例：一个 granule 中 `[0,2]` 属于 A、`[3,5]` 为 poisoned、`[6,7]` 属于 B，经典表示无法同时表达这两个有效区间。如果 A/B 都是 live 且紧邻，则该 granule 可全 unpoison，但 A 越界读到 B 不报错；即使改为每字节 validity bitmap，也仍无法证明访问使用了正确对象身份。
 
-因此支持 slab/custom pool 至少需要：子分配 callback；满足 granule 对齐与 redzone 的布局（增加浪费）；或额外精细 bitmap/interval bounds 表。三者只提升 addressability 精度，完整 object provenance 仍需 D。短尾部可以通过经典 prefix 表示；所有跨 granule、未对齐、长向量、跨页的跨度必须覆盖每个实际触达的 granule，不能只查起始字节。原 ASan 算法 wiki 展示了紧凑检查对未对齐部分越界的历史例子；不要据此断言每个当前目标都具有相同 bug，应把它作为自研检查器的验收反例。
+因此支持 slab/custom pool 至少需要：子分配 callback；精确子分配边界描述与GPU可访问的对象表。三者只提升 addressability 精度，完整 object provenance 仍需 D。短尾部可以通过经典 prefix 表示；所有跨 granule、未对齐、长向量、跨页的跨度必须覆盖每个实际触达的 granule，不能只查起始字节。原 ASan 算法 wiki 展示了紧凑检查对未对齐部分越界的历史例子；不要据此断言每个当前目标都具有相同 bug，应把它作为自研检查器的验收反例。
 
-**48 位 GPUVA 的算术**：若真正映射完整 `2^48` 字节应用地址空间，1:8 direct shadow 的索引域需 `2^45` 字节，即 **32 TiB 虚拟空间**。这不等于预分配 32 TiB 物理显存。实际 resident payload 大致是 live/poisoned 被触达地址覆盖对应的 shadow，另加页表、页对齐浪费、redzone、quarantine 和元数据。
+**48 位 GPUVA 的算术**：若真正映射完整 `2^48` 字节应用地址空间，1:8 direct shadow 的索引域需 `2^45` 字节，即 **32 TiB 虚拟空间**。这不等于预分配 32 TiB 物理显存。实际 resident payload 大致是 live/poisoned 被触达地址覆盖对应的 shadow，另加设备元数据、页表和报告等开销。
 
 但“稀疏所以一定可行”也不成立。需要 UMD/KMD 允许保留地址窗口、固定/可重定位 mapping、必要的 page-table 级数、shadow 初始化与驻留、地址互不冲突、所有设备的同一映射策略，以及正确处理不在应用 aperture 的坏地址。CPU ASan 大 VA 的事实不能直接推出 GPU MMU 能用同一方案。
 
 候选 mapping：
 
 - 固定 aperture 的线性 `(addr >> 3) + offset`：最快，但只在明确界定的 application VA 区间成立；先 range-check，防止坏 pointer 导致 shadow 自身 fault。
-- 多段映射/页表式 shadow：按 VA 高位查 root，再查 leaf；降低保留窗口需求但多次读取、TLB/缓存依赖和并发更新更复杂。
-- 稀疏 backing 的 direct shadow：仍需整个虚拟窗口布局成立。可将全 poisoned 或全合法页映到只读共享默认页，并在更新时按规则拆分；这只是可选实现，必须确认 GPU page mapping 能力。
 - 受控 debug allocator aperture：限定 debug 分配到较小 VA 区域以降低首版成本；SVM、imported、peer、device malloc 等区域需显式扩展，不能默认覆盖。
 
 shadow/metadata 对自身必须可访问。nonresident shadow 故障、初始化失败和 application OOB 要分开报告；无 GPU page-fault replay 时，launch 前必须保证所需 metadata 驻留。共享/私有空间采用工作组/线程 key 的独立 shadow，不直接把重用的局部 offset 当成全局唯一地址。
@@ -197,7 +195,7 @@ fresh = alloc(64); id=29, epoch=1, address=X
 load(old)  // 地址表看到 X 属于fresh，无法知道操作数来自old
 ```
 
-若检查输入只有 `X` 和“当前 X 的记录”，合法的 `load(fresh)` 与非法的 `load(old)` 完全不可区分。quarantine 只是延缓地址复用，不能宣称消除此反例；D 必须传入原 `id=17,epoch=4`。
+若检查输入只有 `X` 和“当前 X 的记录”，合法的 `load(fresh)` 与非法的 `load(old)` 完全不可区分。当前地址表不能辨认旧指针身份；D 必须传入原 `id=17,epoch=4`。
 
 ## 8. 错误后的屏蔽、trap 与 barrier 死锁
 
@@ -279,7 +277,7 @@ C的历史Device Patch成本转列UMD后，生产Compiler源码新增可以为0�
 
 | ID | 来源与URL | 本笔记取用的事实 |
 |---|---|---|
-| R1 | [AddressSanitizerAlgorithm](https://github.com/google/sanitizers/wiki/AddressSanitizerAlgorithm) | 1:8前缀编码、redzone/quarantine、历史未对齐跨度反例 |
+| R1 | [AddressSanitizerAlgorithm](https://github.com/google/sanitizers/wiki/AddressSanitizerAlgorithm) | 1:8前缀编码、Poison状态、历史未对齐跨度反例 |
 | R2 | [HWASan Design](https://clang.llvm.org/docs/HardwareAssistedAddressSanitizerDesign.html) | tag/short granule、tag碰撞与部署限制 |
 | R3 | [LLVM AddressSanitizer.cpp](https://llvm.org/docs/doxygen/AddressSanitizer_8cpp_source.html) | AMDGPU支持路径、AS3/AS5排除、PoisonStack限制 |
 | R4 | [LLVM LangRef](https://llvm.org/docs/LangRef.html) | masked load/store/gather/scatter，VP mask+EVL，atomic ordering与poison语义 |

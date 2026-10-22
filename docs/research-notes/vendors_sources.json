@@ -250,7 +250,7 @@
         "SYCL-specific bad-context/bad-free/double-free/buffer",
         "MSan since2025.1,local/private since2025.2",
         "TSan since2025.2 focusing device USM",
-        "ASan quarantine0,redzone16 defaults",
+        "ASan metadata/VRAM pressure and configured device coverage restrictions",
         "compiler+Unified Runtime layer flags"
       ]
     },

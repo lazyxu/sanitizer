@@ -9,7 +9,7 @@
 | NVIDIA默认运行时Memcheck | 对已编译GPU二进制的访存点运行时插桩、检查当前有效分配；某些邻接live对象场景可漏检 | UMD独立Runtime Binary Rewriter处理ISA解码/编码、Patch和对象Registry；**生产Compiler零改动**（可选复用已有MC工具）；KMD按需提供映射/完成 |
 | NVIDIA CUDA13.1+编译期Memcheck | Base-and-Bounds/fat pointer来源分析，运行时与GPU设备检查协同；未知来源降级 | Compiler SSA provenance与GPU检查库；UMD Kernel参数对象sidecar |
 | AMD ROCm GPU ASan | LLVM访存插桩＋Shadow Memory＋Redzone/Poison＋ASan运行库 | Compiler LLVM Pass与设备checker；UMD shadow与对象生命周期；KMD按缺口改 |
-| 其他GPU方案 | **GPU设备可执行**的区间表插桩、GPU MMU Guard Page、已具备的Tag/Bounds硬件 | 按厂商未提供的检测保证及项目GPU硬件能力选择 |
+| 其他GPU机制 | GPU端B1当前Live区间查询、D1原对象Bounds以及具备真实芯片支持的Tag/Bounds | 按对象语义、GPU访问元数据与硬件前提选择 |
 
 
 ## 可编译设备代码与一键运行
@@ -67,7 +67,7 @@ S01判断一次实际生效的4B Global访问是否越过64B逻辑对象；对�
 | C运行时Patch | GPU执行UMD重写后的Binary | **生产Compiler源码零改动可行**；Patch设备Stub | 独立Rewriter、模块cache与原PC | 合法装载、执行与故障 |
 | D1对象Bounds | 设备指令使用原对象token | SSA/GEP/ABI来源传播 | base/size及sidecar | 元数据与资源可见性 |
 | E混合 | 插桩/patch后由真实GPU执行 | manifest、受控Pass | 模式协商与覆盖降级 | 共用资源契约 |
-| F0/1/2 | 实体GPU MMU/Tag/Bounds | F1/F2按真实ISA编译 | VMM/Tag初始化与失效 | F0页级；F1/F2无芯片支持则UNSUPPORTED |
+| F1/F2 | 实体GPU Tag/Bounds | 按真实ISA编译 | Tag/Bounds元数据初始化与失效 | 无芯片支持则UNSUPPORTED |
 
 **首批真实硬件验收：** 在实体GPU运行`a[0]`、`a[15]`合法对照和`a[-1]`、`a[16]`非法访问，获取设备checker报告、PC、访问宽度、lane、异步metadata顺序和真实失败终止。没有真实GPU结果不得报告为已检出。
 

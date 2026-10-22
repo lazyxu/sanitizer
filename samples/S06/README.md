@@ -39,7 +39,7 @@ s06_static<<<2,32>>>();
 s06_dynamic<<<2,32,24>>>();
 ~~~
 
-**哪里不对、怎样检。** 检查必须分别知道静态对象大小和本次 launch 的动态长度。**真实GPU B/D插桩**需要Compiler输出与最终ISA一致的shared对象布局，并结合UMD动态shared请求，在设备端按`(launch,block,object)`检查；B可以为static layout增加Redzone、为动态区尾部Poison，但必须更新真实设备资源声明。只检查整个 shared backing，可能漏掉静态对象跨入邻变量；此时需原对象关联／D1 来源，只有地址布局表仍不够，也不能拿额外预留空间扩充应用合法范围。[L05][L06]
+**哪里不对、怎样检。** 检查必须分别知道静态对象大小和本次 launch 的动态长度。**真实GPU B/D插桩**需要Compiler输出与最终ISA一致的shared对象布局，并结合UMD动态shared请求，在设备端按`(launch,block,object)`检查；B必须依据静态对象边界与动态共享区逻辑长度生成实际设备访存检查，并与真实设备资源声明一致。只检查整个 shared backing，可能漏掉静态对象跨入邻变量；此时需原对象关联／D1 来源，只有地址布局表仍不够，也不能拿额外预留空间扩充应用合法范围。[L05][L06]
 
 **组件观测。** compiler 输出最终布局而非优化前偏移；deviceRT 为不同 block 选择独立 shadow／对象上下文；UMD 传递请求的 24 B 及 sanitizer 额外占用。不能让 block 0 的状态误用到 block 1，也不能把不同 block 的 `s[0]` 当作共享同一对象。
 

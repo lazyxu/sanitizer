@@ -53,7 +53,7 @@ __global__ void s07_uar(uint32_t *out) {
 // s07_uar<<<1,32>>>(out);
 ~~~
 
-**哪里不对、怎样检。** 第一段属于 M3，D1 检查 `a` 的 16 B bounds；第二段属于 M5，D2 需保留指针预期的 thread／frame／epoch 并发现 frame 已结束。另一种真正可部署的方案是由B/D编译器在实际设备代码中生成frame对象bounds、frame生存期与call/return身份检查。B的stack Redzone可以检查第一段；返回后检查还须实现延迟复用的 frame／fake-stack 等机制，普通栈地址重新变为有效后，单纯 poison 不再保证检出。[L01][L05]
+**哪里不对、怎样检。** 第一段属于 M3，D1 检查 `a` 的 16 B bounds；第二段属于 M5，D2 需保留指针预期的 thread／frame／epoch 并发现 frame 已结束。另一种真正可部署的方案是由B/D编译器在实际设备代码中生成frame对象bounds、frame生存期与call/return身份检查。B对第一段需要具备实际栈对象Bounds检查；返回后的旧指针还须保留frame对象生命周期与来源身份，单纯检查当前地址不保证检出。[L01][L05]
 
 **组件观测。** compiler 区分源级局部对象、spill 槽及真实 frame 生存期；deviceRT 按 logical thread 和 frame 管理状态；UMD 提供 launch／线程上下文，heap 分配表不能代替栈对象表。相同数值栈偏移属于不同线程时，必须保留不同身份。
 

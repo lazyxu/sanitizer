@@ -3,9 +3,9 @@
   "as_of": "2026-10-21",
   "status": "UNMEASURED_DESIGN_ESTIMATE; REAL_GPU_NOT_TESTED",
   "unit": "kLOC newly written or substantively modified; ranges are planning envelopes",
-  "eligibility": "B (B2 GPU Shadow or B1 current-live intervals), C, D and E require actual GPU ISA checks and device-side resources. B1 is not D1 provenance. E is an integration/delivery strategy, not a new memory-checking predicate. Standalone object-checking F requires real physical F1 Tag or F2 Bounds mechanisms; F0 GPU MMU Guard Page is auxiliary page-granularity protection/fault testing, not a complete S01 object sanitizer.",
+  "eligibility": "B (B2 GPU Shadow or B1 current-live intervals), C, D and E require actual GPU ISA checks and device-side resources. B1 is not D1 provenance. E is an integration/delivery strategy, not a new memory-checking predicate. Standalone object-checking F requires real physical F1 Tag or F2 Bounds mechanisms.",
   "responsibility": "Compiler includes delivered GPU Device Runtime but it executes on device. C pure-runtime requires no production Compiler changes; device stubs and binary rewriter counted in UMD.",
-  "budget_scope": "P included once per production delivery route; B1/B2 are B variants, not separately added route budgets. E integration shares B/D/C components. F budget assumes actual F1/F2 object-checking silicon or separately delivered new hardware; F0-alone not eligible. KMD assumed reused, add only verified missing contracts; RTL/Firmware/ASIC excluded.",
+  "budget_scope": "P included once per production delivery route; B1/B2 are B variants, not separately added route budgets. E integration shares B/D/C components. F budget assumes actual F1/F2 object-checking silicon or separately delivered new hardware; KMD assumed reused, add only verified missing contracts; RTL/Firmware/ASIC excluded.",
   "production": {
     "P": {
       "compiler": {
@@ -639,7 +639,6 @@
     }
   },
   "hardware_delivery": {
-    "F0": "AUXILIARY_ONLY: real GPU MMU guard page/fault is page granularity; cannot independently fulfill S01 4-byte object boundary checking or qualify for standalone P+F object-check budget",
     "F1": "CONDITIONAL: actual physical Tag comparison ISA/metadata/invalidations required; tag collision and granule boundaries may not detect S01 4-byte errors",
     "F2": "CONDITIONAL: actual physical GPU Bounds/metadata mechanism required; original object provenance must also be available for D1-level checks",
     "absent_hardware": "UNSUPPORTED; RTL/ASIC and firmware separately scoped"
@@ -657,11 +656,10 @@
     "D2": "Pointer value plus allocation identity/epoch propagation, temporal provenance within declared ABI coverage",
     "C": "Independent UMD Runtime Binary Rewriter inserts GPU checker stubs in selected existing binaries; insertion time changes, not address-check guarantee by itself",
     "E": "Hybrid B/D/C module and ABI integration strategy, not independent address-check predicate",
-    "F0": "Only auxiliary GPU MMU guard page (former G); never full independent object-byte sanitizer",
     "F1": "Actual hardware Tag mechanism only when silicon supports it; software tag method belongs to instrumented software checkers",
     "F2": "Actual hardware Bounds/metadata only if silicon supports it; otherwise separately scoped RTL/ASIC project"
   },
-  "taxonomy_version": "2.0",
+  "taxonomy_version": "2.1",
   "estimate_revision": "1.8 (numeric kLOC assumptions preserved; do not interpret engineering packages as five separate checker algorithms)",
   "reference_configurations": {
     "NV-R": {
@@ -705,10 +703,8 @@
   "delivery_budget_labels_note": "B/C/D/E/F are five distinct production engineering delivery budgets/architectures, not five independent memory-check algorithms. E integrates B/D/C and F requires actual hardware.",
   "nonstandalone_features": [
     "B1 (current-live interval compiler data-structure variant; not D1)",
-    "F0 GPU MMU Guard Page (auxiliary)",
     "Software tag/epoch implementations (D2 if provenance preserved)",
-    "F1/F2 absent required silicon (future hardware work)",
-    "redzone, padding, quarantine, shadow mapping"
+    "F1/F2 absent required silicon (future hardware work)"
   ],
   "product_source_of_truth": "docs/core-design-comparison.md"
 }

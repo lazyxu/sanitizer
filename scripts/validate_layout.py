@@ -38,15 +38,12 @@ for i,c in enumerate(cases,1):
         errors.append(f"{case} 缺少README")
     elif not (case in f.read_text(encoding="utf-8")):
         errors.append(f"{case} README编号不一致")
-for path in ["samples/experiments/gpu-guard-page/gpu_guard_page.cu",
-             "samples/experiments/gpu-guard-page/gpu_guard_page.hip.cpp",
-             "samples/experiments/gpu-guard-page/README.md",
-             "docker/Dockerfile.cuda","docker/Dockerfile.rocm",
+for path in ["docker/Dockerfile.cuda","docker/Dockerfile.rocm",
              "scripts/run_samples.py","scripts/setup-docker.sh"]:
     if not (root/path).exists():
         errors.append(f"缺失配套文件：{path}")
 if errors:
     print("\n".join("STRUCTURE_ERROR: "+x for x in errors),file=sys.stderr)
     sys.exit(1)
-print("STRUCTURE_PASS: 28个样例目录，各有完整CUDA/HIP源码与README；GPU Guard Page和工具链文件均存在。")
+print("STRUCTURE_PASS: 28个样例目录，各有完整CUDA/HIP源码与README；配套GPU工具链文件均存在。")
 print("注意：本检查从未调用nvcc/hipcc/GPU sanitizer，不代表样例在目标设备上能编译或检出。")

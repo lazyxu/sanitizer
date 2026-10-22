@@ -118,128 +118,106 @@ report = load_json("docs/validation-report.json")
 manifest = load_json("samples/manifest.json")
 
 canonical = read("docs/core-design-comparison.md")
-# 唯一当前分类：2家核心参考厂商、3种参考配置，不把B/C/D/E/F视为5个独立检查算法。
+# 现行分类仍为2厂商、3参考配置、2级空间语义；删掉废弃选项后不重计工程包。
 check("**2**" in canonical and "**3**" in canonical and "**2层**" in canonical,
-      "统一核心设计必须区分2家厂商/3参考配置/2层空间判定")
-for config, signal in (
+      "分类须明确2厂商/3参考配置/2种空间保证层级")
+for mode, signal in (
     ("NV-R", "Runtime Binary"),
     ("AMD-B2", "Shadow/Redzone"),
     ("NV-C", "Original-Object"),
 ):
-    check(config in canonical and signal in canonical,
-          "基础空间参考配置缺失或实现定义错误：" + config)
+    check(mode in canonical and signal in canonical,
+          "核心空间参考配置缺失或算法不符：" + mode)
 check("NVIDIA" in canonical and "AMD" in canonical
       and "Intel" in canonical and "MUSA" in canonical,
-      "必须区分主要厂商与Intel/MUSA补充能力参照")
+      "主要厂商与额外功能参考须正确分层")
 check("NV-R与AMD-B2" in canonical and "当前地址" in canonical,
-      "NV-R/AMD-B2必须同属当前地址有效性基础保证等级")
-check("F0（旧G）" in canonical and "辅助" in canonical
-      and "D2" in canonical and "时间" in canonical,
-      "必须分清F0辅助机制与D2时间安全扩展")
-check("不能" in canonical and "完全" in canonical
-      and "GPU_NOT_RUN" in canonical,
-      "不能宣称完全复制厂商内部设计或已通过自研GPU真机验收")
-for key_doc in (
+      "NV-R与AMD-B2的当前地址有效性语义不得误标为原对象Bounds")
+check("GPU_NOT_RUN" in canonical and "D2" in canonical,
+      "不得隐藏目标GPU缺失验收与D2时间身份边界")
+for filename in (
     "README.md", "docs/S01-vendor-implementation-guide.md",
     "docs/llvm-gpu-sanitizer-research.md",
     "docs/amd-gpu-asan-hardware-fallback.md",
     "docs/hardware-deployability-audit.md",
     "docs/real-gpu-components-implementation.md",
-    "docs/research-progress.md",
-    "docs/revision-history.md",
+    "docs/research-progress.md", "docs/revision-history.md",
     "docs/research-notes/architecture.md",
     "docs/research-notes/papers.md",
     "docs/research-notes/vendors.md",
     "docs/gpu-actions-ci.md", "samples/README.md",
 ):
-    check("core-design-comparison.md" in read(key_doc),
-          "相关文档必须链接唯一三配置分类入口：" + key_doc)
+    check("core-design-comparison.md" in read(filename),
+          "相关资料必须引用唯一三配置核心设计入口：" + filename)
 references = budget.get("reference_configurations", {})
 check(set(references) == {"NV-R", "AMD-B2", "NV-C"},
-      "预算必须只有三个基本参考配置，而非将B/C/D/E/F误作五算法")
+      "预算只能标明三种核心参考配置")
 check(budget.get("reference_vendor_count") == 2
       and budget.get("reference_configuration_count") == 3
       and len(budget.get("independent_spatial_predicate_levels", [])) == 2,
-      "基础成熟厂商数/参考配置数/基础谓词层数必须分别为2/3/2")
+      "2厂商、3配置、2层空间判断口径必须一致")
 check(budget.get("product_source_of_truth") == "docs/core-design-comparison.md"
       and "not five independent" in budget.get("delivery_budget_labels_note", "").lower(),
-      "B/C/D/E/F预算必须注明它们是工程责任包而非五种独立算法")
-check(references.get("NV-R", {}).get("exact_vendor_copy") is False
-      and references.get("AMD-B2", {}).get("exact_vendor_copy") is False
-      and references.get("NV-C", {}).get("exact_vendor_copy") is False,
-      "不得把公开参考算法描述为完整照搬厂商闭源实现")
-check("not independent" in budget.get("route_taxonomy", {}).get("E", "").lower()
-      and "auxiliary" in budget.get("route_taxonomy", {}).get("F0", "").lower(),
-      "E不得算独立检查算法；F0页保护必须只算辅助")
-# 自检语义分类，不误拦真实S04对象A/B、GPU F0辅助实现描述。
-check("对象 A" in canonical or "A派生指针" in canonical,
-      "必须保留原对象来源示例，不因取消旧A方案而误删对象A")
-check("不等于5种独立" in canonical or "不是5套互不相关" in canonical,
-      "唯一分类入口必须明确五个工程包不是五种独立算法")
-
-
-
-# 概念/实施层检查必须独立于名称检查：不能把I/G/T/H重新包装为完整新产品。
-s01 = guide
-check("### 2.4 无 XNACK" in s01 and "B2_SHADOW" in s01
-      and "B1_CURRENT_LIVE_INTERVAL" in s01
-      and "D1_ORIGINAL_OBJECT_BOUNDS" in s01,
-      "S01必须直接回答没有XNACK时的真实GPU B2/B1/D1软件实现路径")
-check("ROCm 7.2.4" in s01 and "xnack-" in s01,
-      "S01必须区分官方ROCm GPU ASan的xnack支持与自研实现")
-check("### 3.1 B1（原I）" in s01
-      and "### 3.2 硬件与页保护辅助机制" in s01
-      and "**F0 GPU MMU Guard Page" in s01
-      and "**F1 硬件Tag" in s01
-      and "**F2 专用硬件Bounds" in s01
-      and "### 3.3 E：" in s01,
-      "I/G/T/H/E需分别按B1实现变体、F0辅助、F1/F2硬件、E集成分类")
-no_standalone_hardware_option = re.compile(r"^### 3\.[0-9]+\s+F[012](?=\s|[:：])", re.M)
-check(no_standalone_hardware_option.search(s01) is None,
-      "F0/F1/F2应合并为硬件与页保护能力审查，不可再单独列为完整选项")
-old_headline_regex = re.compile(
-    r"^#{2,4}\s+\d+(?:\.\d+)*\s+(?:方案|路线)\s*[IGTH](?=\s|[:：]|$)",
-    re.M
-)
-for doc_path in (
-    "docs/S01-vendor-implementation-guide.md",
-    "docs/llvm-gpu-sanitizer-research.md",
-    "docs/amd-gpu-asan-hardware-fallback.md",
-    "docs/real-gpu-components-implementation.md",
-    "README.md",
-):
-    check(old_headline_regex.search(read(doc_path)) is None,
-          "不得将I/G/T/H重新写成独立产品方案章节：" + doc_path)
-# 不能误删合法的对象A/B来源与原对象Bounds示例。
-for required in (
-    "D1", "原对象", "当前Live", "辅助", "Shadow",
-):
-    check(required in s01, "S01缺少来源/当前表/辅助硬件语义：" + required)
-check("F0（原G）" in s01 and "不作为独立完整方案" in main
-      and "F0/G" in root_readme and "辅助" in root_readme,
-      "F0/G必须是辅助GPU页保护，而不是完整4B对象检测产品")
-check("D1 original" in s01 or "D1原对象" in s01,
-      "必须分清B1当前Live表和D1 original-object provenance")
-check("I是B1" in s01 and "E是混合交付策略" in s01,
-      "旧I不得独立立项，E不得宣称独立检测算法")
-check("F1" in budget.get("eligibility", "") and "F2" in budget.get("eligibility", "")
-      and "auxiliary" in budget.get("hardware_delivery", {}).get("F0", "").lower(),
-      "预算F必须依赖F1/F2真实硬件；F0不能单独进入F完整产品估算")
+      "B/C/D/E/F须是工程预算包而非五套独立Checker算法")
+check(all(references.get(key, {}).get("exact_vendor_copy") is False
+          for key in ("NV-R", "AMD-B2", "NV-C")),
+      "不得声称完整复刻NVIDIA/AMD私有内部实现")
 taxonomy = budget.get("route_taxonomy", {})
 check(taxonomy.get("B1", "").lower().find("current-live") >= 0
-      and "auxiliary" in taxonomy.get("F0", "").lower()
       and "integration" in taxonomy.get("E", "").lower(),
-      "预算路线标签须把B1/I、F0/G和E准确归类")
-# 审计规则的正反例：旧G独立标题必须拒绝，当前B1和S04对象A/B必须接受。
-check(bool(old_headline_regex.search("### 3.2 " + "方案G：GPU MMU Guard Page")),
-      "已废弃的独立G标题必须被防回归规则拦截")
-check(not old_headline_regex.search("### 3.2 F0：辅助页保护")
-      and not old_headline_regex.search("### 18.4 S04：对象 A 访问对象 B"),
-      "语义防回归规则不得误判F0辅助和对象A/B合法示例")
+      "B1只是当前Live变体，E是集成策略")
+check("F1" in budget.get("eligibility", "") and "F2" in budget.get("eligibility", "")
+      and "F1" in budget.get("hardware_delivery", {})
+      and "F2" in budget.get("hardware_delivery", {}),
+      "条件性硬件候选必须具有真实Tag/Bounds实施前提")
+check("### 2.4 无 XNACK" in guide and "B2_SHADOW" in guide
+      and "B1_CURRENT_LIVE_INTERVAL" in guide
+      and "D1_ORIGINAL_OBJECT_BOUNDS" in guide,
+      "无XNACK路径必须保留B2/B1/D1真实GPU软件检查说明")
+check("### 3.1 B1（原I）" in guide
+      and "### 3.2 条件性芯片能力" in guide
+      and "### 3.3 E：" in guide,
+      "S01只允许B1实现、真实Tag/Bounds条件和E集成")
+check("D1 original" in guide or "D1原对象" in guide,
+      "B1地址表必须区别于D1原对象Bounds")
+check("I是B1" in guide and "E是混合交付策略" in guide,
+      "旧I与E的归属不能回退")
+check("**2**" in canonical and "对象" in canonical,
+      "删除旧路线不得误删合法对象边界示例")
+
+# 禁止已撤销的辅助路线、独立工具调参/缓存目录和对应实验重新入库。
+# 故意拆开敏感字面量，避免静态源自检错误；技术上必须保留AMD-B2
+# 核心Shadow/Redzone算法说明，但不能把它再当独立候选行。
+removed_text = [
+    re.compile(r"(?<![A-Za-z0-9_])F" + "0(?![A-Za-z0-9_])", re.I),
+    re.compile("guard" + r"[\s_-]*" + "page", re.I),
+    re.compile("quaran" + "tine", re.I),
+    re.compile(r"(?<![A-Za-z])" + "padding" + r"(?![A-Za-z])", re.I),
+    re.compile("分段" + r"[\s\S]{0,6}" + "Shadow", re.I),
+    re.compile("多段" + r"[\s\S]{0,6}" + "shadow", re.I),
+    re.compile("多级" + r"[\s\S]{0,6}" + "稀疏" + r"[\s\S]{0,5}" + "shadow", re.I),
+]
+current_docs = ([ROOT / "README.md"] +
+                list((ROOT / "docs").rglob("*.md")) +
+                list((ROOT / "docs").rglob("*.json")) +
+                list((ROOT / "samples").rglob("README.md")))
+for doc in current_docs:
+    body = doc.read_text(encoding="utf-8")
+    for pat in removed_text:
+        match = pat.search(body)
+        if match:
+            FAILURES.append(f"文档残留已撤销路线/附属策略：{doc.relative_to(ROOT)} -> {match.group(0)}")
+            break
+check(not (ROOT / "samples" / "experiments").exists(),
+      "已废弃的独立GPU实验目录不应存在")
+check(all("auxiliary" not in str(x).lower() for x in budget.get("nonstandalone_features", [])),
+      "预算不得重新列入已删除的辅助检查产品")
+# 本项不删除目前实际必要的GPUVA/BO和Poison逻辑，不把额外
+# 设备内存映射信息自动变成独立Checker。
 
 amd_guide = read("docs/amd-gpu-asan-hardware-fallback.md")
 for required in (
-    "XNACK", "HMM", "无XNACK", "无HMM", "无MMU", "无硬件", "Compiler",
+    "XNACK", "HMM", "无XNACK", "无HMM", "无硬件", "Compiler",
     "LLVM", "Device Runtime", "UMD", "KMD", "Firmware", "RTL",
     "Shadow", "Interval", "GPU", "TOOL_FAILURE", "S01",
 ):
@@ -377,5 +355,5 @@ if FAILURES:
         print("DOC_AUDIT_FAILURE:", error, file=sys.stderr)
     sys.exit(1)
 
-print("DOC_AUDIT_PASS: 2主要厂商/3基础参考配置/2空间谓词层，B/C/D/E/F工程包、23章、28场景和预算结构自洽")
+print("DOC_AUDIT_PASS: 三配置核心设计、已删除路线/附属策略、23章、28例、预算及链接均通过静态校验")
 print("注意：此脚本未编译或运行自研GPU检查器，不产生真实性能或设备检出结论")

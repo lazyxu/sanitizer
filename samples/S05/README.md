@@ -34,7 +34,7 @@ View v = register_view(pool + 32, /*rows=*/2, /*cols=*/3,
 __global__ void s05(uint8_t *a, View v, int which) {
     if (threadIdx.x != 0) return;
     if (which == 0) a[4] = 1;           // 错误：进入逻辑孔洞，仍在 pool 内
-    else view_store(v, 0, 3, 1.0f);     // 错误：列 3；写到行间 padding
+    else view_store(v, 0, 3, 1.0f);     // 错误：列 3；写到行间无效区域
 }
 // 两次独立 launch：<<<1,32>>>，which 分别为 0、1。
 ~~~

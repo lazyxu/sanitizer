@@ -55,7 +55,7 @@ GitHub官方说明支持在注册时用\`./config.sh --labels gpu-nvidia\`等方
 | suite | \`compile-all\` | 仅在真实Docker内编译所有28份本平台源码并检查ROCm runtime链接；**不宣称错误检测成功** |
 | suite | \`safe-all\` | 编译28份本平台源码，执行合法对照和不需要危险权限的bad；默认跳过S17/S18/S20/S27的危险bad、无厂商能力保证的bad |
 
-push到可信master且修改\`samples/**\`/\`scripts/**\`/\`docker/**\`/\`gpu-hardware.yml\`时触发**smoke**（只有启用变量才调度）；另设每周定时smoke。**危险GPU reset/hang样例不会自动运行**，要在单独隔离设备上明确使用\`--allow-dangerous\`；GPU Guard Page的坏例另需\`--allow-fault\`，均不包含在常规GitHub GPU CI内。
+push到可信master且修改\`samples/**\`/\`scripts/**\`/\`docker/**\`/\`gpu-hardware.yml\`时触发**smoke**（只有启用变量才调度）；另设每周定时smoke。**危险GPU reset/hang样例不会自动运行**，要在单独隔离设备上明确使用\`--allow-dangerous\`，不包含在常规GitHub GPU CI内。
 
 GPU Runner上也可使用同一入口：
 
@@ -78,11 +78,10 @@ Artifacts：\`nvidia-gpu-results-<run_id>\`与\`amd-gpu-results-<run_id>\`，即
 
 \`smoke\`通过意味着**在该次记录的具体GPU、CUDA/ROCm版本和工具范围内**成功检出其预期设备错误、且合法样例无误报；它不等于28个案例全部支持或验证完毕。要对28例声称GPU编译通过，需\`compile-all\`无失败；要对某错误场景宣称被检出，必须提供该场景的设备日志，不可以用普通\`ERROR SUMMARY\`、CPU ASan 或GPU API拒绝码冒充。若GPU job是\`skipped\`，明确记录\`GPU_NOT_RUN\`。
 
-## 6. 当前支持边界与Guard Page
+## 6. 当前支持边界
 
 \`S04\`逻辑子对象/\`S05\`tensor view、\`S09\`时间身份、\`S15/S16\`global race、\`S25\`atomic pointer identity等不能由当前两家工具默认完整检出。S22的masked-off合法地址**不应**产生错误。S19 HIP源码不含AMD目标原生异步copy指令，不具备CUDA cp.async等价保证；后续需要为目标GPU另写ISA原语测试。
 
-[GPU Guard Page真实CUDA/HIP示例](../samples/experiments/gpu-guard-page/)使用GPUVA预留/映射与GPU MMU权限（CUDA\`cuMemAddressReserve\`/HIP\`hipMemAddressReserve\`等），**不是CPU mprotect**。但它检查的是未映射页，不是任意4B逻辑对象；GPU硬件fault也不等于精确ASan对象报告。这个危险实验默认不会由CI触发。
 
 ## 7. 还未完成的真实GPU验收
 
