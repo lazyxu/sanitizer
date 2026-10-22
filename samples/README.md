@@ -2,6 +2,8 @@
 
 **这是GPU设备侧Sanitizer测试仓库，不使用CPU ASan报告伪装GPU检测。** 每个`S01～S28`目录都包含完整可独立编译的`cuda.cu`、`amd.hip.cpp`和中文`README.md`；包含`__global__` GPU Kernel和独立`main`，可分别使用`--good`（合法对照）和`--bad`（错误／特定边界）。[manifest.json](manifest.json)逐平台声明预计使用的工具与保证级别。
 
+**参考配置/能力矩阵**：[核心设计比较](../docs/core-design-comparison.md)统一2家主要厂商、3种基础空间参考配置（NV-R、AMD-B2、NV-C）。28组S01～S28覆盖不同错误类别，并不意味着每组由三种空间配置全部检出；D2是时间身份扩展，E是集成，F0为辅助GPU页fault实验。
+
 ## 0. 先确认现实边界
 
 **不可能保证原文全部28个场景同时被两家GPU Sanitizer工具检出。** NVIDIA目前按工具类型分别检测global/shared内存、shared race、未初始化访问、barrier和设备泄漏；AMD GPU ASan主要提供设备地址有效性与部分UAF检测，需受支持的`xnack+`架构与插桩运行库。S04/S05（逻辑子对象/视图）和S09/S25（指针旧身份/atomic元数据一致性）不属于仅观察GPUVA有效性就能保证报告的错误；S15/S16（global/cross-kernel race）也不能冒充NVIDIA仅shared范围的racecheck。S22故意构造masked-off非法地址，反而**不应该报错**。
