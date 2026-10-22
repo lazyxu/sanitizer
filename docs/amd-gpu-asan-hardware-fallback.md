@@ -27,7 +27,6 @@
 | Linux HMM / 共享虚拟内存 | 官方环境需HMM及兼容内核 | **不是自研离散GPU的普遍必需项** | Host维护对象账本，拷贝GPU Shadow/descriptor快照，按queue fence生效；设备端直接读固定GPUVA | 失去透明统一内存；须实现上传/下载与同步 |
 | GPU能Load有效元数据 | GPU Device Runtime必需的基本能力 | **是** | 用global/constant/设备本地内存中映射的表查询，或可信硬件metadata通路 | 若GPU完全不能从合法设备内存读到元数据，软件Shadow无法部署；UNSUPPORTED |
 | 完整GPUVA预留 / Sparse VMM | 有助于大地址空间Shadow布局 | 不是必需 | 按allocation建立Shadow段、Radix/区间descriptor表、两级索引 | 查询比平坦Shadow慢；未知/失配必须拒绝或PARTIAL |
-| 可保护的GPU页与MMU故障 | F0 Guard Page依赖实际PTE权限 | 不是B/D软件检查必需 | 在设备ISA内做逻辑对象Bounds或Shadow字节检查 | 不能声称有硬件Guard Page、不能阻断未插桩代码的越页访问 |
 | GPU硬件Tag比较指令 | 普通AMD Shadow方案不以专用Tag为前提 | 不是B/D必需 | D1传原对象base/limit；D2显式(pointer identity,epoch)及元数据查询 | RAW指针未知来源只能降级；不能宣称有硬件Tag隔离 |
 | GPU硬件Bounds单元 | 普通AMD Shadow不要求 | 不是B/D必需 | 每条实际访存前插入设备Bounds/Shadow helper | 额外指令/寄存器/带宽，不能保证未插桩代码安全 |
 | Device atomics和内存发布语义 | report ring/并发Shadow元数据需要同步原语 | 至少需要**一种可证明的并发协议** | 每lane或每block的独立固定报告槽、Host在完成后合并；shadow写更新使用有序命令 | 少量报告/高内存开销；缺少可证明发布语义时无法可靠报告 |
@@ -119,7 +118,7 @@ __device__ SanVerdict check_access(GpuVA addr, uint64_t bytes,
 }
 ~~~
 
-**无大片连续Shadow GPUVA：**UMD先为每个allocation建立device-local Shadow segment，设备端两级表由allocation区域映射到段起点；或使用GPU存储的排序区间表（B1，原方案I）进行有界查找。只有在全查找链路可在真实GPU执行并在dispatch开始前可见时才能算设备检查。基于当前地址查live allocation的区间表是B1地址级检查，无法自动发现A指针访问live B；要D1原对象token才能发现。
+**元数据映射无法满足B2要求时：**UMD应先证明既有GPUVA与Shadow映射满足所选B2机制；若不具备所需映射但能够读取设备对象索引，可以改用B1当前Live Allocation查询。只有在全查找链路可在真实GPU执行并在dispatch开始前可见时才能算设备检查。基于当前地址查live allocation的区间表是B1地址级检查，无法自动发现A指针访问live B；要D1原对象token才能发现。
 
 **无自动页换入：**metadata必须全驻留且保证合法映射，缺页不做透明Host补救；分配/上传失败拒绝launch而不是访问空Shadow。若报告资源不足，设置sticky TOOL_FAILURE且阻止相应GPU访存。
 
@@ -131,20 +130,20 @@ UMD是对象语义的权威来源：物理BO长度不等于逻辑对象长度；
 Allocation san_alloc(Queue& q, size_t n) {
   auto bo = driver.allocate_backing(round_up(n + redzones));
   auto obj = registry.create(bo.gpuva, n, bo.backing_length, next_id());
-  auto shadow = device_shadow_segment_for(obj);
+  auto shadow = device_shadow_mapping_for(obj);
   Fence ready = q.enqueue(shadow_poison_redzones_and_unpoison_body(obj, shadow));
   return {obj.gpuva, obj.id, ready}; // 所有kernel必须在ready之后
 }
 Fence san_free(Queue& q, Allocation obj, FenceSet final_uses) {
   auto barrier = q.wait_for(final_uses);
   auto poison = q.enqueue_after(barrier, poison_and_retire_metadata(obj));
-  return q.enqueue_after(poison, actual_free_or_quarantine(obj));
+  return q.enqueue_after(poison, retire_allocation(obj));
 }
 ~~~
 
-**无HMM替代：**Host为Registry生成连续descriptor快照，使用真实DMA/copy engine或UMD认可的上传路径拷贝到GPU元数据BO；Gpu launch依赖上传fence；设备写的报告在完成fence后读回。**无可靠稀疏映射：**按allocation扩展Shadow，显存超限时切换事先声明的区间检查或拒绝该场景。**若无前进性或可靠abort：**默认strict模式拒绝风险配置。
+**无HMM替代：**Host为Registry生成连续descriptor快照，使用真实DMA/copy engine或UMD认可的上传路径拷贝到GPU元数据BO；Gpu launch依赖上传fence；设备写的报告在完成fence后读回。**元数据映射失败：**只有在事先声明且设备可执行的B1模式能满足所需覆盖时才可使用；否则拒绝任务。**若无前进性或可靠abort：**默认strict模式拒绝风险配置。
 
-Shadow Poison/Unpoison必须保证合法stream-before关系，不按Host API返回时间直接宣称GPU free已生效。Quarantine延长检测窗口，但不等于能检测地址复用后的旧指针。
+Shadow Poison/Unpoison必须保证合法stream-before关系，不按Host API返回时间直接宣称GPU free已生效。地址复用后旧指针的身份判断仍须由D2承担。
 
 ## 8. KMD：真实GPU映射、权限和完成，不强制每条路线都改
 
@@ -180,9 +179,8 @@ DeviceResult on_san_error(Context& ctx, Access a) {
 
 无硬件trap的谓词屏蔽只能防止当次非法访存生效；被屏蔽load的后续值没有正常应用语义，整个dispatch结果必须标为失败，不能宣称应用继续计算正确。对atomic/copy/async、barrier参与集合和并发错误，需要单独证明屏蔽不会破坏硬件前进性。Firmware若已有正确停止API，仅按KMD/UMD协议补接线；不存在时不应虚构。
 
-## 10. RTL/实体硬件：F0、F1、F2不是AMD软件ASan的必要条件
+## 10. RTL/实体硬件：仅F1/F2条件性Tag/Bounds硬件
 
-- **F0 MMU Guard Page（原G；辅助能力，非独立完整Sanitizer）：**只有实体GPU GPUVM真正支持未映射页/权限fault、且分配按页边界布局时可用。页内4B越界不会因为Guard Page存在而自动故障；无MMU时使用真实GPU设备指令的Shadow/Bounds检查。
 - **F1 硬件Tag：**实体芯片需比较指针tag与memory tag并在正确ISA异常点处理，不允许把CPU ASan的软件Tag函数称为硬件支持。无硬件时使用D1的原对象Bounds，或在D2受控ABI内显式携带object_id/epoch并执行GPU软件比较。
 - **F2 硬件Bounds：**没有descriptor硬件比较单元时，Compiler以原本可执行的GPU integer/branch/load来比较base、limit、访问宽度。只有保留来源token才能提供真正的原对象检查，不能靠当前GPUVA反查。
 
@@ -241,8 +239,6 @@ ldd /tmp/s01_gpu_asan   # 检查ASan Host runtime和/asan/下的HIP库
 |---|---|---|
 | B Global + 显式Shadow | 无XNACK但GPU可读固定Shadow | 真实设备报告；确认GPU ISA真的执行check |
 | B Global + HMM关闭 | 设备BO与fence上传可用 | 正反例结果一致，不能偷偷读Host地址 |
-| 无连续Shadow GPUVA | Device segmented Shadow/区间表可读 | 报告能力等级和查询开销；不可将跨对象精度擅自提高 |
-| VMM/Guard缺失 | 软件GPU指令仍可执行 | B/D正常，F0标UNSUPPORTED |
 | 无Tag/Bounds硬件 | 软件D1/D2实现完整来源/epoch | D1/D2受控范围可用，F1/F2标UNSUPPORTED |
 | 无可靠context abort | 有安全谓词屏蔽与错误完成协议 | 失败dispatch被拒绝或整体失败，不出现barrier挂死 |
 | Shared/Private无精确布局 | 未实现新target插桩和资源协议 | 对应space标PARTIAL/UNSUPPORTED |
