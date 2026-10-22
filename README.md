@@ -16,12 +16,12 @@
 
 **三个参考配置不是三种完全不同的判定谓词**：①和②都主要检查当前地址可访问性；③加入Original-Object Provenance。**NV-C ≠ 仓库路线C**：前者为NVIDIA编译期方案，后者是自研Runtime Binary Rewriter。
 
-工程责任仍可按 **B/C/D/E/F** 预算与实施，但这是5个交付包，**不是5种独立算法**：B有B2 Shadow与B1当前Live区间（原I）；C运行期插桩；D1原对象Bounds与D2时间身份；E混合集成；F仅在目标实体GPU具备Tag/Bounds时为条件性硬件研发。F0/G GPU MMU Guard Page仅页级辅助保护，不算完整内存Sanitizer。
+工程责任仍可按 **B/C/D/E/F** 预算与实施，但这是5个交付包，**不是5种独立算法**：B有B2 Shadow与B1当前Live区间（原I）；C运行期插桩；D1原对象Bounds与D2时间身份；E混合集成；F仅在目标实体GPU具备Tag/Bounds时为条件性硬件研发。
 
 ## 主要文档（避免重复方案计数）
 
 - **[核心方案与能力比较](docs/core-design-comparison.md)**：现行计数、来源、是否完全一致、三种参考配置能力表、D2/E/F与Intel/MUSA定位。
-- [S01厂商实施指南](docs/S01-vendor-implementation-guide.md)：NVIDIA运行时与编译期差异、AMD Shadow、无XNACK的软件替代、B1/I和F0/G边界及逐组件伪代码。
+- [S01厂商实施指南](docs/S01-vendor-implementation-guide.md)：NVIDIA运行时与编译期差异、AMD Shadow、无XNACK的软件替代、B1/I边界及逐组件伪代码。
 - [完整技术研究（23章、28场景）](docs/llvm-gpu-sanitizer-research.md)：目标ISA/内存语义、元数据、实现与性能、验收细节。
 - [各组件实现责任与关键伪代码](docs/real-gpu-components-implementation.md)：Compiler、GPU Device Runtime、UMD Binary Rewriter、KMD、Firmware/RTL及CLI。
 - [AMD无XNACK/HMM适配与硬件缺失回退](docs/amd-gpu-asan-hardware-fallback.md)：自研预映射Shadow、区间表、D1 Bounds及硬件前提，**不是**官方ROCm支持范围的绕过开关。
@@ -33,7 +33,6 @@
 
 - [S01～S28 的CUDA与HIP设备程序](samples/README.md)：每种错误均区分非法示例、合法反例、工具能力/UNKNOWN；源码存在不等于GPU已检出。
 - [GPU硬件Actions](.github/workflows/gpu-hardware.yml)与[Runner说明](docs/gpu-actions-ci.md)：需实际有GPU的Runner与受支持的工具链。NVIDIA检验既有CUDA工具；AMD官方ASan要求匹配的`xnack+`运行配置；这些并不等于自研GPU目标Checker已完成。
-- [GPU Guard Page辅助实验](samples/experiments/gpu-guard-page/README.md)：仅VMM/MMU页级fault，不是字节级S01完整Sanitizer。
 - CPU静态CI：[样例与文档检查](.github/workflows/sample-structure.yml)；可运行`python3 scripts/validate_docs.py`和`python3 scripts/validate_layout.py`，**不能替代真实GPU功能或性能验收**。
 
 ## 实施优先级
