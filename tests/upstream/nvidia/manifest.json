@@ -1,0 +1,195 @@
+{
+  "schema_version": 1,
+  "origin": "https://github.com/NVIDIA/compute-sanitizer-samples",
+  "upstream_commit": "1e1fab8e25148127f5dec10210ac70b799d1c36f",
+  "license": "BSD-3-Clause",
+  "vendored_files": [
+    {
+      "path": "LICENSE",
+      "git_blob_sha": "79e2025de95e53230daa34e163d343f62b9694bf"
+    },
+    {
+      "path": "Memcheck/Makefile",
+      "git_blob_sha": "0752321c22e59359a7ceb9a69d22873ae90828f7"
+    },
+    {
+      "path": "Memcheck/memcheck_demo.cu",
+      "git_blob_sha": "96cc8b0c20c16bc1dfc0fa6be095f66b5970a304"
+    },
+    {
+      "path": "Initcheck/Makefile",
+      "git_blob_sha": "aeff635ba6ffd29bc2abff87e13f5ac848068677"
+    },
+    {
+      "path": "Initcheck/memset_error.cu",
+      "git_blob_sha": "7a20db4cee23f80527e66ecd718c47c195f5a374"
+    },
+    {
+      "path": "Racecheck/Makefile",
+      "git_blob_sha": "76f8eb036d1caae643836a68ee958e9746f4aba7"
+    },
+    {
+      "path": "Racecheck/block_error.cu",
+      "git_blob_sha": "860421360097e9f0358439f06e396c24f6afe128"
+    },
+    {
+      "path": "Racecheck/warp_error.cu",
+      "git_blob_sha": "aacb42d1c457f3f68f2d46b515f518bd59395b09"
+    },
+    {
+      "path": "Synccheck/Makefile",
+      "git_blob_sha": "cfe9bf10a14e9eca69df4fb5efde6547791d623d"
+    },
+    {
+      "path": "Synccheck/divergent_threads.cu",
+      "git_blob_sha": "301cf0654d80602b7efadc69e427c6262bdd6345"
+    },
+    {
+      "path": "Synccheck/illegal_syncwarp.cu",
+      "git_blob_sha": "98849be4535cef75f4b8a27ff767b282c9a1b450"
+    }
+  ],
+  "cases": [
+    {
+      "id": "NV-MEM-01",
+      "source": "Memcheck/memcheck_demo.cu",
+      "tool": "memcheck",
+      "vendor_options": [
+        "--destroy-on-device-error",
+        "kernel"
+      ],
+      "required_diagnostics": [
+        "Invalid __global__ (?:read|write)",
+        "[Mm]isaligned"
+      ],
+      "dangerous": false,
+      "expected": "detect",
+      "related": [
+        "S01",
+        "S03"
+      ],
+      "compile_flags": [
+        "-O0",
+        "-lineinfo"
+      ]
+    },
+    {
+      "id": "NV-MEM-02",
+      "source": "Memcheck/memcheck_demo.cu",
+      "tool": "memcheck",
+      "vendor_options": [
+        "--destroy-on-device-error",
+        "kernel",
+        "--leak-check=full"
+      ],
+      "required_diagnostics": [
+        "Leaked [0-9]+ bytes"
+      ],
+      "dangerous": false,
+      "expected": "conditional",
+      "related": [
+        "S12"
+      ],
+      "compile_flags": [
+        "-O0",
+        "-lineinfo"
+      ]
+    },
+    {
+      "id": "NV-INIT-01",
+      "source": "Initcheck/memset_error.cu",
+      "tool": "initcheck",
+      "vendor_options": [],
+      "required_diagnostics": [
+        "Uninitialized __global__"
+      ],
+      "dangerous": false,
+      "expected": "detect",
+      "related": [
+        "S13"
+      ],
+      "compile_flags": [
+        "-O2",
+        "-lineinfo"
+      ]
+    },
+    {
+      "id": "NV-RACE-01",
+      "source": "Racecheck/block_error.cu",
+      "tool": "racecheck",
+      "vendor_options": [
+        "--racecheck-report",
+        "analysis"
+      ],
+      "required_diagnostics": [
+        "(?:Race reported|Potential (?:RAW|WAR|WAW)|Hazard (?:RAW|WAR|WAW)|RACECHECK SUMMARY:\\s*[1-9])"
+      ],
+      "dangerous": false,
+      "expected": "detect",
+      "related": [
+        "S14"
+      ],
+      "compile_flags": [
+        "-O2",
+        "-lineinfo"
+      ]
+    },
+    {
+      "id": "NV-RACE-02",
+      "source": "Racecheck/warp_error.cu",
+      "tool": "racecheck",
+      "vendor_options": [
+        "--racecheck-report",
+        "hazard"
+      ],
+      "required_diagnostics": [
+        "(?:Potential (?:RAW|WAR|WAW)|Hazard (?:RAW|WAR|WAW)|Race reported)"
+      ],
+      "dangerous": false,
+      "expected": "detect",
+      "related": [
+        "S14"
+      ],
+      "compile_flags": [
+        "-O2",
+        "-lineinfo"
+      ]
+    },
+    {
+      "id": "NV-SYNC-01",
+      "source": "Synccheck/divergent_threads.cu",
+      "tool": "synccheck",
+      "vendor_options": [],
+      "required_diagnostics": [
+        "(?:Barrier error|Divergent thread\\(s\\) in block)"
+      ],
+      "dangerous": true,
+      "expected": "conditional",
+      "related": [
+        "S17"
+      ],
+      "compile_flags": [
+        "-O0",
+        "-lineinfo"
+      ]
+    },
+    {
+      "id": "NV-SYNC-02",
+      "source": "Synccheck/illegal_syncwarp.cu",
+      "tool": "synccheck",
+      "vendor_options": [],
+      "required_diagnostics": [
+        "(?:Barrier error|Divergent thread\\(s\\) in warp|Invalid arguments)"
+      ],
+      "dangerous": true,
+      "expected": "conditional",
+      "related": [
+        "S18"
+      ],
+      "compile_flags": [
+        "-O0",
+        "-lineinfo"
+      ]
+    }
+  ]
+}

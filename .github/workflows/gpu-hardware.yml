@@ -11,15 +11,16 @@ on:
         type: choice
         options: [both, cuda, rocm]
       suite:
-        description: 'smoke=设备检测; compile-all=仅编译全部; safe-all=全部安全场景'
+        description: 'smoke/compile-all/safe-all=主集; upstream-compile/upstream-safe=NVIDIA独立回归'
         required: true
         default: smoke
         type: choice
-        options: [smoke, compile-all, safe-all]
+        options: [smoke, compile-all, safe-all, upstream-compile, upstream-safe]
   push:
     branches: [master]
     paths:
       - 'samples/**'
+      - 'tests/upstream/**'
       - 'scripts/**'
       - 'docker/**'
       - '.github/workflows/gpu-hardware.yml'
@@ -63,7 +64,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: nvidia-gpu-results-${{ github.run_id }}
-          path: results/cuda/
+          path: |
+            results/cuda/
+            results/upstream/nvidia/
           if-no-files-found: warn
           retention-days: 14
 
@@ -73,6 +76,8 @@ jobs:
       ${{
         vars.GPU_CI_ENABLED == 'true' &&
         github.ref == 'refs/heads/master' &&
+        (github.event_name != 'workflow_dispatch' ||
+         (inputs.suite != 'upstream-compile' && inputs.suite != 'upstream-safe')) &&
         (github.event_name != 'workflow_dispatch' ||
          inputs.backend == 'both' || inputs.backend == 'rocm')
       }}

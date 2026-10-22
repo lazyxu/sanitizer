@@ -11,7 +11,7 @@ case "$backend" in
   *) echo "usage: $0 cuda|rocm smoke|compile-all|safe-all" >&2; exit 2 ;;
 esac
 case "$suite" in
-  smoke|compile-all|safe-all) ;;
+  smoke|compile-all|safe-all|upstream-compile|upstream-safe) ;;
   *) echo "unsupported suite: $suite" >&2; exit 2 ;;
 esac
 command -v docker >/dev/null || { echo "Missing docker" >&2; exit 3; }
@@ -78,6 +78,17 @@ case "$suite" in
     ;;
   compile-all)
     run_cases compile-all --case all --compile-only
+    ;;
+  upstream-compile|upstream-safe)
+    if [[ "$backend" != cuda ]]; then
+      echo "NVIDIA upstream regression only supports CUDA; AMD main suite remains unchanged" >&2
+      exit 2
+    fi
+    if [[ "$suite" == upstream-compile ]]; then
+      docker "${docker_args[@]}" "$image" python3 scripts/run_upstream_nvidia.py --compile-only --strict
+    else
+      docker "${docker_args[@]}" "$image" python3 scripts/run_upstream_nvidia.py --case all --strict
+    fi
     ;;
   safe-all)
     # 所有源代码编译；危险bad与不支持bad按manifest跳过，不可记为检测成功。

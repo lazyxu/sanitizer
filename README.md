@@ -31,6 +31,7 @@
 
 ## GPU样例与CI
 
+- [NVIDIA 官方独立回归组](tests/upstream/nvidia/README.md)：原样保存上游 Memcheck/Racecheck/Initcheck/Synccheck 与许可证；NV-* 单独编号、诊断与 GPU 证据分开记录，真实 GPU 未验证。
 - [S01～S28 的CUDA与HIP设备程序](samples/README.md)：每种错误均区分非法示例、合法反例、工具能力/UNKNOWN；源码存在不等于GPU已检出。
 - [GPU硬件Actions](.github/workflows/gpu-hardware.yml)与[Runner说明](docs/gpu-actions-ci.md)：需实际有GPU的Runner与受支持的工具链。NVIDIA检验既有CUDA工具；AMD官方ASan要求匹配的`xnack+`运行配置；这些并不等于自研GPU目标Checker已完成。
 - CPU静态CI：[样例与文档检查](.github/workflows/sample-structure.yml)；可运行`python3 scripts/validate_docs.py`和`python3 scripts/validate_layout.py`，**不能替代真实GPU功能或性能验收**。

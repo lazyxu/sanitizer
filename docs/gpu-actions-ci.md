@@ -78,12 +78,29 @@ Artifacts：\`nvidia-gpu-results-<run_id>\`与\`amd-gpu-results-<run_id>\`，即
 
 \`smoke\`通过意味着**在该次记录的具体GPU、CUDA/ROCm版本和工具范围内**成功检出其预期设备错误、且合法样例无误报；它不等于28个案例全部支持或验证完毕。要对28例声称GPU编译通过，需\`compile-all\`无失败；要对某错误场景宣称被检出，必须提供该场景的设备日志，不可以用普通\`ERROR SUMMARY\`、CPU ASan 或GPU API拒绝码冒充。若GPU job是\`skipped\`，明确记录\`GPU_NOT_RUN\`。
 
-## 6. 当前支持边界
+## 6. NVIDIA 官方上游独立回归组
+
+新增 [tests/upstream/nvidia](../tests/upstream/nvidia/README.md)，使用 NVIDIA 官方 commit `1e1fab8e25148127f5dec10210ac70b799d1c36f` 的 BSD-3-Clause 原样样例和 LICENSE；7个NV-*逻辑检查项（6个CUDA源码）与S01～S28分开。常规CPU静态CI核对上游各Git Blob SHA、许可证、manifest与Python合成报告分类，不代表实卡已运行。
+
+NVIDIA独立模式仅从**可信 master 的手动 workflow_dispatch**以 `suite=upstream-compile` 或 `suite=upstream-safe` 启动（`backend=cuda` 或 `both` 时只跑 NVIDIA job；AMD job自动跳过）：
+- `upstream-compile`：编译官方6个CUDA程序，不启动GPU kernel、不产生检测结论。
+- `upstream-safe`：对非危险案例运行 `compute-sanitizer`，同步危险场景只编译不执行。
+- 不启动自研 Checker 时 `custom_diagnostic=NOT_CONFIGURED`；`vendor_diagnostic`、`custom_diagnostic`、`gpu_evidence` 各自记录，绝不合并计数。
+- GPU日志上传同一 NVIDIA Artifact 中的 `results/upstream/nvidia/`。GPU检测没有实测记录时维持 `GPU_NOT_RUN`。
+
+手工执行：
+~~~bash
+python3 scripts/run_upstream_nvidia.py --validate-only
+bash scripts/ci-gpu.sh cuda upstream-compile
+bash scripts/ci-gpu.sh cuda upstream-safe
+~~~
+
+## 7. 当前支持边界
 
 \`S04\`逻辑子对象/\`S05\`tensor view、\`S09\`时间身份、\`S15/S16\`global race、\`S25\`atomic pointer identity等不能由当前两家工具默认完整检出。S22的masked-off合法地址**不应**产生错误。S19 HIP源码不含AMD目标原生异步copy指令，不具备CUDA cp.async等价保证；后续需要为目标GPU另写ISA原语测试。
 
 
-## 7. 还未完成的真实GPU验收
+## 8. 还未完成的真实GPU验收
 
 目前能核实的仅是：源码/脚本/工作流已提交，GitHub CPU静态CI可报告结构/测试结果，GPU工作流的自托管任务受变量开关保护。此会话没有NVIDIA/AMD硬件、没有GPU Runner配置权限，也没有设备端编译和真实Sanitizer执行记录。
 
