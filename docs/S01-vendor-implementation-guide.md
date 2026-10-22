@@ -65,7 +65,7 @@ NVIDIA 官方 [Compute Sanitizer User Manual — Compile-time patching](https://
 
 **含义：** NVIDIA 默认 Memcheck 是**运行时二进制插桩**；编译期插桩是另一条路径，只有 Memcheck 当前支持该模式。Racecheck、Initcheck、Synccheck 仍有自己的运行时机制，不能把它们归为同一个 Bounds 算法。
 
-NVIDIA 2025-12-10 [官方开发者技术文章](https://developer.nvidia.com/blog/better-bug-detection-how-compile-time-instrumentation-for-compute-sanitizer-enhances-memory-safety/)解释运行时检测是访问点附近的二进制插桩，按**当前有效分配地址范围**检查，可能漏掉 A 越界进入同样有效的 B；通过 `--padding 32` 等可提高部分边界情形的检出率。**不能据此推断 NVIDIA 内部使用 LLVM ASan 的1:8 Shadow布局或某种特定对象查找树**——默认 Memcheck 的完整私有实现并未公开。
+NVIDIA 2025-12-10 [官方开发者技术文章](https://developer.nvidia.com/blog/better-bug-detection-how-compile-time-instrumentation-for-compute-sanitizer-enhances-memory-safety/)解释运行时检测是访问点附近的二进制插桩，按**当前有效分配地址范围**检查，可能漏掉 A 越界进入同样有效的 B。**不能据此推断 NVIDIA 内部使用 LLVM ASan 的1:8 Shadow布局或某种特定对象查找树**——默认 Memcheck 的完整私有实现并未公开。
 
 ### 1.2 路径 NVIDIA-R：运行时二进制插桩（不要求特殊编译）
 
@@ -385,22 +385,7 @@ for (Instruction* I : sites) {
 
 建议首版只承诺普通非原子的Global Load/Store 1/2/4/8B，后续扩到宽向量、masked、atomic、memcpy/async与后端新增的ISA访存。结合目标反汇编审核最终 opcode 列表；LLVM IR已插桩不代表lowering后所有访存都在覆盖范围内。
 
-**UMD Redzone 分配伪代码：**
-
-~~~cpp
-GpuPtr san_alloc(Context& ctx, uint64_t request, uint64_t alignment) {
-    // 由目标布局函数做checked-add与align，不能直接相加溢出。
-    auto layout = layout_with_redzones(request, alignment, /*RZ=*/16);
-    auto backing = ctx.allocate_backing(layout.total_bytes);
-    auto user_gpuva = backing.gpuva + layout.user_offset;
-
-    ctx.objects.publish({user_gpuva, request, backing, ctx.id});
-    ctx.shadow.enqueue_poison(backing.gpuva, layout.total_bytes);
-    ctx.shadow.enqueue_unpoison(user_gpuva, request);
-    ctx.queue_dependencies.make_shadow_ready_before_user_dispatch();
-    return user_gpuva;
-}
-~~~
+**UMD 必要职责：** 为每个逻辑对象记录实际requested size、分配身份、设备端Poison可见性及发布顺序；Kernel启动前检查设备元数据确已就绪。具体接口与目标LLVM设备ABI同步定义。
 
 **最关键的错误：** 不可把物理映射4KiB当作应用请求64B。也不能让poison操作还没有完成，下一条用户Kernel就开始加载Shadow；GPU Host调用返回时间不等于设备事件生效时间。
 
