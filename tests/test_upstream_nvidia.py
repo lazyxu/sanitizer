@@ -4,9 +4,7 @@ Synthetic examples test parser behavior, NOT GPU execution or NVIDIA tool covera
 """
 import importlib.util
 from pathlib import Path
-import tempfile
 import unittest
-from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("run_upstream_nvidia", ROOT / "scripts/run_upstream_nvidia.py")

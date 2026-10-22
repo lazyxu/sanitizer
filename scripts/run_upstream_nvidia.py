@@ -228,6 +228,10 @@ def main() -> int:
             parser.error("--custom-command and --custom-diagnostic-regex must be supplied together")
         if args.strict_custom and not args.custom_command:
             parser.error("--strict-custom requires --custom-command")
+        if args.mode == "custom" and not args.custom_command:
+            parser.error("--mode custom requires --custom-command")
+        if args.strict_custom and args.mode == "vendor":
+            parser.error("--strict-custom cannot be used in vendor-only mode")
         if args.custom_command:
             custom_argv(args.custom_command, Path("/tmp/placeholder"), "NV-MEM-01")
             re.compile(args.custom_diagnostic_regex)
@@ -340,6 +344,11 @@ def main() -> int:
               f"custom={record['custom_diagnostic']['status']}; "
               f"gpu_evidence={record['gpu_evidence']['status']}", flush=True)
 
+    if args.strict and not args.compile_only and not any(
+            r["gpu_evidence"]["vendor_tool_invoked"] or
+            r["gpu_evidence"]["custom_tool_invoked"] for r in summary["cases"]):
+        print("NO_GPU_CASE_EXECUTED: strict mode requires at least one tool invocation", file=sys.stderr)
+        failures += 1
     target = OUTPUT / "summary.json"
     target.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(f"UPSTREAM_REGRESSION_RESULT: {target.relative_to(ROOT)}; "
