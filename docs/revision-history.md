@@ -1,5 +1,15 @@
 # 修订记录
 
+## v2.0 · 2026-10-22：以“2家厂商、3参考配置、2层空间谓词”统一全部技术口径
+
+- 新增[唯一分类与能力比较](core-design-comparison.md)：成熟主要参考厂商是NVIDIA和AMD；核心基础空间检查**参考配置**只有**①NV-R**（运行时Binary+当前地址）、**②AMD-B2**（LLVM Shadow/Redzone）、**③NV-C**（编译期Original-Object Bounds）。NV-R与AMD-B2共享当前地址可访问性语义；NV-C提供来源可知时的原对象边界。这是**3种工程/厂商配置，不是3种数学上互异的检查谓词**。
+- 全面调整[S01厂商指南](S01-vendor-implementation-guide.md)、[主研究](llvm-gpu-sanitizer-research.md)、[逐组件指南](real-gpu-components-implementation.md)、[硬件审计](hardware-deployability-audit.md)、[AMD专题](amd-gpu-asan-hardware-fallback.md)、[研究笔记](research-notes/)、[README](../README.md)、[GPU CI文档](gpu-actions-ci.md)、[样例说明](../samples/README.md)和[预算](estimates-v1.8.json)。S01删除重复路线分类表，能力矩阵以唯一入口为准。逐份扫描S01～S28案例README未发现需修改的独立算法数量冲突，因此保留原案例技术内容。
+- B/C/D/E/F仅表示5个工程交付/预算责任包：B1旧I不算新算法，C是NV-R式插桩交付、D1是NV-C式原对象Bounds、D2是时间安全增强、E是模块集成、F需要真实F1/F2芯片能力。G/F0继续仅作辅助GPU页fault，不算完整S01。
+- Intel oneAPI与MUSA的官方**功能和报告**继续保留在资料对照，但没有足够的内部设计公开证据让它们各自独立成为另一套基础空间检查算法；不得推定其与NV/AMD内部完全相同。
+- 代码量数字不改动，仅在历史`estimates-v1.8.json`添加v2.0分类结构，强调不是五种独立算法；文档/CI做防回归，**无目标自研GPU真机结果，GPU_NOT_RUN**。
+
+> 以下为历史修订说明，保留审计轨迹。**v1.8历史的“五路线”只指工程责任包，不再是现行五种独立算法分类。**
+
 ## v1.10 · 2026-10-21：无XNACK实施路径与“完整方案”准入重新划分
 
 - [S01厂商指南](S01-vendor-implementation-guide.md)现在**直接**列出：ROCm 7.2.4官方`xnack+` GPU ASan的硬件依赖；自研GPU在没有XNACK/HMM时，通过预映射Shadow、分段Shadow、GPU Live Allocation表及受控D1原对象参数比较实现真正设备检查的方案、组件职责和失败边界。`xnack-`编译正常不能算GPU ASan插桩成功。

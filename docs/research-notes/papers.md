@@ -1,6 +1,6 @@
 # GPU sanitizer 论文证据核验（研究中间笔记）
 
-> **研究过程记录，非最终规范。** 本笔记保存早期调研内容，可能包含未更新的候选结论。正式判断以[主稿](../llvm-gpu-sanitizer-research.md)为准。
+> **研究过程证据，非现行方案目录。** 统一计数以[核心分类与能力比较](../core-design-comparison.md)为准：NVIDIA/AMD两家主要成熟厂商、NV-R/AMD-B2/NV-C三种基础空间参考配置。cuCatch为NV-C/D1原对象Bounds研究参照，GPUArmor为条件性F2硬件研究，HiRace/SuperCollider属于Racecheck而非额外基础ASan。详见[主稿](../llvm-gpu-sanitizer-research.md)。
 
 核验日期：2026-10-20。下述机制和实验结论来自论文全文、作者页面或作者代码；非全量系统性综述。采用原始URL与章节定位保存证据；未复现实验。
 

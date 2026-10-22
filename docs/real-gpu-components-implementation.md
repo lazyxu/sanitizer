@@ -1,10 +1,12 @@
 # 自研 GPU Sanitizer：真实硬件实施的逐组件关键代码
 
-**版本：v1.8 · 2026-10-21 · 状态：设计与伪代码，尚未在目标 GPU 上实现或验收。**
+**版本：v2.0 · 2026-10-22 · 状态：设计与伪代码，尚未在目标 GPU 上实现或验收。**
 
 本文件只讨论能够随应用代码在**实体 GPU 执行**的设备检查器，或由实体 GPU 已具备的 MMU/Tag/Bounds 机制执行的检查。软件责任以 Compiler、KMD、UMD 三组计费；Device Runtime 虽由工具链或 UMD 交付，其检查指令**实际在 GPU 执行**。设备固件、RTL/硬件设计、CLI/测试作为跨组件专项，不能混为编译器功能。
 
 正式交付形式分为**B（LLVM设备地址检查：B2 Shadow或B1当前Live区间）、C（UMD运行时二进制重写）、D（D1原对象Bounds/D2指针时间身份）、E（B/D/C混合集成）、F（真实Tag/Bounds硬件具备时的条件性路线）**。**原I归B1；G/F0 GPU MMU Guard Page只做辅助页保护，不独立满足完整S01；软件Tag归D2，F1/F2必须有真实芯片功能**。单独 Initcheck、Racecheck、Synccheck 不可等价为一次 AddressSanitizer 检查。
+
+**这是B/C/D/E/F按组件分工的表，不是5种新的基础算法。** [核心设计对照](core-design-comparison.md)规定：①NV-R运行时Binary＋当前地址，②AMD-B2编译期Shadow，③NV-C编译期Original-Object Bounds；NV-C和本文C标签不是同一概念。D2是时间安全扩展；E组合B/D/C，不单独定义内存谓词；F需要真正Tag/Bounds硬件。Intel/MUSA的能力说明不构成第4种参考算法。
 
 ## 1. 检测执行与 Host/Device 信任链
 
@@ -266,7 +268,7 @@ def evaluate(target, case, checker):
 
 ## 11. B～F 的选择与组件总结
 
-| 组件 / 责任主体 | B2 Shadow／B1区间 | C Binary | D1/D2 | E 混合集成 | F1/F2条件性硬件 |
+| 工程组件 / 责任主体（非5种独立算法） | B2 Shadow／B1区间 | C（NV-R式Binary） | D1（NV-C原对象）／D2 | E 混合集成 | F1/F2条件性硬件 |
 |---|---|---|---|---|---|
 | Compiler/LLVM GPU | 访存 Pass、实际 ISA 覆盖 | **生产 Compiler 零改动可行** | provenance／指针身份传播 | 插桩、manifest、跨模式 ABI | 新指令/intrinsic（有硬件时） |
 | GPU Device Runtime | Shadow check、report | patch stub 调用设备 checker | Bounds／身份 check、pointer metadata | 统一 ABI，防重复检查 | 必要的软件元数据与报告 |

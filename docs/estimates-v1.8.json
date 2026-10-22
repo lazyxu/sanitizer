@@ -660,5 +660,55 @@
     "F0": "Only auxiliary GPU MMU guard page (former G); never full independent object-byte sanitizer",
     "F1": "Actual hardware Tag mechanism only when silicon supports it; software tag method belongs to instrumented software checkers",
     "F2": "Actual hardware Bounds/metadata only if silicon supports it; otherwise separately scoped RTL/ASIC project"
-  }
+  },
+  "taxonomy_version": "2.0",
+  "estimate_revision": "1.8 (numeric kLOC assumptions preserved; do not interpret engineering packages as five separate checker algorithms)",
+  "reference_configurations": {
+    "NV-R": {
+      "vendor": "NVIDIA",
+      "implementation": "Runtime Binary Instrumentation",
+      "checker_semantics": "current allocation addressability",
+      "project_mappings": [
+        "C (insertion method)",
+        "B1 only as a compiler-inserted address-check variant"
+      ],
+      "exact_vendor_copy": false,
+      "limitation": "NVIDIA private binary rewrite/metadata not publicly reproducible"
+    },
+    "AMD-B2": {
+      "vendor": "AMD and LLVM",
+      "implementation": "Compiler device instrumentation + Shadow/Redzone",
+      "checker_semantics": "current addressability/poison validity",
+      "project_mappings": [
+        "B2"
+      ],
+      "exact_vendor_copy": false,
+      "limitation": "Target-specific GPUVA/runtime and XNACK conditions differ"
+    },
+    "NV-C": {
+      "vendor": "NVIDIA",
+      "implementation": "Compile-time pointer provenance and Original-Object Base/Bounds",
+      "checker_semantics": "original object bounds, fallback on unknown provenance",
+      "project_mappings": [
+        "D1"
+      ],
+      "exact_vendor_copy": false,
+      "limitation": "Needs independent SSA, ABI, device checker"
+    }
+  },
+  "reference_vendor_count": 2,
+  "reference_configuration_count": 3,
+  "independent_spatial_predicate_levels": [
+    "current-address addressability",
+    "pointer-origin original-object bounds"
+  ],
+  "delivery_budget_labels_note": "B/C/D/E/F are five distinct production engineering delivery budgets/architectures, not five independent memory-check algorithms. E integrates B/D/C and F requires actual hardware.",
+  "nonstandalone_features": [
+    "B1 (current-live interval compiler data-structure variant; not D1)",
+    "F0 GPU MMU Guard Page (auxiliary)",
+    "Software tag/epoch implementations (D2 if provenance preserved)",
+    "F1/F2 absent required silicon (future hardware work)",
+    "redzone, padding, quarantine, shadow mapping"
+  ],
+  "product_source_of_truth": "docs/core-design-comparison.md"
 }

@@ -1,12 +1,10 @@
 # 自研 LLVM GPU 后端 Sanitizer 技术调研与实施方案
 
-**版本：1.10 · 资料核验日期：2026-10-21 · 文档语言：中文**
+**版本：2.0 · 资料核验日期：2026-10-22 · 文档语言：中文**
 
 **用途：技术立项、编译器／驱动／架构联合评审、研发任务拆分与预算讨论。**
 
-**1.6.1 重要澄清：NVIDIA-R类纯运行时二进制插桩不需要修改生产Compiler或重编译应用；目标ISA解码／重新编码工具由UMD侧独立Runtime Binary Rewriter实现，可选复用既有MC库。此前把编译器和工具链复用混为一谈，现已纠正。**
-
-**v1.10 补充：** 对无XNACK区分官方ROCm GPU ASan不可直接设备插桩与自研GPU预映射Shadow/B1区间表/D1来源Bounds可实现路径；**I归B1变体，G/F0只作辅助页保护，T/F1与H/F2需要真实芯片，E是混合集成而非新的检查算法**。S01主指南给出了明确依赖/降级/验收表。**v1.9 更新：** 已增加AMD逐组件硬件依赖及无专用功能时的可部署软件替代指南，并对主稿、S01～S28的废弃实现描述加严CI审计。**v1.8 说明：** 只保留B/C/D/E/F五条真实GPU可部署候选，另附[逐组件关键修改代码与表格](real-gpu-components-implementation.md)；S01厂商比较、28组CUDA/HIP两平台样例及实卡CI继续保留，目标自研GPU尚未完成真实硬件验收。
+**现行统一分类**：[两家主要厂商、三种空间检查参考配置与能力比较](core-design-comparison.md)是唯一分类总表：①NVIDIA NV-R默认Runtime Binary插桩＋当前地址有效性；②AMD-B2 LLVM Shadow/Redzone；③NVIDIA NV-C LLVM Original-Object Bounds。①②的基础空间谓词都主要关注当前地址，③才追踪原对象；**3种参考配置不等于3种独立数学谓词**。B/C/D/E/F是五个工程责任包，**不是五种彼此独立的检测算法**；D2是时间身份扩展、E是集成、F真实Tag/Bounds硬件是条件性研发，F0页保护只辅助。版本更改记录另见[修订历史](revision-history.md)。
 
 本文回答：在自研 GPU、LLVM 后端、KMD（Kernel-Mode Driver，内核态驱动）、UMD（User-Mode Driver，用户态驱动）及验证环境的边界下，怎样建设可用于真机调试的 sanitizer；不同路线能检测什么、需要修改哪些组件、投入多少、如何验证，以及什么情况下值得进一步投入二进制插桩或硬件支持。
 
@@ -278,7 +276,7 @@
 
 **编译期入口的增益**来自原对象关联。例如 A=[0x1000,0x1040)、B=[0x1040,0x1080)，A 派生指针计算出 0x1040：只按当前地址定位可能认为 B 合法；保留 A 的 base/size 后则报告 A 越界。官方明确写出 *compiler tracks which allocation a pointer refers to*，并描述分析失败后的普通 allocation bounds fallback。这里的 fallback 降低保证，不能继续宣称已追踪原对象。[N02][N04]
 
-**工程移植点：** Compiler 必须明确是在 IR/MIR 保留 pointer origin 还是仅 final addr；UMD 必须提供 allocation identity/size 与异步生命周期；设备库执行真实访存前的检查，PC 与符号化由工具层关联。只有从旧裸地址查询“当前 live 对象”不构成同等级的编译期 bounds 分析。
+**工程移植点：** 对应③NV-C/D1时Compiler必须明确在IR/MIR保留pointer origin，对应①NV-R/②AMD-B2基础配置则主要判断当前地址可访问性；UMD 必须提供 allocation identity/size 与异步生命周期；设备库执行真实访存前的检查，PC 与符号化由工具层关联。只有从旧裸地址查询“当前 live 对象”不构成同等级的编译期 bounds 分析。
 
 #### 4.1.2 API 的 callback／patch／memory 三通路
 
@@ -369,7 +367,7 @@ SYCL/OpenMP ─ device compiler -fsanitize=address/memory/thread
 
 **官方原文片段：** “检测 kernel 访问不属于自己的 global memory 地址”。[M01]
 
-本报告**不能由上述公开功能推断**它是否在某个版本采用：LLVM ASan shadow、完全机器码 patch、硬件事件、对象区间表、三者融合或私有固件算法。除非获得官方设计说明或可核实源码，均标记“实现机制未披露/未核实”，不能以其作为C路线实际采用某种具体ISA重写算法的证据。
+本报告**不能由上述公开功能推断**它是否在某个版本采用：LLVM ASan shadow、完全机器码 patch、硬件事件、对象区间表、三者融合或私有固件算法；不能因品牌不同就增加第四种被证实的基础空间算法。除非获得官方设计说明或可核实源码，均标记“实现机制未披露/未核实”，不能以其作为C路线实际采用某种具体ISA重写算法的证据。
 
 本项目可以借鉴的公开产品契约包括：默认 checker 开关、单独的 leak 模式、UMD/Driver API 返回码与GPU访存异常分别归类、报错包含源/Host stack及过滤参数；这些属于产品与接口设计，不意味着复制其内部核心算法。
 
@@ -417,16 +415,16 @@ ASM／特殊设备指令可能在IR pass后出现，必须用目标后端的指�
 
 此流程是**原创对照与接口设计图**，不是从任一厂商内部仓库复制的调度流程。判断 S01 合法性时，应检查受控逻辑对象的完整实际访问区间；只有 page/BO map 时，4B 小幅越界可能仍合法映射。若只观察最终地址而目标落入另一个live对象，则需D1来源信息。
 
-### 4.8 B～F真实GPU候选的出处、融合及本项目新增设计
+### 4.8 三核心参考配置对应的B/C/D工程方式与其他扩展来源
 
 <a id="route-provenance-matrix"></a>
 
 | 路线／S01变体 | 公开机制源头（官方/论文） | 单一借鉴、融合还是本项目新增 | 自研部分必须真正实现 | 不能冒称 |
 |---|---|---|---|---|
-| B1：LLVM访存插桩＋当前live对象区间 | LLVM ASan插桩结构[L01][L03]＋NVIDIA API/资源检查设计[N03] | **公开通用机制融合＋本项目具体区间服务**，非AMD产品同款算法 | Sorted interval/sparse registry快照、UMD发布协议、失败和未知地址策略 | “B1等于ASan 1:8 shadow”或“检出原对象跨入B” |
-| B2：LLVM Shadow／Redzone | Google ASan [L02]＋ROCm GPU ASan [A01]＋LLVM目标适配[L03] | **明确借鉴的GPU ASan路线＋自研GPUVA/UMD/KMD适配** | GPUVA→shadow布局、设备helper、poison顺序、SIMT-safe报告 | “直接重用CPU runtime无需修改” |
-| C：运行时二进制插桩 | NVIDIA Patching API [N03]；BARRACUDA [P02] 作为研究对照 | **公开patch入口模式＋自研ISA重写器**；具体rewriter属自主实现 | Decode/CFG/encode/relocation/资源重算/原PC映射/patch cache | “复制到了NVIDIA未公开的二进制引擎” |
-| D1：原对象base/bounds | NVIDIA编译期memcheck [N02][N04]＋cuCatch [P01] | **公开编译期fat-pointer理念融合＋自研SSA/ABI传播** | GEP/phi/select/调用参数root、sidecar与unknown降级 | “仅按当前地址查表就是provenance” |
+| B1（原I）：LLVM访存插桩＋当前live对象区间（非第四种基础配置） | LLVM ASan插桩结构[L01][L03]＋NVIDIA地址有效性原则[N04] | **公开通用机制融合＋本项目具体区间服务**，非AMD产品同款算法 | Sorted interval/sparse registry快照、UMD发布协议、失败和未知地址策略 | “B1等于ASan 1:8 shadow”或“检出原对象跨入B” |
+| B2：AMD-B2 LLVM Shadow／Redzone | Google ASan [L02]＋ROCm GPU ASan [A01]＋LLVM目标适配[L03] | **明确借鉴的GPU ASan路线＋自研GPUVA/UMD/KMD适配** | GPUVA→shadow布局、设备helper、poison顺序、SIMT-safe报告 | “直接重用CPU runtime无需修改” |
+| C：NV-R运行时二进制插桩（工程方式） | NVIDIA Patching API [N03]；BARRACUDA [P02] 作为研究对照 | **公开patch入口模式＋自研ISA重写器**；实际判定必须再选设备Checker，具体rewriter属自主实现 | Decode/CFG/encode/relocation/资源重算/原PC映射/patch cache | “复制到了NVIDIA未公开的二进制引擎” |
+| D1：NV-C原对象base/bounds | NVIDIA编译期memcheck [N02][N04]＋cuCatch [P01] | **公开编译期fat-pointer理念融合＋自研SSA/ABI传播** | GEP/phi/select/调用参数root、sidecar与unknown降级 | “仅按当前地址查表就是provenance” |
 | D2：指针时间身份 | cuCatch tag/meta思路[P01]＋LLVM HWASan tag[L04] | **公开时间安全思路融合＋针对本项目的强身份协议** | epoch随指针load/store/copy/atomic一致传播，复用与回收协议 | “分配表多一个generation就能检出旧裸指针” |
 | E：编译＋binary混合（集成策略，非独立检查算法） | NVIDIA hybrid instrumentation [N02][N05] | **厂商公开产品策略＋B/D/C多机制融合＋自研ABI/manifest** | 模块能力选择、拒绝不兼容、不同保证级别与跨模块来源降级 | “不同模块混用自动等于所有函数被检测” |
 | F0：Guard Page **辅助机制（不是独立完整方案）** | Linux GPUVM/页表映射 [K01]及目标MMU原理 | **通用GPU页级映射保护** | 页对齐placement、guard map与fault attribution；可做硬件故障链路验证 | “页级保护检测任意4B对象内越界”或“F0单独等于完整S01” |
@@ -889,7 +887,7 @@ VFIO文档将设备访问、I/O地址映射及中断等接口分开，并在示�
 
 #### 逐路线表的阅读口径
 
-以下只对B～F五条可在真实GPU上部署的候选展开职责。D拆分D1/D2；“新增”只指当前生产组件缺失的能力差额，公共底座及共享设备库计一次；不能把模拟的映射或Host异常当作真实KMD与GPU设备检查。
+以下按B/C/D/E/F五个**工程交付标签**展开职责，它们不是五种独立检测谓词；三种核心成熟厂商参考配置另见[核心比较](core-design-comparison.md)。D拆分D1/D2；“新增”只指当前生产组件缺失的能力差额，公共底座及共享设备库计一次；不能把模拟的映射或Host异常当作真实KMD与GPU设备检查。
 
 
 ### 8.8 各生产组件的真实GPU可执行修改代码
@@ -917,7 +915,7 @@ VFIO文档将设备访问、I/O地址映射及中断等接口分开，并在示�
 
 B、C、D、E 的设备检查代码必须存在于真实GPU执行的ISA路径并在实际访问之前生效；**F若要作为独立的对象检查硬件候选，必须有实体GPU真实Tag/Bounds能力（F1/F2）**。GPU MMU Guard Page（F0）只算辅助页保护或故障验证，不能单独满足字节级S01。Host侧仅收到API报错、编译器生成了IR call或设备映射成功，均不代表已实现GPU访问Sanitizer。
 
-### 9.2 五条正式候选及边界
+### 9.2 五个工程交付标签及边界（不等于五种独立算法）
 
 | 路线 | 真机生效位置 | 必要条件 | 不可宣称 |
 |---|---|---|---|
@@ -927,12 +925,12 @@ B、C、D、E 的设备检查代码必须存在于真实GPU执行的ISA路径并
 | E（集成策略） | 按模块执行B/D/C已插桩/已改写GPU检查代码 | B/D/C已有真正GPU checker；统一ABI、检查等级和覆盖缺口可见 | 混用模块自动具有最强保证，或E本身新增了访存检测算法 |
 | F | **实体GPU现有或另行交付的Tag/Bounds对象检查硬件能力** | 必须有实际F1/F2硬件ISA/元数据/失效与故障契约；F0只作为辅助页保护 | F0页保护等同字节级对象边界；把没有硬件的F1/F2列为已具备 |
 
-**分类补充**：I并非新增路线，而是B1区间表数据结构；G/F0页故障实验不成为可选的完整S01检测方案；Tag软件比较不等于硬件F1，F2缺芯片应列未来硬件研发，E混合是集成包装。关于无XNACK时官方与自研的不同可行性及实现代码，详见[S01 §2.4与§3](S01-vendor-implementation-guide.md)。
+**分类补充**：核心成熟参考配置为NV-R、AMD-B2、NV-C，具体能力对照见[唯一分类与能力矩阵](core-design-comparison.md)。I并非新增路线，而是B1区间表数据结构；G/F0页故障实验不成为可选的完整S01检测方案；Tag软件比较不等于硬件F1，F2缺芯片应列未来硬件研发，E混合是集成包装。关于无XNACK时官方与自研的不同可行性及实现代码，详见[S01 §2.4与§3](S01-vendor-implementation-guide.md)。
 
 ### 9.3 研发与验收顺序
 
 先确定Compiler、UMD和KMD的生产资源契约及元数据ABI；随后交付真实GPU可执行的B Global load/store Shadow检查、报告与可靠失败路径，在实体GPU上用S01错误及合法对照验收。D1再补原对象Bounds，D2按必要的指针身份闭合度独立验收；对现成二进制/JIT有明确缺口时才引入C/E；F以实际芯片支持和收益数据决定是否立项。参见[逐组件实现与验收表](real-gpu-components-implementation.md#11-bf-的选择与组件总结)。
-## 10. 路线 B：LLVM编译期地址检查（B2 Shadow / B1 当前Live区间）
+## 10. 路线 B：编译期Addressability实现（B2 Shadow / B1 当前Live区间）
 
 ### 10.1 原理
 
@@ -981,7 +979,7 @@ B2与经典ASan Shadow/Redzone算法同源；**B1（原方案I）则使用GPU设
 
 <a id="route-b-platforms"></a>
 
-### 10.6 方案出处、融合与本项目原创工作
+### 10.6 参考配置② AMD-B2与B1区间实现的来源
 
 **出处：** B2主要借鉴Google/LLVM ASan 1:8 Shadow/Redzone[L01][L02]及AMD GPU ASan的compiler/device runtime联动[A01]；异构Host/Device资源分工可参照Intel Unified Runtime [I01][I03]。**原创工程适配：** 目标GPUVA→shadow映射、UMD顺序poison、SIMT报错/停止、KMD映射、目标ISA最终访存覆盖。
 
@@ -998,7 +996,7 @@ SanVerdict check(GpuVa a, Bytes n) {
 
 B1的sorted live-object interval查找是另一个**本项目简化原型**，借鉴LLVM插桩组织但**不声称是AMD的Shadow实现**，只能保证当前地址有效性。
 
-## 11. 路线 C：运行时二进制插桩
+## 11. 路线 C：运行时二进制插桩（借鉴NV-R的插桩方式，非独立检查谓词）
 
 ### 11.1 原理和前提
 
@@ -1036,7 +1034,7 @@ UMD 在模块加载或 JIT 产物生成后取得目标代码，解析指令与�
 
 <a id="route-c-platforms"></a>
 
-### 11.5 方案出处、融合与本项目原创工作
+### 11.5 参考配置① NV-R的Runtime插桩来源与自研差异
 
 **出处：** C借鉴NVIDIA公开Patching API的指令级callback模式[N03]及BARRACUDA的历史事件采集设计[P02]；**自研具体rewriter**（decode/encode、重定位、谓词、资源重算、PC-map/cache）不是NVIDIA未公开实现的复制品。C本身只决定如何采集检查点，实际判定还需B1/B2/D元数据。
 
@@ -1051,7 +1049,7 @@ for (Instruction i : decode(module)) {
 fixup_branches_registers_scratch_and_pc_maps();
 ~~~
 
-## 12. 路线 D：对象边界与时间身份传播
+## 12. 路线 D：D1原对象Bounds（借鉴NV-C）与D2时间身份扩展
 
 ### 12.1 必须拆成 D1 与 D2
 
@@ -1132,7 +1130,7 @@ cuCatch 中 BST 是 **Base and Size Table**，GPUArmor 的 BST 则可以指 **Bi
 
 <a id="route-d-platforms"></a>
 
-### 12.8 方案出处、融合与本项目原创工作
+### 12.8 参考配置③ NV-C的原对象来源与D2时间身份扩展
 
 **出处：** D1借鉴NVIDIA编译期Memcheck的base/bounds[N02][N04]及cuCatch[P01]；D2借鉴cuCatch的时间元数据和LLVM HWASan tag/L04的研究机制。**融合与自研部分：** SSA对象来源、Kernel参数sidecar、跨call/phi/select/存储的companion metadata以及atomic pointer一致发布，属于目标ABI自主设计，不宣称学术首创。
 
@@ -1147,7 +1145,7 @@ else if (!within(addr,width,expected.original_base,expected.original_size))
 
 D2只有“当前对象表含generation”仍不足以分辨同GPUVA旧裸指针，必须传播指针预期身份。
 
-## 13. 路线 E：编译插桩与运行时补充的混合方案
+## 13. 路线 E：编译与运行时检查的混合集成（非新空间算法）
 
 ### 13.1 推荐的组合形态
 
@@ -1199,7 +1197,7 @@ UMD 依据这些字段选择原代码、已插桩代码、patch 后代码或拒�
 
 <a id="route-e-platforms"></a>
 
-### 13.5 方案出处、融合与本项目原创工作
+### 13.5 E的Hybrid集成来源（不新增独立空间谓词）
 
 **出处：** E采用NVIDIA hybrid instrumentation的产品策略[N02][N05]，融合B2＋D1＋受控C fallback。**本项目原创工程**是Sanitizer ABI版本、module manifest、patch/compiled选择、按模块/地址空间的覆盖等级和unknown来源降级协议；不能假设不同模块混用等于同模块未插桩函数自动补全。
 
@@ -1213,7 +1211,7 @@ else { declare_partial_coverage(); reject_if_required(); }
 
 E按共享对象表和设备检查库去重预算，不把B/C/D公共模块重复计费。
 
-## 14. 路线 F：有真实Tag/Bounds硬件时的条件性检查（F0页保护仅辅助）
+## 14. 路线 F：真实Tag/Bounds芯片条件性研究（F0页保护仅辅助）
 
 ### 14.1 可选硬件方向
 
@@ -1641,7 +1639,7 @@ K-F只为未具备的真实驱动状态契约计费。F基础预算已包含UMD�
 
 **本版组件口径。** Device Runtime由编译器等生产责任包交付但在实体GPU执行；SDK/Host Runtime/Loader/CLI归UMD；KMD仅承担特权资源与故障契约。每例的实际生产责任见[§18.29](#scenario-platforms)和[关键代码](real-gpu-components-implementation.md)。
 
-**产品实现路线与Checker类型是不同维度。** 正式路线只有B、C、D、E和实体GPU实际具有硬件支持时的F。Init/Race/Sync还需要真正运行的设备事件与算法，不会由Address Shadow自动提供Happens-Before。
+**厂商核心参照配置、判定语义、工程包与Checker类别是四个不同维度。** 主要厂商是NVIDIA、AMD；基础空间参考配置是NV-R、AMD-B2、NV-C，其中前两者同属当前地址有效性等级。B/C/D/E/F仅是工程实施与预算标签，E不增加独立访存判定算法，F需要实体芯片支持。Init/Race/Sync还需要真正运行的设备事件与算法，不会由Address Shadow自动提供Happens-Before。
 
 ### 场景索引
 

@@ -1,6 +1,8 @@
 # GitHub Actions 真实 GPU 验证：NVIDIA Compute Sanitizer / AMD GPU ASan
 
-**配置状态（2026-10-21）：GPU工作流、Docker入口、S01/S13/S14 smoke、28例全量编译及安全执行模式已提交；仓库未确认存在可调度的GPU Runner，GPU_CI_ENABLED未由本会话设置。因此当前GPU job显示SKIPPED，不是GPU验证通过。** CPU工作流只负责脚本与清单、合成诊断分类测试。
+**配置状态（2026-10-22）：GPU工作流、Docker入口、S01/S13/S14 smoke、28例全量编译及安全执行模式已提交；仓库未确认存在可调度的GPU Runner，GPU_CI_ENABLED未由本会话设置。因此当前GPU job显示SKIPPED，不是GPU验证通过。** CPU工作流只负责脚本与清单、合成诊断分类测试。
+
+**方案口径**：[核心设计比较](core-design-comparison.md)列①NV-R、②AMD-B2、③NV-C。硬件CI只是对现有NVIDIA/AMD厂商工具的实际设备运行验证；不能从这些运行推断三种参考配置全部已验证，更不能宣称目标自研GPU端Check已实现。NVIDIA编译期memcheck需要匹配工具链与显式开启；同模块函数级Hybrid不自动完整补洞。
 
 ## 1. 为什么默认不在 ubuntu-latest 执行GPU检查
 

@@ -1,10 +1,12 @@
 # GPU Sanitizer 友商官方证据核验笔记
 
-> **研究过程记录，非最终规范。** 本笔记保存早期调研内容，可能包含未更新的候选结论。正式判断以[主稿](../llvm-gpu-sanitizer-research.md)为准。
+> **厂商证据记录，而非厂商数量=算法数量。** 参见[3种基础空间参考配置与能力](../core-design-comparison.md)：重点NVIDIA与AMD；NV-R、AMD-B2、NV-C分别对照。Intel/MUSA保留功能/Device Runtime/报告比较，不因品牌不同宣称新的基础算法。实现细节见[主稿](../llvm-gpu-sanitizer-research.md)。
 
 核验日：2026-10-20。用途：中文立项与架构调研的证据笔记。只核验公开一手材料，不作产品实测，不把文档声明当成完整覆盖证明。精确URL、版本和对应章节见同目录 vendors_sources.json。
 
 ## 1. 版本基线及纠正点
+
+**区分厂商功能与内部算法**：NVIDIA默认运行时的基础地址等级与AMD-B2均主要检测当前地址有效性，但二者内部元数据结构不可推断为相同；NV-C通过来源追踪提升原对象Bounds。Intel oneAPI ASan/MSan/TSan与MUSA错误类型值得参考，但官方功能表不足以证明第四种新检测算法，也不能宣称它们与NV/AMD内部实现完全一样。
 
 | 对象 | 本次可核验基线 | 不能混淆的旧结论 |
 | --- | --- | --- |
