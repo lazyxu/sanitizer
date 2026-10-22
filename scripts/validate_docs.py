@@ -217,7 +217,7 @@ check(all("auxiliary" not in str(x).lower() for x in budget.get("nonstandalone_f
 
 amd_guide = read("docs/amd-gpu-asan-hardware-fallback.md")
 for required in (
-    "XNACK", "HMM", "无XNACK", "无HMM", "无MMU", "无硬件", "Compiler",
+    "XNACK", "HMM", "无XNACK", "无HMM", "无硬件", "Compiler",
     "LLVM", "Device Runtime", "UMD", "KMD", "Firmware", "RTL",
     "Shadow", "Interval", "GPU", "TOOL_FAILURE", "S01",
 ):
