@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 from pathlib import Path
@@ -13,6 +14,14 @@ import sys
 from urllib.parse import unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
+_parser = argparse.ArgumentParser(description="CPU-only technical documentation audit")
+_parser.add_argument("-v", "--verbose", action="store_true",
+                     help="打印审计读取的文件路径（无外部命令）")
+_args = _parser.parse_args()
+
+def inspect(path: Path) -> None:
+    if _args.verbose:
+        print("+ inspect " + str(path.relative_to(ROOT)), file=sys.stderr, flush=True)
 FAILURES: list[str] = []
 
 
@@ -23,6 +32,7 @@ def check(ok: bool, why: str) -> None:
 
 def read(path: str) -> str:
     p = ROOT / path
+    inspect(p)
     if not p.is_file():
         FAILURES.append(f"缺失文件：{path}")
         return ""
@@ -59,6 +69,7 @@ text_suffixes = {".md", ".json", ".py", ".sh", ".yaml", ".yml", ".cu", ".cpp", "
 for p in ROOT.rglob("*"):
     if not p.is_file() or p.suffix not in text_suffixes or ".git" in p.parts:
         continue
+    inspect(p)
     try:
         body = p.read_text(encoding="utf-8")
     except UnicodeError:
@@ -341,6 +352,7 @@ check(report.get("chapter_count") == len(chapters) and
 # Markdown相对链接必须指向真实存在的仓库文件/目录；不依赖历史预算。
 markdowns = [ROOT / "README.md"] + list((ROOT / "docs").rglob("*.md")) + list((ROOT / "samples").rglob("README.md"))
 for doc in markdowns:
+    inspect(doc)
     txt = doc.read_text(encoding="utf-8")
     for target in re.findall(r"\]\(([^)\n]+)\)", txt):
         target = target.split(' "', 1)[0]
