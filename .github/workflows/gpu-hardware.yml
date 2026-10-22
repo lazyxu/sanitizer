@@ -15,11 +15,12 @@ on:
         required: true
         default: smoke
         type: choice
-        options: [smoke, compile-all, safe-all]
+        options: [smoke, compile-all, safe-all, upstream-compile, upstream-safe]
   push:
     branches: [master]
     paths:
       - 'samples/**'
+      - 'tests/upstream/**'
       - 'scripts/**'
       - 'docker/**'
       - '.github/workflows/gpu-hardware.yml'
