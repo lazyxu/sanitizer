@@ -117,6 +117,68 @@ budget = load_json("docs/estimates-v1.8.json")
 report = load_json("docs/validation-report.json")
 manifest = load_json("samples/manifest.json")
 
+canonical = read("docs/core-design-comparison.md")
+# 唯一当前分类：2家核心参考厂商、3种参考配置，不把B/C/D/E/F视为5个独立检查算法。
+check("**2**" in canonical and "**3**" in canonical and "**2层**" in canonical,
+      "统一核心设计必须区分2家厂商/3参考配置/2层空间判定")
+for config, signal in (
+    ("NV-R", "Runtime Binary"),
+    ("AMD-B2", "Shadow/Redzone"),
+    ("NV-C", "Original-Object"),
+):
+    check(config in canonical and signal in canonical,
+          "基础空间参考配置缺失或实现定义错误：" + config)
+check("NVIDIA" in canonical and "AMD" in canonical
+      and "Intel" in canonical and "MUSA" in canonical,
+      "必须区分主要厂商与Intel/MUSA补充能力参照")
+check("NV-R与AMD-B2" in canonical and "当前地址" in canonical,
+      "NV-R/AMD-B2必须同属当前地址有效性基础保证等级")
+check("F0（旧G）" in canonical and "辅助" in canonical
+      and "D2" in canonical and "时间" in canonical,
+      "必须分清F0辅助机制与D2时间安全扩展")
+check("不能" in canonical and "完全" in canonical
+      and "GPU_NOT_RUN" in canonical,
+      "不能宣称完全复制厂商内部设计或已通过自研GPU真机验收")
+for key_doc in (
+    "README.md", "docs/S01-vendor-implementation-guide.md",
+    "docs/llvm-gpu-sanitizer-research.md",
+    "docs/amd-gpu-asan-hardware-fallback.md",
+    "docs/hardware-deployability-audit.md",
+    "docs/real-gpu-components-implementation.md",
+    "docs/research-progress.md",
+    "docs/revision-history.md",
+    "docs/research-notes/architecture.md",
+    "docs/research-notes/papers.md",
+    "docs/research-notes/vendors.md",
+    "docs/gpu-actions-ci.md", "samples/README.md",
+):
+    check("core-design-comparison.md" in read(key_doc),
+          "相关文档必须链接唯一三配置分类入口：" + key_doc)
+references = budget.get("reference_configurations", {})
+check(set(references) == {"NV-R", "AMD-B2", "NV-C"},
+      "预算必须只有三个基本参考配置，而非将B/C/D/E/F误作五算法")
+check(budget.get("reference_vendor_count") == 2
+      and budget.get("reference_configuration_count") == 3
+      and len(budget.get("independent_spatial_predicate_levels", [])) == 2,
+      "基础成熟厂商数/参考配置数/基础谓词层数必须分别为2/3/2")
+check(budget.get("product_source_of_truth") == "docs/core-design-comparison.md"
+      and "not five independent" in budget.get("delivery_budget_labels_note", "").lower(),
+      "B/C/D/E/F预算必须注明它们是工程责任包而非五种独立算法")
+check(references.get("NV-R", {}).get("exact_vendor_copy") is False
+      and references.get("AMD-B2", {}).get("exact_vendor_copy") is False
+      and references.get("NV-C", {}).get("exact_vendor_copy") is False,
+      "不得把公开参考算法描述为完整照搬厂商闭源实现")
+check("not independent" in budget.get("route_taxonomy", {}).get("E", "").lower()
+      and "auxiliary" in budget.get("route_taxonomy", {}).get("F0", "").lower(),
+      "E不得算独立检查算法；F0页保护必须只算辅助")
+# 自检语义分类，不误拦真实S04对象A/B、GPU F0辅助实现描述。
+check("对象 A" in canonical or "A派生指针" in canonical,
+      "必须保留原对象来源示例，不因取消旧A方案而误删对象A")
+check("不等于5种独立" in canonical or "不是5套互不相关" in canonical,
+      "唯一分类入口必须明确五个工程包不是五种独立算法")
+
+
+
 # 概念/实施层检查必须独立于名称检查：不能把I/G/T/H重新包装为完整新产品。
 s01 = guide
 check("### 2.4 无 XNACK" in s01 and "B2_SHADOW" in s01
@@ -154,7 +216,7 @@ for required in (
 ):
     check(required in s01, "S01缺少来源/当前表/辅助硬件语义：" + required)
 check("F0（原G）" in s01 and "不作为独立完整方案" in main
-      and "F0页保护仅辅助" in root_readme,
+      and "F0/G" in root_readme and "辅助" in root_readme,
       "F0/G必须是辅助GPU页保护，而不是完整4B对象检测产品")
 check("D1 original" in s01 or "D1原对象" in s01,
       "必须分清B1当前Live表和D1 original-object provenance")
@@ -315,5 +377,5 @@ if FAILURES:
         print("DOC_AUDIT_FAILURE:", error, file=sys.stderr)
     sys.exit(1)
 
-print("DOC_AUDIT_PASS: 仅B/C/D/E/F实体GPU方案，逐组件伪代码、28场景与生产预算结构自洽")
+print("DOC_AUDIT_PASS: 2主要厂商/3基础参考配置/2空间谓词层，B/C/D/E/F工程包、23章、28场景和预算结构自洽")
 print("注意：此脚本未编译或运行自研GPU检查器，不产生真实性能或设备检出结论")
