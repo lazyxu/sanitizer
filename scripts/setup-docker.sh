@@ -1,9 +1,31 @@
 #!/usr/bin/env bash
 # 一键准备真实GPU sanitizer的Docker环境：
 # ./scripts/setup-docker.sh cuda --test-s01
+# ./scripts/setup-docker.sh cuda --test-s01 -v  # 追踪Docker与编译/检测命令
 # ROCM_ARCH=gfx90a:xnack+ HSA_XNACK=1 ./scripts/setup-docker.sh rocm --test-s01
 set -euo pipefail
+verbose=0
+[[ "${SAN_VERBOSE:-0}" == "1" ]] && verbose=1
+args_without_verbose=()
+for arg in "$@"; do
+  case "$arg" in
+    -v|--verbose) verbose=1 ;;
+    *) args_without_verbose+=("$arg") ;;
+  esac
+done
+set -- "${args_without_verbose[@]}"
+if ((verbose)); then
+  export SAN_VERBOSE=1
+  PS4='+ [setup-docker] '
+  set -x
+fi
+verbose_args=()
+if ((verbose)); then verbose_args=(--verbose); fi
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  echo "usage: $0 [-v|--verbose] [cuda|rocm] [--build-only|--enter|--test-s01]"
+  exit 0
+fi
 backend="${1:-cuda}"
 action="${2:---enter}"
 case "$backend" in
@@ -18,7 +40,7 @@ if [[ "$action" == "--build-only" ]]; then
   exit 0
 fi
 [[ "$(uname -s)" == "Linux" ]] || { echo "需要Linux GPU宿主机或正确配置的虚拟化GPU透传" >&2; exit 4; }
-args=(run --rm -i -v "$root:/workspace" -w /workspace -e "SAN_BACKEND=$backend" -e "ROCM_ARCH=${ROCM_ARCH:-}" -e "HSA_XNACK=${HSA_XNACK:-}" -e "CUDA_ARCH=${CUDA_ARCH:-}" --ipc=host)
+args=(run --rm -i -v "$root:/workspace" -w /workspace -e "SAN_BACKEND=$backend" -e "ROCM_ARCH=${ROCM_ARCH:-}" -e "HSA_XNACK=${HSA_XNACK:-}" -e "CUDA_ARCH=${CUDA_ARCH:-}" -e "SAN_VERBOSE=$verbose" --ipc=host)
 if [[ -t 0 && -t 1 ]]; then args+=(-t); fi
 if [[ "$backend" == "cuda" ]]; then
   args+=(--gpus all)
@@ -28,7 +50,7 @@ else
 fi
 case "$action" in
   --test-s01)
-    docker "${args[@]}" "$image" python3 scripts/run_samples.py --backend "$backend" --case S01 --mode both;;
+    docker "${args[@]}" "$image" python3 scripts/run_samples.py --backend "$backend" --case S01 --mode both "${verbose_args[@]}";;
   --enter)
     docker "${args[@]}" "$image" bash;;
   *) echo "无效选项: $action" >&2; exit 2;;

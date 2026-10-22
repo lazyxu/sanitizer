@@ -1,8 +1,29 @@
 #!/usr/bin/env bash
 # GitHub Actions 与本地共用：在真正CUDA/ROCm GPU Docker里执行，禁止CPU-only替代。
-# 用法：bash scripts/ci-gpu.sh cuda|rocm smoke|compile-all|safe-all
+# 用法：bash scripts/ci-gpu.sh cuda|rocm smoke|compile-all|safe-all [-v]
 set -Eeuo pipefail
+verbose=0
+[[ "${SAN_VERBOSE:-0}" == "1" ]] && verbose=1
+args_without_verbose=()
+for arg in "$@"; do
+  case "$arg" in
+    -v|--verbose) verbose=1 ;;
+    *) args_without_verbose+=("$arg") ;;
+  esac
+done
+set -- "${args_without_verbose[@]}"
+if ((verbose)); then
+  export SAN_VERBOSE=1
+  PS4='+ [ci-gpu] '
+  set -x
+fi
+verbose_args=()
+if ((verbose)); then verbose_args=(--verbose); fi
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  echo "usage: $0 [-v|--verbose] cuda|rocm [smoke|compile-all|safe-all|upstream-compile|upstream-safe]"
+  exit 0
+fi
 backend="${1:-}"
 suite="${2:-smoke}"
 case "$backend" in
@@ -32,6 +53,7 @@ docker_args=(
   -e "CUDA_ARCH=${CUDA_ARCH:-}"
   -e "ROCM_ARCH=${ROCM_ARCH:-}"
   -e "HSA_XNACK=${HSA_XNACK:-}"
+  -e "SAN_VERBOSE=$verbose"
 )
 if [[ "$backend" == cuda ]]; then
   command -v nvidia-smi >/dev/null || { echo "No NVIDIA driver/GPU" >&2; exit 4; }
@@ -55,16 +77,16 @@ docker build -f "$dockerfile" -t "$image" "$ROOT"
 # 容器内再次检查设备可见性，避免将host探测或仅Docker构建当作GPU验收。
 if [[ "$backend" == cuda ]]; then
   docker "${docker_args[@]}" "$image" bash -lc \
-    'command -v nvcc; command -v compute-sanitizer; nvidia-smi -L'
+    "$([[ $verbose == 1 ]] && printf 'set -x; ')command -v nvcc; command -v compute-sanitizer; nvidia-smi -L"
 else
   docker "${docker_args[@]}" "$image" bash -lc \
-    'command -v hipcc; test -e /dev/kfd; command -v rocminfo; rocminfo >/workspace/results/rocm/rocminfo.txt'
+    "$([[ $verbose == 1 ]] && printf 'set -x; ')command -v hipcc; test -e /dev/kfd; command -v rocminfo; rocminfo >/workspace/results/rocm/rocminfo.txt"
 fi
 
 run_cases() {
   local id="$1"; shift
   docker "${docker_args[@]}" "$image" \
-    python3 scripts/run_samples.py --backend "$backend" "$@" --strict
+    python3 scripts/run_samples.py --backend "$backend" "$@" --strict "${verbose_args[@]}"
   # 每次runner都会更新summary.json，逐样例保存，避免S01/S13被S14覆盖。
   cp "$ROOT/results/$backend/summary.json" "$ROOT/results/$backend/summary-$id.json"
 }
@@ -85,9 +107,9 @@ case "$suite" in
       exit 2
     fi
     if [[ "$suite" == upstream-compile ]]; then
-      docker "${docker_args[@]}" "$image" python3 scripts/run_upstream_nvidia.py --compile-only --strict
+      docker "${docker_args[@]}" "$image" python3 scripts/run_upstream_nvidia.py --compile-only --strict "${verbose_args[@]}"
     else
-      docker "${docker_args[@]}" "$image" python3 scripts/run_upstream_nvidia.py --case all --strict
+      docker "${docker_args[@]}" "$image" python3 scripts/run_upstream_nvidia.py --case all --strict "${verbose_args[@]}"
     fi
     ;;
   safe-all)
