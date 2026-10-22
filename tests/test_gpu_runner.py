@@ -1,5 +1,8 @@
 """CPU单元测试仅检查 GPU 报告分类，不代表GPU硬件验收。"""
 import importlib.util
+import io
+from contextlib import redirect_stderr
+from types import SimpleNamespace
 import pathlib
 import unittest
 from unittest.mock import patch
@@ -11,6 +14,24 @@ spec.loader.exec_module(runner)
 
 
 class ReportClassificationTests(unittest.TestCase):
+    def test_verbose_prints_shell_quoted_compiler_command(self):
+        with patch.object(runner, "VERBOSE", True), patch.object(
+                runner.subprocess, "run",
+                return_value=SimpleNamespace(returncode=0, stdout="")):
+            output = io.StringIO()
+            with redirect_stderr(output):
+                self.assertEqual(runner.run(["nvcc", "-o", "path with spaces"])[0], 0)
+            self.assertIn("+ nvcc -o 'path with spaces'", output.getvalue())
+
+    def test_default_mode_does_not_print_commands(self):
+        with patch.object(runner, "VERBOSE", False), patch.object(
+                runner.subprocess, "run",
+                return_value=SimpleNamespace(returncode=0, stdout="")):
+            output = io.StringIO()
+            with redirect_stderr(output):
+                runner.run(["nvcc", "-o", "demo"])
+            self.assertEqual(output.getvalue(), "")
+
     def test_cuda_memcheck_real_device_oob(self):
         log = "========= Invalid __global__ write of size 4 bytes\n========= at kernel"
         self.assertEqual(runner.classify("cuda", "detect", "bad", 86, log), "DETECTED_GPU")
