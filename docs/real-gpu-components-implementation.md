@@ -4,7 +4,7 @@
 
 本文件只讨论能够随应用代码在**实体 GPU 执行**的设备检查器，或由实体 GPU 已具备的 MMU/Tag/Bounds 机制执行的检查。软件责任以 Compiler、KMD、UMD 三组计费；Device Runtime 虽由工具链或 UMD 交付，其检查指令**实际在 GPU 执行**。设备固件、RTL/硬件设计、CLI/测试作为跨组件专项，不能混为编译器功能。
 
-正式交付形式分为**B（LLVM设备地址检查：B2 Shadow或B1当前Live区间）、C（UMD运行时二进制重写）、D（D1原对象Bounds/D2指针时间身份）、E（B/D/C混合集成）、F（真实Tag/Bounds硬件具备时的条件性路线）**。**原I归B1；G/F0 GPU MMU Guard Page只做辅助页保护，不独立满足完整S01；软件Tag归D2，F1/F2必须有真实芯片功能**。单独 Initcheck、Racecheck、Synccheck 不可等价为一次 AddressSanitizer 检查。
+正式交付形式分为**B（LLVM设备地址检查：B2 Shadow或B1当前Live区间）、C（UMD运行时二进制重写）、D（D1原对象Bounds/D2指针时间身份）、E（B/D/C混合集成）、F（真实Tag/Bounds硬件具备时的条件性路线）**。**原I归B1；软件Tag归D2，F1/F2必须有真实芯片功能**。单独 Initcheck、Racecheck、Synccheck 不可等价为一次 AddressSanitizer 检查。
 
 **这是B/C/D/E/F按组件分工的表，不是5种新的基础算法。** [核心设计对照](core-design-comparison.md)规定：①NV-R运行时Binary＋当前地址，②AMD-B2编译期Shadow，③NV-C编译期Original-Object Bounds；NV-C和本文C标签不是同一概念。D2是时间安全扩展；E组合B/D/C，不单独定义内存谓词；F需要真正Tag/Bounds硬件。Intel/MUSA的能力说明不构成第4种参考算法。
 
@@ -98,7 +98,7 @@ CheckResult fail(DevCtx& ctx, Error kind, gpuva addr, uint64_t n) {
 
 ~~~cpp
 GpuAllocation sanMalloc(Context& c, uint64_t logicalBytes, Queue& q) {
-  Backing bo = c.driver.allocBacking(roundUpWithRedzone(logicalBytes));
+  Backing bo = c.driver.allocBacking(roundUpForDeviceAllocation(logicalBytes));
   Allocation o = c.objects.create(
       /*id*/ nextId(), /*epoch*/ nextEpoch(), bo.gpuva,
       logicalBytes, bo.backingBytes, c.owner);
@@ -120,7 +120,7 @@ Fence sanFreeAsync(Allocation o, Queue& q, DependencySet lastUses) {
 }
 ~~~
 
-**可见性与 UAF 保证**：free API 返回不等于 GPU 上失效立即生效；对象地址复用需保留此前所需 identity 历史直到所有 checker 消费结束。B 的 quarantine/poison 只能覆盖声明的窗口，地址复用后旧裸指针与新裸指针同值时不能宣称具备 D2 保证。
+**可见性与 UAF 保证**：free API 返回不等于 GPU 上失效立即生效；对象地址复用需保留此前所需 identity 历史直到所有 checker 消费结束。B的Poison只在已完成发布且设备可见的生命周期窗口生效，地址复用后旧裸指针与新裸指针同值时不能宣称具备 D2 保证。
 
 ## 5. UMD Runtime Binary Rewriter：独立于生产 Compiler（C/E）
 
@@ -224,8 +224,6 @@ void handleSanitizerFault(HwFault f) {
 
 ## 9. RTL/实体 GPU MMU/Tag/Bounds（仅真实硬件已有或另行实现 F）
 
-**F0 Guard Page（辅助，不是完整独立方案）**：实际GPU MMU让越页地址违反PTE权限并产生真实fault，只能验证**页粒度**。即使是S01 64B尾后4B，若仍处于合法映射页，也可能完全不触发；不能归入完整对象越界的检出统计。
-
 **F1 Tag / F2 Bounds**：需要 ISA/RTL/metadata SRAM 或可达内存、同步失效、context 保存恢复、cache/TLB 一致性及可诊断 fault；在目标硬件没有相应机制前标为 FUTURE_HARDWARE / NOT_SUPPORTED，不能把软件 helper 命名成硬件检查。
 
 ~~~systemverilog
@@ -272,12 +270,12 @@ def evaluate(target, case, checker):
 |---|---|---|---|---|---|
 | Compiler/LLVM GPU | 访存 Pass、实际 ISA 覆盖 | **生产 Compiler 零改动可行** | provenance／指针身份传播 | 插桩、manifest、跨模式 ABI | 新指令/intrinsic（有硬件时） |
 | GPU Device Runtime | Shadow check、report | patch stub 调用设备 checker | Bounds／身份 check、pointer metadata | 统一 ABI，防重复检查 | 必要的软件元数据与报告 |
-| UMD DebugAllocator | redzone/poison | 资源/生命周期表 | 对象 id/epoch、sidecar | 共享对象服务 | Tag/bounds 初始化与失效 |
+| UMD DebugAllocator | 对象元数据/Poison | 资源/生命周期表 | 对象 id/epoch、sidecar | 共享对象服务 | Tag/bounds 初始化与失效 |
 | UMD Binary Rewriter | 不要求 | **必要**：decode/patch/encode | 可选受控补充 | 未覆盖模块的 fallback | 通常不要求 |
 | UMD/Host Runtime | launch/async/report | 模块加载与 patch cache | 参数、graph、外部 ABI | 按模块协商等级 | 模式开启和硬件报告 |
 | KMD | metadata BO/GPUVA/complete | 可执行代码权限/映射 | metadata/context/retire | 前述契约并集 | context/fault/硬件元数据控制 |
 | Firmware | 按实际 abort/fault 缺口 | 同左 | 同左 | 同左 | 新异常/失效/重置状态机 |
-| 实体 GPU 硬件 | 执行插桩指令 | 执行改写指令 | 执行 Bounds/identity 代码 | 执行由B/D/C组合的检查 | **实际Tag/Bounds硬件；F0 MMU Guard仅辅助** |
+| 实体 GPU 硬件 | 执行插桩指令 | 执行改写指令 | 执行 Bounds/identity 代码 | 执行由B/D/C组合的检查 | **实际Tag/Bounds硬件** |
 | CLI/CI | 诊断/覆盖 | 原 PC 映射和拒绝标记 | 来源未知、epoch边界 | 覆盖等级汇总 | 实际 hardware feature 检测 |
 
 ### 实施优先级与可交付证据
