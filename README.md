@@ -1,43 +1,43 @@
-# LLVM GPU Sanitizer：真实硬件实施调研
+# LLVM GPU Sanitizer：自研真实GPU技术设计
 
-**版本 v1.10（2026-10-21）· 文档及工程伪代码阶段，目标自研 GPU 尚无实卡检出验收。**
+**版本 v2.0 · 2026-10-22｜设计与样例阶段；目标自研GPU真实检查器未实现，GPU_NOT_RUN。**
 
-面向自研 LLVM GPU 后端、GPU Device Runtime、UMD、KMD 及必要的 Firmware/RTL，研究内存越界、生命周期、Initcheck、Racecheck、Synccheck 的可部署方案。正式候选仅包括 B（LLVM编译期地址检查：B2 Shadow或B1当前Live区间表）、C（运行时GPU二进制重写）、D（D1原对象Bounds/D2指针身份）、E（混合**集成策略**）、F（目标GPU确有Tag/Bounds时的硬件检查）。**方案I归B1，G/F0只是辅助页保护实验，不是独立完整Sanitizer；软件Tag不是硬件F1，F2缺芯片时只是研发方向。**
+本项目为自研 LLVM GPU Backend、GPU Device Runtime、UMD/KMD及可能涉及的Firmware/RTL，研究GPU空间/时间内存错误、Initcheck、Racecheck和Synccheck。**先明确参考设计而不重复创造产品路线：重点参考2家厂商（NVIDIA、AMD），基础空间检查采用3种值得比较的厂商技术配置。**
 
-## 主要文档
+## 先看唯一分类与能力矩阵
 
-- **[逐组件修改位置、关键代码/伪代码和B～F汇总表](docs/real-gpu-components-implementation.md)**：Compiler/LLVM、GPU Device Runtime、UMD DebugAllocator/Shadow、UMD Binary Rewriter、Host Runtime/Loader、KMD、Firmware、RTL/实体GPU MMU、CLI/CI，涵盖设备错误通路与硬件验收。
-- [完整正式调研（23章、28个详细场景）](docs/llvm-gpu-sanitizer-research.md)：厂商比较、目标语义、五种实体GPU候选、对象与指针传播、场景矩阵、验收与性能。
-- [实体GPU产品部署审计](docs/hardware-deployability-audit.md)：方案资格、组件职责、硬件前提和状态界限。
-- [S01 厂商路径与逐组件实施说明](docs/S01-vendor-implementation-guide.md)：NVIDIA默认运行时/编译期Bounds、AMD GPU ASan/Shadow，以及设备区间表、GPU Guard Page与硬件扩展。
-- **[AMD GPU ASan逐组件实施与缺硬件特性替代方案](docs/amd-gpu-asan-hardware-fallback.md)**：官方XNACK/HMM依赖、自研无XNACK设备Shadow、无MMU/Tag/Bounds等条件的真实GPU软件检查、精度和验收矩阵。
-- [B～F生产软件与条件KMD预算（v1.8）](docs/estimates-v1.8.json)：仅生产三组件与新增检查器；单位kLOC，均是设计估算，不是目标源码实测。
-- [S01～S28检测场景及生产职责](docs/llvm-gpu-sanitizer-research.md#detection-scenarios)、[实际组件对照表](docs/llvm-gpu-sanitizer-research.md#scenario-platforms)、[真实GPU验收](docs/llvm-gpu-sanitizer-research.md#validation)。
-- [研究进度](docs/research-progress.md)、[修订历史](docs/revision-history.md)、[文档检查结果](docs/validation-report.json)、[研究资料](docs/research-notes/)。
+**[核心方案比较：2家厂商、3种参考配置、能力及实现关系](docs/core-design-comparison.md)** 为现行分类的权威入口：
 
-## 可部署性与责任
-
-| 路线 | 检查真正生效的位置 | Compiler生产源码 | UMD | KMD/实体硬件门槛 |
+| 核心空间参考配置 | 来源 | 主要检查方式 | 自研映射 | 与厂商完全一样吗 |
 |---|---|---|---|---|
-| B | GPU执行LLVM生成的B2 Shadow或B1当前Live区间表检查ISA | 需要LLVM GPU Pass/后端适配 | Shadow/对象表、生命周期、报告 | 实际Metadata映射/完成契约；不以XNACK为自研必需能力 |
-| C | GPU执行UMD改写后的设备Binary | **可以零修改** | 独立机器码重写器、装载/PC映射 | 正规可执行映射及设备终止语义 |
-| D | GPU检查原对象Bounds及身份代次 | D1/D2来源传播必需 | sidecar、对象epoch、ABI | Metadata/报告可靠可见 |
-| E（集成） | GPU执行B/D/C已实现检查，UMD按模块协商 | 受控插桩与manifest | 混合模式与统一元数据 | 不新增独立访存判断算法 |
-| F | 实体GPU实际具备的Tag/Bounds检查 | 视真实ISA支持情况 | 硬件上下文和元数据初始化 | **必须有F1/F2真实硬件；F0页保护仅辅助** |
+| **① NV-R** 运行期Binary检查 | NVIDIA Compute Sanitizer默认Memcheck | Runtime Binary patch + 当前分配地址有效性 | C（插桩方式），B1为相近检查等级的LLVM变体 | **不是**：厂商私有rewriter/元数据不可直接照搬 |
+| **② AMD-B2** LLVM Shadow/Redzone | AMD ROCm GPU ASan、LLVM ASan | 编译期插设备Shadow/Poison检查 | B2（推荐首版） | **算法同源，目标GPU运行库/Shadow/KMD须适配** |
+| **③ NV-C** LLVM原对象Bounds | NVIDIA CUDA 13.1+编译期Memcheck、cuCatch思路 | 保留Pointer Root/Base/Size，并在GPU检查原对象 | D1 | **思路一致，SSA/ABI与GPU实现需自研** |
 
-**关键界限：** Device Runtime虽可归Compiler交付，但实际在GPU上执行。既有KMD资源契约充分时可零新增；不意味着可以省去KMD契约验证。未能可靠处理元数据失败、GPU fault/abort、未知opcode或未覆盖模块时，必须报告 UNSUPPORTED / TOOL_FAILURE / PARTIAL_COVERAGE，不能默认为干净执行。
+**三个参考配置不是三种完全不同的判定谓词**：①和②都主要检查当前地址可访问性；③加入Original-Object Provenance。**NV-C ≠ 仓库路线C**：前者为NVIDIA编译期方案，后者是自研Runtime Binary Rewriter。
 
-## 实卡样例与 CI
+工程责任仍可按 **B/C/D/E/F** 预算与实施，但这是5个交付包，**不是5种独立算法**：B有B2 Shadow与B1当前Live区间（原I）；C运行期插桩；D1原对象Bounds与D2时间身份；E混合集成；F仅在目标实体GPU具备Tag/Bounds时为条件性硬件研发。F0/G GPU MMU Guard Page仅页级辅助保护，不算完整内存Sanitizer。
 
-- [28组CUDA/AMD HIP独立样例](samples/README.md)：错误、修复及合法对照；源码存在不等于厂商工具全部能检出。
-- [Docker环境](scripts/setup-docker.sh)：`./scripts/setup-docker.sh cuda`，或`ROCM_ARCH=gfx90a:xnack+ HSA_XNACK=1 ./scripts/setup-docker.sh rocm`；运行`./scripts/run-all.sh cuda|rocm`。
-- [GPU硬件GitHub Actions](.github/workflows/gpu-hardware.yml)和[Runner配置说明](docs/gpu-actions-ci.md)：必须有实体GPU可见的Runner及匹配驱动/SDK；未调度显示 GPU_NOT_RUN。
-- [CPU静态CI](.github/workflows/sample-structure.yml)：只验证样例、文档和合成日志，绝不是GPU实卡检测。
-- [GPU真实Guard Page辅助实验](samples/experiments/gpu-guard-page/README.md)：仅验证GPU VMM和页级fault，**不构成完整S01地址Sanitizer方案**，也不是CPU页保护。
-- 文档一致性：`python3 scripts/validate_docs.py`；样例结构：`python3 scripts/validate_layout.py`。
+## 主要文档（避免重复方案计数）
 
-## 实施顺序
+- **[核心方案与能力比较](docs/core-design-comparison.md)**：现行计数、来源、是否完全一致、三种参考配置能力表、D2/E/F与Intel/MUSA定位。
+- [S01厂商实施指南](docs/S01-vendor-implementation-guide.md)：NVIDIA运行时与编译期差异、AMD Shadow、无XNACK的软件替代、B1/I和F0/G边界及逐组件伪代码。
+- [完整技术研究（23章、28场景）](docs/llvm-gpu-sanitizer-research.md)：目标ISA/内存语义、元数据、实现与性能、验收细节。
+- [各组件实现责任与关键伪代码](docs/real-gpu-components-implementation.md)：Compiler、GPU Device Runtime、UMD Binary Rewriter、KMD、Firmware/RTL及CLI。
+- [AMD无XNACK/HMM适配与硬件缺失回退](docs/amd-gpu-asan-hardware-fallback.md)：自研预映射Shadow、区间表、D1 Bounds及硬件前提，**不是**官方ROCm支持范围的绕过开关。
+- [实体GPU硬件部署审计](docs/hardware-deployability-audit.md)、[厂商资料与架构笔记](docs/research-notes/)。
+- [生产软件工程量估算（沿用v1.8数值）](docs/estimates-v1.8.json)：B/C/D/E/F按**责任包**估算，公共P一次计费，F不含RTL/ASIC成本。
+- [研究进度](docs/research-progress.md)、[修订历史](docs/revision-history.md)、[结构审计记录](docs/validation-report.json)。
 
-先验收LLVM Global Store设备Shadow、UMD 64B逻辑对象/Redzone和KMD实际映射完成契约，在实体GPU执行S01正反例并获得PC/lane/宽度/报告和可靠终止；再扩展B到vector/atomic/shared/private；随后D1/D2；确有不可重编译模块时再做C/E。F的硬件变更以实体GPU架构接口和芯片交付计划另立项。
+## GPU样例与CI
 
-**状态：** 当前仓库是研究、设计、伪代码和厂商工具样例，不含目标自研GPU的LLVM/KMD/UMD/RTL实际补丁、实卡日志或性能改善数据。
+- [S01～S28 的CUDA与HIP设备程序](samples/README.md)：每种错误均区分非法示例、合法反例、工具能力/UNKNOWN；源码存在不等于GPU已检出。
+- [GPU硬件Actions](.github/workflows/gpu-hardware.yml)与[Runner说明](docs/gpu-actions-ci.md)：需实际有GPU的Runner与受支持的工具链。NVIDIA检验既有CUDA工具；AMD官方ASan要求匹配的`xnack+`运行配置；这些并不等于自研GPU目标Checker已完成。
+- [GPU Guard Page辅助实验](samples/experiments/gpu-guard-page/README.md)：仅VMM/MMU页级fault，不是字节级S01完整Sanitizer。
+- CPU静态CI：[样例与文档检查](.github/workflows/sample-structure.yml)；可运行`python3 scripts/validate_docs.py`和`python3 scripts/validate_layout.py`，**不能替代真实GPU功能或性能验收**。
+
+## 实施优先级
+
+公共对象/报告/队列底座 P → **AMD-B2 Shadow** 在真实GPU完成S01报告 → 加入**NV-C/D1原对象Bounds**解决A→live B → 按需D2解决地址复用后旧指针 → 有不可重编译代码时再做NV-R式C、E模块级集成 → 软件性能数据足够后再研究F1/F2芯片加速。B1仅在适合当前Live GPU端区间查询时作为B的替代实现。
+
+**当前状态**：仅研究与伪代码、CUDA/HIP厂商对照源码；无目标自研GPU的LLVM/KMD/UMD/RTL正式实现、无实卡诊断记录和真实性能改善数据。
