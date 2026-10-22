@@ -13,7 +13,7 @@
 | 基础**判定语义** | **2层** | 当前地址的Addressability，与原指针所属对象的Provenance Bounds；**3种参考配置并非3种完全不同的数学谓词** |
 | 时间安全扩展 | **D2** | 指针Allocation ID/Epoch的跨存储/ABI一致传播，不属于前三种基本空间检查 |
 | 工程交付职责 | **B/C/D/E/F** | **5个工程标签，不是5套互不相关的独立检查算法**：B编译地址检查、C运行时重写、D来源/时间身份、E混合集成、F实体Tag/Bounds硬件（条件性） |
-| 不应独立计数 | **B1(I)、F0(G)、T、H** | B1是当前Live区间表实现变体；F0仅辅助页级Guard；软件Tag归D2，硬件Tag/Bounds只有实硅片才归F1/F2 |
+| 不应独立计数 | **B1(I)、软件Tag与条件性F1/F2** | B1是当前Live区间表实现变体；软件Tag归D2，硬件Tag/Bounds只有实硅片才归F1/F2 |
 
 **工程完整性门槛**：所声明支持的每条真实GPU访存执行前的检查，设备可用元数据与allocation生命周期发布，覆盖/未知opcode处理，GPU报告及错误后的安全终止，合法/非法实卡验证。**本项目当前完整自研产品交付数为0**，不能把完整“设计”写成已实现。
 
@@ -63,8 +63,6 @@
 | **D2** | Allocation ID/Epoch**跟随指针值**传播（包括store/load/copy/atomic/ABI） | 参考cuCatch、[HWASan Tag设计](https://clang.llvm.org/docs/HardwareAssistedAddressSanitizerDesign.html)，目标身份协议属自研；不能保证任意外部代码全覆盖 |
 | **E** | 将B/D编译检查与C部分Binary补充整合为单一产品 | 参考[NVIDIA Hybrid Instrumentation](https://docs.nvidia.com/compute-sanitizer/ComputeSanitizer/index.html#hybrid-instrumentation)；E是**集成与覆盖策略**，不是新增访存检查谓词 |
 | **F1 / F2** | 真实GPU硬件Tag / Bounds/Metadata | 参考HWASan、GPUArmor与硬件研究；**只有实际RTL/ISA/固件与芯片具备时才可用**。F1有Tag碰撞/Granule边界，F2若只看当前地址也不会凭空获得D1 |
-| **F0（旧G）** | GPU MMU Guard Page/Hardware fault | **仅辅助页保护和KMD fault实验**，不能对同页64B对象保证尾后4B检出；不独立列完整S01 |
-| Padding、Redzone、Quarantine、分段Shadow | B/D的数据布局、可寻址状态或生命周期策略 | 部件，非独立完整路线 |
 
 ## 5. Intel与摩尔线程的正确位置
 
@@ -78,6 +76,6 @@
 2. 加入**NV-C风格D1 Original-Object Bounds**，专项S04 A→live B，并明确unknown来源与跨模块降级。
 3. 需要复用地址后旧指针识别时再做**D2**，覆盖S09/S25及指针身份原子一致性。
 4. 确有闭源/JIT缺口再做**NV-R风格C**，以**E**整合模块能力和统一报告。
-5. 先有软件真机性能与硬件契约证据，再考虑F1/F2；F0只作页fault辅助试验。
+5. 先有软件真机性能与硬件契约证据，再考虑F1/F2条件性芯片研发。
 
 **验收状态**：本仓库是研究文档、示意代码和28组CUDA/HIP厂商工具对照样例。没有目标GPU Compiler/UMD/KMD产品补丁、实卡报告或真实性能；GPU_NOT_RUN。工程预算保持[v1.8估算](estimates-v1.8.json)历史兼容，但**五个预算包不是五种独立算法**。
