@@ -64,6 +64,7 @@ bash scripts/ci-gpu.sh cuda smoke
 ROCM_ARCH=gfx90a:xnack+ HSA_XNACK=1 bash scripts/ci-gpu.sh rocm smoke
 bash scripts/ci-gpu.sh cuda compile-all
 bash scripts/ci-gpu.sh cuda safe-all
+bash scripts/ci-gpu.sh cuda safe-all -v  # 输出Docker、nvcc和检测命令
 ~~~
 
 或使用原本[Docker一键配置脚本](../scripts/setup-docker.sh)进入容器后运行\`./scripts/run-all.sh cuda\`和\`./scripts/run-all.sh rocm\`。编译器与报告工具同样在容器内执行；不会静默退回普通Host ASan。

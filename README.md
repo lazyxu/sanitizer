@@ -36,6 +36,26 @@
 - [GPU硬件Actions](.github/workflows/gpu-hardware.yml)与[Runner说明](docs/gpu-actions-ci.md)：需实际有GPU的Runner与受支持的工具链。NVIDIA检验既有CUDA工具；AMD官方ASan要求匹配的`xnack+`运行配置；这些并不等于自研GPU目标Checker已完成。
 - CPU静态CI：[样例与文档检查](.github/workflows/sample-structure.yml)；可运行`python3 scripts/validate_docs.py`和`python3 scripts/validate_layout.py`，**不能替代真实GPU功能或性能验收**。
 
+## 命令执行追踪：-v / --verbose
+
+仓库 `scripts/` 内 **7 个自有 Bash / Python 脚本均支持 `-v` 和 `--verbose`**。默认输出不变，启用后可看到 Docker、`nvcc`、`hipcc`、`ldd`、`compute-sanitizer`、`nvidia-smi` 等外部命令；静态检查仅打印读取的文件路径。
+
+~~~bash
+# 主测试集 28 例：打印Docker和子进程命令
+bash scripts/ci-gpu.sh cuda safe-all -v
+# 已进入CUDA容器时，打印所有28例的编译与检测命令
+./scripts/run-all.sh cuda -v
+# 一键构建并进入容器；之后的Python脚本继承SAN_VERBOSE=1
+./scripts/setup-docker.sh cuda --enter -v
+# NVIDIA 官方独立回归集（自研检测器参数输出会脱敏）
+python3 scripts/run_upstream_nvidia.py --case all --strict --verbose
+# 不启动任何GPU内核的静态校验
+python3 scripts/validate_docs.py -v
+python3 scripts/validate_layout.py -v
+~~~
+
+Python 使用 Shell 安全引用输出命令，自研 checker 的命令行参数出于安全考虑隐藏，执行时仍传入原始参数。verbose 可能包含本机路径，不应分享包含秘密的日志。`-v` 不改变危险测试默认跳过、检测分类和 GPU 运行证据。
+
 ## 实施优先级
 
 公共对象/报告/队列底座 P → **AMD-B2 Shadow** 在真实GPU完成S01报告 → 加入**NV-C/D1原对象Bounds**解决A→live B → 按需D2解决地址复用后旧指针 → 有不可重编译代码时再做NV-R式C、E模块级集成 → 软件性能数据足够后再研究F1/F2芯片加速。B1仅在适合当前Live GPU端区间查询时作为B的替代实现。

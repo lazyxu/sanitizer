@@ -3,6 +3,10 @@
 Synthetic examples test parser behavior, NOT GPU execution or NVIDIA tool coverage.
 """
 import importlib.util
+import io
+from contextlib import redirect_stderr
+from types import SimpleNamespace
+from unittest.mock import patch
 from pathlib import Path
 import unittest
 
@@ -13,6 +17,26 @@ spec.loader.exec_module(upstream)
 
 
 class UpstreamPinAndClassificationTests(unittest.TestCase):
+    def test_verbose_prints_vendor_command(self):
+        with patch.object(upstream, "VERBOSE", True), patch.object(
+                upstream.subprocess, "run",
+                return_value=SimpleNamespace(returncode=0, stdout="")):
+            output = io.StringIO()
+            with redirect_stderr(output):
+                upstream.run(["compute-sanitizer", "--tool", "racecheck"])
+            self.assertIn("+ compute-sanitizer --tool racecheck", output.getvalue())
+
+    def test_custom_trace_hides_sensitive_arguments(self):
+        with patch.object(upstream, "VERBOSE", True), patch.object(
+                upstream.subprocess, "run",
+                return_value=SimpleNamespace(returncode=0, stdout="")) as run:
+            output = io.StringIO()
+            with redirect_stderr(output):
+                upstream.run(["custom-checker", "--token", "SECRET-VALUE"], redact_args=True)
+            self.assertIn("custom-checker <custom arguments redacted>", output.getvalue())
+            self.assertNotIn("SECRET-VALUE", output.getvalue())
+            self.assertEqual(run.call_args.args[0][-1], "SECRET-VALUE")
+
     def test_pinned_nvidia_license_and_sources(self):
         data = upstream.validate_manifest()
         self.assertEqual(len(data["cases"]), 7)

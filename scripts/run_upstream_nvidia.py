@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 UPSTREAM = ROOT / "tests" / "upstream" / "nvidia"
 MANIFEST = UPSTREAM / "manifest.json"
 OUTPUT = ROOT / "results" / "upstream" / "nvidia"
+VERBOSE = os.getenv("SAN_VERBOSE") == "1"
 SOURCE_ID = re.compile(r"NV-(?:MEM|INIT|RACE|SYNC)-[0-9]{2}\Z")
 GIT_SHA = re.compile(r"[a-f0-9]{40}\Z")
 SUMMARY_ERROR = re.compile(r"(?:ERROR SUMMARY:\s*[1-9]\d*\s+errors|RACECHECK SUMMARY:.*[1-9]\d*)", re.I)
@@ -99,7 +100,12 @@ def validate_manifest() -> dict:
     return data
 
 
-def run(cmd: list[str], timeout: int = 120) -> tuple[int, str]:
+def run(cmd: list[str], timeout: int = 120, *, redact_args: bool = False) -> tuple[int, str]:
+    if VERBOSE:
+        # 用户自定义检测器可能携带凭据：只显示可执行文件，隐藏其余参数。
+        rendered = (shlex.quote(cmd[0]) + " <custom arguments redacted>" if redact_args
+                    else shlex.join([str(arg) for arg in cmd]))
+        print("+ " + rendered, file=sys.stderr, flush=True)
     try:
         p = subprocess.run(cmd, cwd=ROOT, stdout=subprocess.PIPE,
                            stderr=subprocess.STDOUT, text=True, errors="replace",
@@ -211,7 +217,10 @@ def compile_case(case: dict, build_cache: dict) -> tuple[Path | None, str, str]:
 
 
 def main() -> int:
+    global VERBOSE
     parser = argparse.ArgumentParser(description="Pinned NVIDIA Compute Sanitizer upstream cases")
+    parser.add_argument("-v", "--verbose", action="store_true", default=VERBOSE,
+                        help="显示执行的nvcc与GPU工具命令，自研命令参数会脱敏")
     parser.add_argument("--validate-only", action="store_true", help="CPU-only pin/license/manifest verification")
     parser.add_argument("--compile-only", action="store_true", help="Compile sources, do not execute on GPU")
     parser.add_argument("--case", default="all", help="NV-MEM-01 etc, or all")
@@ -222,6 +231,7 @@ def main() -> int:
     parser.add_argument("--custom-command", help="Trusted executable and {binary} placeholder; no shell")
     parser.add_argument("--custom-diagnostic-regex", help="Required when custom command is set")
     args = parser.parse_args()
+    VERBOSE = args.verbose
     try:
         data = validate_manifest()
         if bool(args.custom_command) != bool(args.custom_diagnostic_regex):
@@ -324,7 +334,7 @@ def main() -> int:
                     failures += 1
         if args.mode in {"custom", "both"} and args.custom_command:
             cmd = custom_argv(args.custom_command, binary, cid)
-            rc, log = run(cmd, timeout=40 if case["dangerous"] else 120)
+            rc, log = run(cmd, timeout=40 if case["dangerous"] else 120, redact_args=True)
             logfile = case_dir / "custom.log"
             logfile.write_text(log, encoding="utf-8")
             status = classify_custom(rc, log, args.custom_diagnostic_regex)

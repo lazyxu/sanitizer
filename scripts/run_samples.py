@@ -5,12 +5,14 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "samples" / "manifest.json"
+VERBOSE = os.getenv("SAN_VERBOSE") == "1"
 # 官方报告的设备侧标识：非零 ERROR SUMMARY 本身仅提示Compute Sanitizer检测到错误。
 NVIDIA_GPU = re.compile(
     r"(Invalid __global__|Invalid __shared__|Invalid __local__|"
@@ -21,6 +23,8 @@ NVIDIA_GPU = re.compile(
 AMD_GPU = re.compile(r"ERROR:\s*AddressSanitizer:[^\n]*on amdgpu device\s+[0-9]+", re.I)
 
 def run(cmd, timeout=120, env=None):
+    if VERBOSE:
+        print("+ " + shlex.join([str(arg) for arg in cmd]), file=sys.stderr, flush=True)
     try:
         proc = subprocess.run(cmd, cwd=ROOT, text=True, errors="replace",
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -132,12 +136,15 @@ def classify(backend, expected, mode, rc, log, case=None):
     return "CLEAN_AS_EXPECTED" if expected == "clean" else "NOT_DETECTED"
 
 def main():
+    global VERBOSE
     p = argparse.ArgumentParser(description="GPU代码编译＋CUDA Compute Sanitizer或AMDGPU ASan")
     p.add_argument("--backend", choices=["cuda", "rocm"],
                    default=os.getenv("SAN_BACKEND", "cuda"))
     p.add_argument("--case", default="all", help="S01..S28 / all")
     p.add_argument("--mode", choices=["bad","good","both"], default="both")
     p.add_argument("--compile-only", action="store_true")
+    p.add_argument("-v", "--verbose", action="store_true", default=VERBOSE,
+                   help="显示nvcc/hipcc/compute-sanitizer等所有外部子进程命令")
     p.add_argument("--nv-compile-memcheck", action="store_true",
                    help="使用nvcc -fdevice-sanitize=memcheck；不要和race/init/sync混同")
     p.add_argument("--allow-dangerous", action="store_true",
@@ -147,6 +154,7 @@ def main():
     p.add_argument("--strict", action="store_true",
                    help="对预期必检出但没有GPU报告、误报与工具错误返回失败")
     a = p.parse_args()
+    VERBOSE = a.verbose
     m = json.loads(MANIFEST.read_text(encoding="utf-8"))
     cases = m["cases"] if a.case == "all" else [x for x in m["cases"] if x["id"] == a.case]
     if not cases:
