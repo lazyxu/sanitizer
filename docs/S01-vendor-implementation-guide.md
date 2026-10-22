@@ -4,11 +4,11 @@
 
 > 本文是面向研发落地的**厂商方案优先**设计说明，不是某个闭源 GPU Sanitizer 的反编译说明。凡“厂商官方确认”的机制都给出来源与限长英文原文；凡没有公开具体实现的数据结构、ISA 注入方法或内核接口，均明确写作**本项目建议实现**，不冒充 NVIDIA/AMD 的私有实现。
 >
-> 所有产品级访存判断必须由实体GPU执行的设备Checker指令或真实存在的Tag/Bounds硬件完成。GPU MMU/F0页保护只能提供辅助页级故障检查，不能替代字节级S01；CPU侧API错误也不是设备侧检查。
+> 所有产品级访存判断必须由实体GPU执行的设备Checker指令或真实存在的Tag/Bounds硬件完成；CPU侧API错误不是设备侧检查。
 
 > **统一计数**：主要参考厂商**2家**（NVIDIA/AMD），基础空间检查参考配置**3种**（①NV-R运行时二进制＋当前地址有效性、②AMD-B2 LLVM Shadow/Redzone、③NV-C LLVM Original-Object Bounds）。这**不是3种完全不同的空间谓词**：①②均主要判断当前地址是否有效，③加入原指针对象来源。B/C/D/E/F保留为工程交付标签，不等于5套独立算法。完整来源/能力对照只维护在[核心设计唯一分类表](core-design-comparison.md)。
 >
-> **命名约束**：NV-C是NVIDIA编译期Reference；仓库的路线C是Runtime Binary Rewriter，不可互相替代。B1（原I）是当前Live Allocation查询的编译期实现；F0（原G）只是辅助页fault，F1/F2需要真正的Tag/Bounds硬件；E是集成策略。
+> **命名约束**：NV-C是NVIDIA编译期Reference；仓库的路线C是Runtime Binary Rewriter，不可互相替代。B1（原I）是当前Live Allocation查询的编译期实现；F1/F2必须具备真正的Tag/Bounds硬件；E是集成策略。
 >
 
 
@@ -25,7 +25,7 @@
 | [0x0ffc,0x1000) | Underflow | 对象头前 4 B |
 | [0x1040,0x1044) | Overflow | 对象尾后 4 B |
 
-基础 S01 的可验收能力是“已追踪对象在有效布局中的 Global 字节可访问性”。**当前 GPUVA 有效≠原对象合法**。如果 A 尾部刚好邻接存活的 B，裸地址查询可能找到 B 并通过；必须保留访问的预期原对象 A（例如编译期 Base/Bounds、设备端真实携带的来源token）才可提供更强保证（主报告 S04）；单纯根据当前地址查表不足。**不要把 Guard Page 的页级故障等同任意 4 B 对象越界。**
+基础 S01 的可验收能力是“已追踪对象在有效布局中的 Global 字节可访问性”。**当前 GPUVA 有效≠原对象合法**。如果 A 尾部刚好邻接存活的 B，裸地址查询可能找到 B 并通过；必须保留访问的预期原对象 A（例如编译期 Base/Bounds、设备端真实携带的来源token）才可提供更强保证（主报告 S04）；单纯根据当前地址查表不足。
 
 访问完整区间的溢出安全判断：
 
@@ -178,13 +178,11 @@ SanVerdict check_current_allocation(uint64_t addr, uint32_t width,
 nvcc -lineinfo -O1 -o s01 samples/S01/cuda.cu
 compute-sanitizer --tool memcheck ./s01 --good
 compute-sanitizer --tool memcheck ./s01 --bad
-# 选配Padding，仅对当前工具支持的alloc路径有效：
-compute-sanitizer --tool memcheck --padding 32 ./s01 --bad
 # 本仓库cuda源码还允许单独测试头部变体：
 compute-sanitizer --tool memcheck ./s01 --bad --head
 ~~~
 
-**预期：** good无设备非法访存；bad在实际访问尾后4B时报告；head变体需记录是否真的有头部无效区和真实GPU错误输出，不能凭源码推断必定报错。NVIDIA手册说明 `--padding` 支持部分 `cudaMalloc`/Host分配，不支持 `cudaHostRegister` 或 VMM API；也不能覆盖所有shared/global变量布局。它不是通用D1对象身份替代品。[官方Padding章节](https://docs.nvidia.com/compute-sanitizer/ComputeSanitizer/index.html#padding)
+**预期：** good无设备非法访存；bad在实际访问尾后4B时报告；head变体需记录是否真的有头部无效区和真实GPU错误输出，不能凭源码推断必定报错。
 
 ### 1.3 路径 NVIDIA-C：CUDA 13.1+ 的编译期 Base-and-Bounds
 
@@ -415,12 +413,10 @@ GpuPtr san_alloc(Context& ctx, uint64_t request, uint64_t alignment) {
 
 | 无XNACK时的实现选择 | 必要的GPU/软件能力 | 可以提供的保证 | 代价与明确缺口 |
 |---|---|---|---|
-| **B2：预映射GPU Shadow＋Redzone（推荐）** | GPU能读取预驻留的Shadow BO；LLVM设备Load/Store插桩；UMD poison/发布fence | 声明支持的字节范围地址检查、poison期UAF | 显存/带宽与redzone开销；A→存活B可能漏；与官方ROCm运行库不同 |
-| **B2：分段/二级设备Shadow** | GPU可读取已驻留root/segment表，UMD可在dispatch前上传并固定表页 | 和所选shadow编码相同的地址级保证 | 多级GPU查询、额外元数据；表缺失=TOOL_FAILURE |
+| **B2：预映射GPU Shadow（推荐）** | GPU能读取预驻留的Shadow BO；LLVM设备Load/Store插桩；UMD Poison/发布fence | 声明支持的字节范围地址检查、Poison期UAF | 显存/带宽开销；A→存活B可能漏；与官方ROCm运行库不同 |
 | **B1：GPU Live Allocation区间表（下文原I）** | GPU能读不可变有序live对象descriptor；LLVM插GPU端区间查询 | 当前地址所在live allocation的范围有效性 | 无Shadow；有序查找较贵，仍可能漏A→B及复用旧裸指针 |
 | **D1：原对象Bounds软件比较** | LLVM保留可证明的original base/size并在设备寄存器/参数或GPU sidecar传播 | 在来源闭合范围内发现A→存活B | 不支持的指针来源/跨ABI段降级，非完整D2 |
 | **C：UMD机器码重写器** | 目标ISA可合法decode/patch/relocate，GPU stub/metadata可执行 | 可为不能重编译模块补特定设备访存检查 | 编译器可零改，但UMD重写成本高，不能凭裸地址恢复D1 |
-| **F0：GPU MMU Guard Page** | 实际芯片支持GPU VMM/权限fault | 只能捕获越入受保护页的访问 | **只是辅助机制，不是完整字节级Sanitizer路线** |
 | **F1/F2：硬件Tag/Bounds** | 真实芯片具有对应ISA/RTL/metadata/fault | 只在硬件实际声明的粒度/保证内有效 | 不存在这些功能时不能软件配置打开；转B/D软件方案 |
 
 ~~~cpp
@@ -437,7 +433,7 @@ Mode choose_gpu_checker(TargetGPU gpu, ObjectRegistry registry, Module manifest)
 }
 ~~~
 
-**组件级落地**：Compiler在实际GPU Load/Store前插入完整byte-footprint检查、保留active lane/mask、生成覆盖manifest并审核最终ISA；Device Runtime读取预映射Shadow/Descriptor或D1参数并写设备报告；UMD分配逻辑对象/Redzone、提交GPU metadata BO、在queue/fence上排序poison/unpoison/async free；KMD保证GPUVA映射、权限、实际完成/fault；Firmware/RTL仅按真实abort或新硬件要求修改。无GPU按需缺页时，**不得执行过程中临时期望Shadow由CPU补页**，未驻留直接TOOL_FAILURE或拒绝launch。
+**组件级落地**：Compiler在实际GPU Load/Store前插入完整byte-footprint检查、保留active lane/mask、生成覆盖manifest并审核最终ISA；Device Runtime读取预映射Shadow/Descriptor或D1参数并写设备报告；UMD登记逻辑对象并提交GPU metadata BO、在queue/fence上排序Poison状态及async free；KMD保证GPUVA映射、权限、实际完成/fault；Firmware/RTL仅按真实abort或新硬件要求修改。无GPU按需缺页时，**不得执行过程中临时期望Shadow由CPU补页**，未驻留直接TOOL_FAILURE或拒绝launch。
 
 **最窄的进一步退路**：即使没有一般的GPU动态元数据查表能力，若D1已经能将已知的original base/limit作为寄存器或Kernel实参送进GPU，仍可比较这些访问；但动态live对象、复杂指针load/store/alias和时间身份无法因此完整覆盖。没有GPU可执行检查指令或可靠失败协议则UNSUPPORTED。
 
@@ -471,7 +467,7 @@ AMD官方文档明确要求 `--offload-arch=gfx...:xnack+`，并指出在 `xnack
 
 ## 3. 已有空间检查方案的实现变体与条件性辅助机制（不新增第四种基础配置）
 
-独立“路线”至少要能够在**真实GPU**、声明的访问类型/空间与元数据生命周期内形成可归因的设备端检查和可靠失败状态。GPU页保护、单一Tag比较、元数据索引布局、混合装载策略都不天然构成新的**完整字节级S01 Sanitizer路线**。
+独立“路线”至少要能够在**真实GPU**、声明的访问类型/空间与元数据生命周期内形成可归因的设备端检查和可靠失败状态。单一Tag比较、元数据索引布局、混合装载策略都不天然构成新的**完整字节级S01 Sanitizer路线**。
 
 **统一参照[核心设计比较](core-design-comparison.md)**：①NV-R归运行时插桩C，②AMD-B2归B2，③NV-C归D1。当前Live查询B1不单列；D2时间安全、E集成、F硬件条件都不作为第四种基础空间检查配置。以下保留实现细节，不重复推导完整能力矩阵。
 
@@ -501,13 +497,7 @@ SanVerdict check_current_live_interval(GPUVA addr, uint64_t n,
 
 **为什么不单列方案I**：它是B的**无Shadow实现选项**，与B2经典1:8 Shadow/Redzone在数据表示和性能上不同；两者本质上都只判断当前GPU地址可访问性，不能凭“编译期”提升语义。第一版默认仍以B2 Shadow为主；目标缺少合适的Shadow GPUVA但能GPU查询预映射Live表时才选B1。每访存有序查表成本可能比Shadow高，必须同条件实卡测量。
 
-### 3.2 硬件与页保护辅助机制统一审查：F0／F1／F2
-
-**F0 GPU MMU Guard Page（原G；辅助，不是独立产品）：** 依赖真实GPU GPUVM/MMU、页级权限及fault回传；通常不必修改Compiler。UMD Reserve GPUVA，Map第一硬件页为可读写，第二页仅Reserve而不Map；由GPU访问第一页最后4字节`p[0]`合法，`p[1]`触达第二页则产生GPU页错误。KMD需核查真实GPU fault及context隔离，不能把CPU `mprotect` 当成设备页故障。
-
-**问题不是“能不能抓到越界”，而是“能抓哪些越界”**：在已映射4KiB或更大页面中放置64B对象，`a[16]`可能仍在同页，Guard Page完全看不到逻辑64B边界；如果访问进入另一个已映射页也不产生保护错误。因此F0不能单独满足本指南S01 4B头尾检测，也不能检查原对象、子分配/视图或复用后UAF。**只算F0辅助特性，不统计为独立完整Sanitizer选项。**
-
-保留[CUDA/HIP真实GPU VMM Guard Page实验](../samples/experiments/gpu-guard-page/README.md)用于GPU故障链路、映射和权限验证，默认不跑危险bad，未真机执行仍GPU_NOT_RUN。目标没有VMM就明确F0=UNSUPPORTED，若GPU仍能读预映射metadata，则B1/B2/D1软件检查不受此限制。
+### 3.2 条件性芯片能力：F1／F2
 
 **F1 硬件Tag（原T；条件性能力）：**
 
@@ -531,7 +521,7 @@ else if (module.binary_patchable) load(rewrite_and_verify_real_gpu_isa());
 else reject_or_mark_partial_coverage();
 ~~~
 
-**E是有独立工程投入的完整产品集成形式，但自身不引入新的访问合法性定义**：B1当前区间查询不会因Hybrid自动具备D1来源，Binary补丁也不会从裸地址恢复旧指针epoch。Init/Race/Sync不随Hybrid或F0自然获得。
+**E是有独立工程投入的完整产品集成形式，但自身不引入新的访问合法性定义**：B1当前区间查询不会因Hybrid自动具备D1来源，Binary补丁也不会从裸地址恢复旧指针epoch。Init/Race/Sync不随Hybrid自动获得。
 
 ## 4. 针对S01的最终选型与任务拆分
 
@@ -544,7 +534,7 @@ else reject_or_mark_partial_coverage();
 | S01-2 优化与边界 | 跨Shadow granule、1/2/4/8/16 B、mask、atomic、异步poison顺序 | 扩展用例通过、工具资源不足显示不完整、三性能基线 | P1 |
 | S01-3 NVIDIA编译期Bounds融合 | 直接Kernel指针参数base/size sidecar，GEP/phi/select传播；未知来源明确降级 | A越界落入B仍检出，合法B来源访问通过（S04） | P1/P2 |
 | S01-4 NVIDIA运行期fallback | 仅当存在不可重编译Kernel且有成熟rewriter时建设 | patch前后合法行为、PC/资源重定位、覆盖manifest | 按需 |
-| S01-5 辅助GPU页保护及未来硬件 | F0仅做KMD页级fault验证；F1/F2仅在实体硬件具备或另行交付后成立 | 不把F0算进S01任意4B对象越界检出；F1/F2若无RTL/芯片不能宣布完成 | 可选辅助 |
+| S01-5 条件性硬件研发 | F1/F2仅在实体Tag/Bounds硬件具备或另行交付后成立 | 没有真正ISA/RTL/芯片能力不能宣布完成硬件检查 | 可选条件性 |
 
 **第一版真正需要交付到实体GPU的Checker与UMD ABI建议：**
 
@@ -598,13 +588,11 @@ struct SanReport {
 
 | 来源 | 官方入口 | 能据此确认 | 不能据此断言 |
 |---|---|---|---|
-| NVIDIA Compute Sanitizer User Manual | [工具、memcheck编译期/默认运行时、padding与Hybrid](https://docs.nvidia.com/compute-sanitizer/ComputeSanitizer/index.html) | 两种插桩入口、编译期bounds、padding范围、运行命令与限制 | NVIDIA默认运行时内部元数据一定是1:8 Shadow |
+| NVIDIA Compute Sanitizer User Manual | [memcheck编译期/默认运行时与Hybrid](https://docs.nvidia.com/compute-sanitizer/ComputeSanitizer/index.html) | 两种插桩入口、编译期bounds、运行命令与限制 | NVIDIA默认运行时内部元数据一定是1:8 Shadow |
 | NVIDIA技术文章（2025-12-10） | [Better Bug Detection](https://developer.nvidia.com/blog/better-bug-detection-how-compile-time-instrumentation-for-compute-sanitizer-enhances-memory-safety/) | 当前地址有效性漏掉邻接对象、fat pointer思路、resource开销与HMM限制 | 其私有编译器Pass与完整ABI源码可复制 |
 | NVIDIA Sanitizer API Guide | [Patching/Callback/Memory API](https://docs.nvidia.com/compute-sanitizer/SanitizerApiGuide/index.html) | 用户工具如何装载patch、访存回调参数与可打补丁的指令ID | 这是目标自研GPU也现成拥有的API |
 | AMD ROCm GPU ASan | [ROCm GPU AddressSanitizer](https://rocmdocs.amd.com/projects/llvm-project/en/latest/conceptual/using-gpu-sanitizer.html) | LLVM插桩、Shadow/Redzone、XNACK/设备库/运行报告、已知限制 | 把CPU compiler-rt直接链接就能检查任意自研GPU |
 | LLVM实现 | [AddressSanitizer.cpp](https://llvm.org/doxygen/AddressSanitizer_8cpp_source.html) / [AMDGPU SwLowerLDS](https://github.com/llvm/llvm-project/blob/main/llvm/lib/Target/AMDGPU/AMDGPUSwLowerLDS.cpp) | LLVM现有Pass和AMDGPU降级源码的复用位置 | 目标地址空间/ISA与AMDGPU必然一致 |
 | Google ASan原始算法 | [AddressSanitizerAlgorithm](https://github.com/google/sanitizers/wiki/AddressSanitizerAlgorithm) | 1:8 Shadow、Redzone和Poison的基本数学关系 | 经典编码能表达同granule内任意非连续子对象 |
-| CUDA GPU VMM | [CUDA Driver Virtual Memory Management](https://docs.nvidia.com/cuda/cuda-driver-api/cuda_driver_api/group__CUDA__VA.html) | GPUVA预留/映射/访问权限 | MMU映射成功等于64B逻辑边界合法 |
-| AMD HIP GPU VMM | [HIP Virtual Memory Management](https://rocm.docs.amd.com/projects/HIP/en/latest/how-to/hip_runtime_api/memory_management/virtual_memory.html) | GPU VMM、权限和页粒度 | GPU页级Guard能检所有4B越界 |
 
-**本文的落实结论（与[核心三参考配置](core-design-comparison.md)一致）：** I是B1 GPU端当前Live Allocation表，并非D1 Original-Object Bounds；F0（原G）仅辅助页保护，F1软件Tag和F2缺硅片新硬件都不应成为独立现成路线；E是混合交付策略，不改变检查语义。没有XNACK时官方ROCm GPU ASan不能直接宣称设备插桩，但自研GPU可用预驻留设备Shadow/descriptor实现B2/B1/D1，并明确资源与覆盖缺口。S01首选借鉴AMD/LLVM的真实GPU Shadow检查：LLVM Pass生成目标GPU可执行ISA，UMD管理对象/Shadow和报告，KMD提供真实映射、提交、完成与故障契约。目标实卡直接对S01正反例进行验证；随后按实际需求加入D1原对象Bounds与UMD Binary Rewriter。若实体GPU没有Tag/Bounds硬件，则只将F1/F2视为待研发芯片机制。完整逐组件代码及矩阵见[实施指南](real-gpu-components-implementation.md)。
+**本文的落实结论（与[核心三参考配置](core-design-comparison.md)一致）：** I是B1 GPU端当前Live Allocation表，并非D1 Original-Object Bounds；F1软件Tag和F2缺硅片新硬件都不应成为独立现成路线；E是混合交付策略，不改变检查语义。没有XNACK时官方ROCm GPU ASan不能直接宣称设备插桩，但自研GPU可用预驻留设备Shadow/descriptor实现B2/B1/D1，并明确资源与覆盖缺口。S01首选借鉴AMD/LLVM的真实GPU Shadow检查：LLVM Pass生成目标GPU可执行ISA，UMD管理对象/Shadow和报告，KMD提供真实映射、提交、完成与故障契约。目标实卡直接对S01正反例进行验证；随后按实际需求加入D1原对象Bounds与UMD Binary Rewriter。若实体GPU没有Tag/Bounds硬件，则只将F1/F2视为待研发芯片机制。完整逐组件代码及矩阵见[实施指南](real-gpu-components-implementation.md)。
