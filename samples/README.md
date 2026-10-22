@@ -2,7 +2,7 @@
 
 **这是GPU设备侧Sanitizer测试仓库，不使用CPU ASan报告伪装GPU检测。** 每个`S01～S28`目录都包含完整可独立编译的`cuda.cu`、`amd.hip.cpp`和中文`README.md`；包含`__global__` GPU Kernel和独立`main`，可分别使用`--good`（合法对照）和`--bad`（错误／特定边界）。[manifest.json](manifest.json)逐平台声明预计使用的工具与保证级别。
 
-**参考配置/能力矩阵**：[核心设计比较](../docs/core-design-comparison.md)统一2家主要厂商、3种基础空间参考配置（NV-R、AMD-B2、NV-C）。28组S01～S28覆盖不同错误类别，并不意味着每组由三种空间配置全部检出；D2是时间身份扩展，E是集成，F0为辅助GPU页fault实验。
+**参考配置/能力矩阵**：[核心设计比较](../docs/core-design-comparison.md)统一2家主要厂商、3种基础空间参考配置（NV-R、AMD-B2、NV-C）。28组S01～S28覆盖不同错误类别，并不意味着每组由三种空间配置全部检出；D2是时间身份扩展，E是集成。
 
 ## 0. 先确认现实边界
 
@@ -109,16 +109,7 @@ CPU-only静态工作流有成功记录，仅表明清单、语法和虚构日志
 
 以上部分样例**仅验证原28场景的一个子情况**；源文件README明确限定，例如S19的HIP源码不具备与CUDA`cp.async`等价的硬件原语，S23未覆盖texture/surface所有边界模式，S26真正混合编译单元需要另加构建夹具，S28尚没有工具内部故障注入能力。不能把“源文件存在”写成“完整场景已经验收”。
 
-## 4. GPU Guard Page辅助页保护：能不能取代完整Sanitizer？
-
-**不能取代。只有真实GPU支持VMM时才可作为辅助页级保护及KMD fault验证，不独立计完整S01字节级Sanitizer方案。** 本仓库额外提供[CUDA+HIP GPU VMM Guard Page完整实验源码](experiments/gpu-guard-page/)。不是调用CPU`mprotect`，而是GPUVA保留两页、只映射前一页，后一页保持不可访问，让真正的GPU Kernel越过页尾时产生GPU MMU fault。
-
-- [CUDA Driver Virtual Memory](https://docs.nvidia.com/cuda/archive/13.4.2/cuda-driver-api/cuda_driver_api/group__CUDA__VA.html)：`cuMemAddressReserve / cuMemCreate / cuMemMap / cuMemSetAccess`。
-- [HIP GPU Virtual Memory Management](https://rocm.docs.amd.com/projects/HIP/en/latest/how-to/hip_runtime_api/memory_management/virtual_memory.html)：`hipMemAddressReserve / hipMemCreate / hipMemMap / hipMemSetAccess`。
-
-**限制：** 支持取决于实际GPU/Driver/VMM属性，映射粒度为硬件页granularity，不是任意4B对象边界；错误有时表现为GPU硬件fault而非精确ASan报告。bad实验可能reset设备，需显式`--allow-fault`，不放入默认28例批量运行。
-
-## 5. 官方技术入口
+## 4. 官方技术入口
 
 - [NVIDIA Compute Sanitizer User Manual](https://docs.nvidia.com/compute-sanitizer/ComputeSanitizer/index.html)：四工具分工、编译期memcheck、工具参数。
 - [NVIDIA Compute Sanitizer Release Notes](https://docs.nvidia.com/compute-sanitizer/ReleaseNotes/index.html)：shared initcheck、混合编译已知限制。
