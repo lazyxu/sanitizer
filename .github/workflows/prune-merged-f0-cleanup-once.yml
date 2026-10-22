@@ -1,0 +1,54 @@
+name: One-time cleanup of merged F0 documentation branch
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - ".github/workflows/prune-merged-f0-cleanup-once.yml"
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  prune-exact-merged-ref:
+    if: github.repository == 'lazyxu/sanitizer' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify merged PR, exact HEAD, delete and verify absent
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const {owner, repo} = context.repo;
+            const branch = "docs/remove-f0-and-ancillary-catalog-20261022";
+            const sha = "19d94a3039c0124bbf06eb249e947e147fec4f8d";
+            const {data: pr} = await github.rest.pulls.get({
+              owner, repo, pull_number: 7
+            });
+            if (pr.state !== "closed" || !pr.merged_at ||
+                pr.head.ref !== branch || pr.head.sha !== sha ||
+                pr.head.repo?.full_name !== owner + "/" + repo) {
+              throw Error("PR #7 not verified merged or head changed");
+            }
+            const ref = "heads/" + branch;
+            try {
+              const r = await github.rest.git.getRef({owner, repo, ref});
+              if (r.data.object.sha !== sha) {
+                throw Error("Remote branch HEAD changed: refusing deletion");
+              }
+            } catch (err) {
+              if (err.status === 404) {
+                core.info("Branch already absent; no action needed");
+                return;
+              }
+              throw err;
+            }
+            await github.rest.git.deleteRef({owner, repo, ref});
+            try {
+              await github.rest.git.getRef({owner, repo, ref});
+              throw Error("Branch still present after deletion");
+            } catch (err) {
+              if (err.status !== 404) throw err;
+            }
+            core.info("Removed verified merged branch: " + branch);
