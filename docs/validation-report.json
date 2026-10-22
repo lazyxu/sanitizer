@@ -1,5 +1,5 @@
 {
-  "version": "2.0",
+  "version": "2.1",
   "as_of": "2026-10-22",
   "scope": "repository document and structural evidence only",
   "status": "DOCUMENT_REVIEW; PHYSICAL_GPU_NOT_RUN",
@@ -7,8 +7,8 @@
   "physical_gpu_checker_result": "GPU_NOT_RUN",
   "real_gpu_performance": "NOT_MEASURED",
   "document": "docs/llvm-gpu-sanitizer-research.md",
-  "main_document_blob_sha": "9a1dbf6f02ca1e0316d4dcf91a3b03d3be4be647",
-  "main_line_count": 2975,
+  "main_document_blob_sha": "91e49d8281959729ca00e0e1b095139b68e8e139",
+  "main_line_count": 2944,
   "chapter_count": 23,
   "scenarios_count": 28,
   "reference_entries": 39,
@@ -148,7 +148,7 @@
   "KMD_increment_condition": "only proven missing production contracts",
   "C_runtime_compiler_source_changes_possible": 0,
   "F_hardware_caveat": "actual GPU silicon must implement feature, otherwise unsupported",
-  "CI_results": "PENDING_CURRENT_BRANCH_CI",
+  "CI_results": "PENDING_HEAD_STATIC_CI",
   "claimed_real_gpu_detection": false,
   "report_meaning": "structural validation evidence, not running code on any target GPU",
   "legacy_text_cleanup": {
@@ -170,7 +170,6 @@
     "B1_I": "LLVM-inserted GPU current Live Allocation table; address validity, not D1 provenance",
     "B2": "GPU Shadow/Redzone, initial S01 recommendation, not dependent on XNACK in a custom target",
     "D1": "original object bounds and carried pointer provenance distinct from B1",
-    "F0_G": "auxiliary GPU page-granularity guard; excluded from standalone complete S01 and P+F object-check estimate",
     "F1_T": "real physical tag hardware only, software tag belongs to device instrumentation/D2",
     "F2_H": "requires actual physical bounds hardware, otherwise future RTL/ASIC work",
     "E": "integration of B/D/C, not an independent memory-check predicate",
@@ -203,11 +202,13 @@
     "runtime_nvidia_private_implementation_exactly_reproduced": false,
     "amd_llvm_shadow_algorithm_shared": true,
     "original_object_bounds_idea_shared": true,
-    "F0_guard_page_independent": false,
     "D2_temporal_identity_is_extension": true,
     "E_hybrid_is_integration": true,
     "intel_musa_reference_scope": "functional capabilities, runtime interfaces and reports, not a new assumed checker algorithm",
     "target_gpu_implementation": "NOT_IMPLEMENTED",
-    "target_gpu_hardware_verification": "GPU_NOT_RUN"
-  }
+    "target_gpu_hardware_verification": "GPU_NOT_RUN",
+    "document_cleanup_scope": "Deprecated non-core routes and standalone auxiliary strategy descriptions excluded; AMD-B2 retains algorithm-essential Shadow/Poison semantics"
+  },
+  "ancillary_route_catalog_removed": true,
+  "hardware_guard_experiment_source_removed": true
 }
