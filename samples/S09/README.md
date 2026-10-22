@@ -49,7 +49,7 @@ use_saved<<<1,32>>>(slot, out);
 
 **哪里不对、怎样检。** 访问范围仍是新 B 的合法前 4 B，但指针预期 A 的生存期已经结束。D2 要让 pointer store／reload 传递 `(A_ID,A_epoch)`，与当前对象身份比较；**D2的真实GPU检查指令与metadata传播**必须覆盖寄存器、内存槽及allocator事件的预期身份。普通分配表查询只得到 B 当前 generation，缺少指针预期值；B的Unpoison、D1的同尺寸bounds及仅依赖当前地址有效性的C因而不能保证识别旧指针。[P01][L02]
 
-**组件观测。** compiler 保留 slot 的 pointer metadata 配对；deviceRT 避免载入时把旧指针重新标记为 B；UMD 发布新身份，并保持检查所需的旧描述符。普通 `malloc` 是否复用不可假定；扩大 quarantine 只能推迟这一条件。
+**组件观测。** compiler 保留 slot 的 pointer metadata 配对；deviceRT 避免载入时把旧指针重新标记为 B；UMD 发布新身份，并保持检查所需的旧描述符。普通 `malloc` 是否复用不可假定；仅当前Live分配状态无法恢复旧指针所属的历史对象。
 
 **合法反例、修复及报告。** 独立运行通过正确携带 B 身份的 `b[0]` 应通过；修复是清除旧引用并分发新指针及其身份。报告应同时给出相同 GPUVA、预期 A 和当前 B 的 ID／epoch、两次分配与 A 的释放位置。未知 writer、身份丢失、tag 碰撞或 epoch 回绕必须作为保证边界，不能静默退回地址查询后仍声称完整 M5。
 
