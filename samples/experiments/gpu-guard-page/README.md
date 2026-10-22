@@ -1,6 +1,6 @@
 # GPU Guard Page 辅助机制实验：CUDA Driver VMM 和 AMD HIP VMM
 
-**这是GPU Guard Page的辅助硬件页级实验，不是完整S01字节级对象Sanitizer方案，也不是独立产品路线；更不是Linux mprotect()、CPU ASan或Host堆内存越界实验。**
+**这是GPU Guard Page的辅助硬件页级实验，不是完整S01字节级对象Sanitizer方案，也不是独立产品路线；更不是Linux mprotect()、CPU ASan或Host堆内存越界实验。** 参见[核心方案计数](../../../docs/core-design-comparison.md)：旧G/F0仅辅助硬件GPU页保护，不算NV-R/AMD-B2/NV-C的第四种空间参考配置。
 
 两份可单独编译的样例使用 GPU 虚拟内存：预留2个GPUVA granule，仅映射第一个，并且只给第一个授予设备读写权限。线程写入映射页最后4B合法；越过该页4B访问第二个未映射GPUVA granule时，可能产生GPU MMU fault。
 
