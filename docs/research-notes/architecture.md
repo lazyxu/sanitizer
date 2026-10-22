@@ -144,7 +144,6 @@ LLVM LangRef 规定 masked-off lane 不访问内存；VP 用 mask 与 EVL 共同
 候选 mapping：
 
 - 固定 aperture 的线性 `(addr >> 3) + offset`：最快，但只在明确界定的 application VA 区间成立；先 range-check，防止坏 pointer 导致 shadow 自身 fault。
-- 多段映射/页表式 shadow：按 VA 高位查 root，再查 leaf；降低保留窗口需求但多次读取、TLB/缓存依赖和并发更新更复杂。
 - 受控 debug allocator aperture：限定 debug 分配到较小 VA 区域以降低首版成本；SVM、imported、peer、device malloc 等区域需显式扩展，不能默认覆盖。
 
 shadow/metadata 对自身必须可访问。nonresident shadow 故障、初始化失败和 application OOB 要分开报告；无 GPU page-fault replay 时，launch 前必须保证所需 metadata 驻留。共享/私有空间采用工作组/线程 key 的独立 shadow，不直接把重用的局部 offset 当成全局唯一地址。
