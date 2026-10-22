@@ -21,6 +21,7 @@
 # 容器中:
 python3 scripts/run_samples.py --backend cuda --case S01 --mode both
 ./scripts/run-all.sh cuda                      # 一键编译并按manifest运行28例
+./scripts/run-all.sh cuda -v                   # 输出nvcc/Compute Sanitizer等实际命令
 python3 scripts/run_samples.py --backend cuda --case all --mode both --strict
 ~~~
 

@@ -10,7 +10,7 @@
 
 ~~~bash
 # CPU 上只校验许可、pin、文件完整性和 case 清单
-python3 scripts/run_upstream_nvidia.py --validate-only
+python3 scripts/run_upstream_nvidia.py --validate-only -v
 
 # 有 CUDA 编译器、没有 GPU 时只编译，绝不算检出
 python3 scripts/run_upstream_nvidia.py --compile-only
@@ -23,6 +23,8 @@ python3 scripts/run_upstream_nvidia.py --case NV-MEM-01 \
   --custom-command 'my-gpu-sanitizer -- {binary}' \
   --custom-diagnostic-regex 'YOUR_ACTUAL_DEVICE_DIAGNOSTIC_PATTERN'
 ~~~
+
+`-v/--verbose` 可显示编译器、厂商检测工具和环境查询命令；自研检测器额外参数会在命令追踪中脱敏，避免泄漏。`-v` 不代表 GPU 检测已通过。
 
 自研 checker 尚未实现时，`custom_diagnostic.status` 固定为 `NOT_CONFIGURED`，**不会因为 NVIDIA 检出而自动记为自研检出**。提供自研命令必须同时提供设备侧诊断正则；若命令仅退出非零而无设备诊断，则记为工具错误，不能算检出。两者均保留实际命令、退出码与原始日志；日志可能包含环境路径，不应公开上传私有路径或秘密。
 
