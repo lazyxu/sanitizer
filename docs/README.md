@@ -11,7 +11,7 @@
 | 没有 XNACK/HMM 的 Shadow 怎么部署？ | [AMD-B2 硬件替代指南](amd-gpu-asan-hardware-fallback.md) | Shadow 映射、生命周期与可恢复缺页边界 |
 | Intel 的 GPU Sanitizers 有哪些成熟实现？ | [Intel oneAPI 设备端 Sanitizers](intel-oneapi-device-sanitizers.md) | **Intel 版本化能力与限制的专题来源**，不创建第四种空间算法 |
 | 如何改 Compiler/UMD/KMD/Device Runtime？ | [真实 GPU 组件实施指南](real-gpu-components-implementation.md) | 工程接口、执行点、失败终态与职责分工 |
-| 需要综合查阅论文、算法与 S01～S28 原理？ | [23章主研究报告](llvm-gpu-sanitizer-research.md) | **研究汇编/深入材料**，不作为分类或厂商版本状态的重复权威入口 |
+| 需要综合查阅论文、算法与 S01～S28 原理？ | [23章主研究报告](llvm-gpu-sanitizer-research.md) | **研究汇编/深入材料**；§18仅保留28个案例摘要，详细规范由各 Sxx README 维护 |
 | 各厂商原始证据在哪里？ | [厂商核验笔记](research-notes/vendors.md)、[来源登记](research-notes/vendors_sources.json) | 原始证据登记与历史调查；新增专题以各自版本化文档为准 |
 | 28 个案例如何编译、执行和统计？ | [S01～S28 样例说明](../samples/README.md) | 自研目标的待验证案例，保留合法对照与错误版本 |
 | NVIDIA 官方代码从哪里引入？ | [官方独立回归组](../tests/upstream/nvidia/README.md) | 上游版本、许可、NV-* 案例；不混入 S01～S28 |
@@ -20,11 +20,12 @@
 
 ## 规范优先级与重复内容处理原则
 
-1. **分类冲突：** 以 `core-design-comparison.md` 为准；绝不将 Intel/MUSA 功能表解释成第四种基础空间算法。
-2. **厂商版本冲突：** 以具体版本的官方文档和专题页为准；如 Intel 2026.0 本页，同时保留原始 URL 和已知支持范围。
-3. **实现责任冲突：** 以组件实施指南和已实现源码为准；研究报告中的概念伪代码不得自动当作已交付功能。
-4. **测试状态冲突：** 以特定 Commit、真实 GPU 原始执行日志、CI 证据为准；普通 CPU 静态 CI 不等于 GPU 检测通过。
-5. **历史材料：** `research-notes/` 用于记录取证过程，避免与新专题页并行维护第二份完整实现说明。
+1. **场景详情冲突：** 每个 Sxx 的详细场景、代码对照与验收只以 `samples/Sxx/README.md` 为准；`samples/manifest.json` 为厂商工具和结果预期的可执行依据，主稿 §18 仅保留索引。
+2. **分类冲突：** 以 `core-design-comparison.md` 为准；绝不将 Intel/MUSA 功能表解释成第四种基础空间算法。
+3. **厂商版本冲突：** 以具体版本的官方文档和专题页为准；如 Intel 2026.0 本页，同时保留原始 URL 和已知支持范围。
+4. **实现责任冲突：** 以组件实施指南和已实现源码为准；研究报告中的概念伪代码不得自动当作已交付功能。
+5. **测试状态冲突：** 以特定 Commit、真实 GPU 原始执行日志、CI 证据为准；普通 CPU 静态 CI 不等于 GPU 检测通过。
+6. **历史材料：** `research-notes/` 用于记录取证过程，避免与新专题页并行维护第二份完整实现说明。
 
 ## 文档整理建议（按优先级；不在本次直接删改历史资料）
 
