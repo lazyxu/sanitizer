@@ -1,5 +1,12 @@
 # GPU Sanitizer文稿修订记录
 
+## v2.8 · 2026-10-23 · 最终Markdown导航、进度与审计一致性
+
+- 新增 [Markdown 本地链接与章节锚点校验](../scripts/validate_markdown_links.py)，支持自动生成的 Unicode 标题、重复标题后缀、显式 HTML ID、同文件和跨文件相对链接；代码块示例不误计为真实导航，并纳入 CPU CI 及单元测试。
+- 恢复[主研究报告](llvm-gpu-sanitizer-research.md)目录中的 `#component-estimates` 和 `#roadmap` 两个稳定锚点；保留全部 23 章、28 个 Sxx 标题、案例深链接和原有算法分类。
+- 更新 [研究进度](research-progress.md) 的时间与 v2.2～v2.8 文档里程碑；区分已完成的文档整理与未交付的自研 GPU Checker、D1/D2、C/E 和条件性硬件能力。
+- 正式软件成本继续采用 [v1.8 预算 JSON](estimates-v1.8.json)，只刷新 v2.8 文档审计快照及主报告 Blob/行数；真实 GPU 生产验收**按用户决定跳过（未验收）**，仍为 `GPU_NOT_RUN`。
+
 ## v2.7 · 2026-10-23 · 架构工作笔记与主报告组件实现去重
 
 - [历史架构工作笔记](research-notes/architecture.md) 精简为原有 12 节的取证/决策历史及 R1～R9 LLVM/ASan 证据，不再复制 B～F 的详细实现、Shadow/Pointer 代码或正式 kLOC 表；原始判断所依赖的工程边界迁至通用指南或在主稿保留原理。

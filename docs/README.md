@@ -16,6 +16,7 @@
 | 28 个案例如何编译、执行和统计？ | [S01～S28 样例说明](../samples/README.md)、[S01 唯一案例规范](../samples/S01/README.md) | 各 Sxx README 维护唯一详细场景，manifest 维护厂商结果预期 |
 | NVIDIA 官方代码从哪里引入？ | [官方独立回归组](../tests/upstream/nvidia/README.md) | 上游版本、许可、NV-* 案例；不混入 S01～S28 |
 | CI 依赖什么硬件？验证状态如何？ | [GPU CI 说明](gpu-actions-ci.md)、[实体部署审计](hardware-deployability-audit.md) | 设备/Runner 前提，区分 GPU 实测和 CPU 静态校验 |
+| 如何核验 Markdown 链接与章节锚点？ | [链接校验脚本](../scripts/validate_markdown_links.py)、[文档审计](../scripts/validate_docs.py) | CPU 静态检查文件、同文件与跨文件的 GitHub 标题锚点、旧版 HTML 锚点；不检查外部网页可用性 |
 | 原始架构判断、LLVM 规范证据在哪里？ | [架构研究历史笔记](research-notes/architecture.md) | 保留 12 节历史决策、R1～R9 来源与勘误，不重复维护组件代码或预算 | 
 | 阶段任务、预算、修订记录 | [进度](research-progress.md)、[预算](estimates-v1.8.json)、[修订记录](revision-history.md)、[静态审计快照](validation-report.json) | 各有用途；旧预算数值是历史估计，不代表已完成开发 |
 
@@ -39,6 +40,7 @@
 | P0（已完成） | [AMD 硬件专题](amd-gpu-asan-hardware-fallback.md) 只维护 XNACK/HMM、稀疏映射和官方运行配置；设备检查代码归 [组件指南](real-gpu-components-implementation.md) | 不再复制两套 Compiler/Device/UMD/KMD/Reporter 伪代码 |
 | P0（已完成） | 对 NVIDIA、AMD、Intel 和 MUSA 的厂商事实采用统一 `vendor_profiles` 字段；主研究只保留技术结论，历史笔记缩为对照与修正 | 跨厂商版本、能力和设备条件均可追溯到来源 ID，且无需维护三张支持表 |
 | P0（已完成） | [历史架构笔记](research-notes/architecture.md) 去除同义伪代码和 kLOC 表，主报告第8～17章仅留研究模型与决策，设备 ABI/实现归[组件指南](real-gpu-components-implementation.md) | 研究证据 R1～R9 与长期实现契约分开维护 |
+| P0（已完成） | [主研究报告](llvm-gpu-sanitizer-research.md) 补齐第16、20章旧目录锚点；[自动化链接审计](../scripts/validate_markdown_links.py)覆盖本地文件、章节片段与历史显式ID | 文件存在但章节无法跳转的问题纳入 CI 防回归 |
 | P2 | 评估将历史估算、修订记录、审计输出移入归档区；移动前先更新所有链接和校验脚本 | 降低入口噪声，保留 Git 历史与审计可追溯性 |
 
 **本页是导航与整理规则，不是新增 GPU 功能或已完成全部文档重构的声明。**

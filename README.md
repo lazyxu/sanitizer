@@ -1,6 +1,6 @@
 # LLVM GPU Sanitizer：自研真实GPU技术设计
 
-**版本 v2.7 · 2026-10-23｜设计与样例阶段；目标自研GPU真实检查器未实现，GPU_NOT_RUN。**
+**版本 v2.8 · 2026-10-23｜设计与样例阶段；目标自研GPU真实检查器未实现，GPU_NOT_RUN。**
 
 本项目为自研 LLVM GPU Backend、GPU Device Runtime、UMD/KMD及可能涉及的Firmware/RTL，研究GPU空间/时间内存错误、Initcheck、Racecheck和Synccheck。**先明确参考设计而不重复创造产品路线：重点参考2家厂商（NVIDIA、AMD），基础空间检查采用3种值得比较的厂商技术配置。**
 
@@ -37,11 +37,11 @@
 - [NVIDIA 官方独立回归组](tests/upstream/nvidia/README.md)：原样保存上游 Memcheck/Racecheck/Initcheck/Synccheck 与许可证；NV-* 单独编号、诊断与 GPU 证据分开记录，真实 GPU 未验证。
 - [S01～S28 的CUDA与HIP设备程序](samples/README.md)：每种错误均区分非法示例、合法反例、工具能力/UNKNOWN；源码存在不等于GPU已检出。
 - [GPU硬件Actions](.github/workflows/gpu-hardware.yml)与[Runner说明](docs/gpu-actions-ci.md)：需实际有GPU的Runner与受支持的工具链。NVIDIA检验既有CUDA工具；AMD官方ASan要求匹配的`xnack+`运行配置；这些并不等于自研GPU目标Checker已完成。
-- CPU静态CI：[样例与文档检查](.github/workflows/sample-structure.yml)；可运行`python3 scripts/validate_docs.py`和`python3 scripts/validate_layout.py`，**不能替代真实GPU功能或性能验收**。
+- CPU静态CI：[样例与文档检查](.github/workflows/sample-structure.yml)；`validate_docs.py`、`validate_layout.py` 检查结构与预算，新增 [Markdown 文件/章节链接检查](scripts/validate_markdown_links.py) 验证本地文件及 GitHub 标题锚点，**均不能替代真实GPU功能或性能验收**。
 
 ## 命令执行追踪：-v / --verbose
 
-仓库 `scripts/` 内 **7 个自有 Bash / Python 脚本均支持 `-v` 和 `--verbose`**。默认输出不变，启用后可看到 Docker、`nvcc`、`hipcc`、`ldd`、`compute-sanitizer`、`nvidia-smi` 等外部命令；静态检查仅打印读取的文件路径。
+仓库 `scripts/` 内 **8 个自有 Bash / Python 脚本均支持 `-v` 和 `--verbose`**。默认输出不变，启用后可看到 Docker、`nvcc`、`hipcc`、`ldd`、`compute-sanitizer`、`nvidia-smi` 等外部命令；静态检查仅打印读取的文件路径。
 
 ~~~bash
 # 主测试集 28 例：打印Docker和子进程命令
@@ -55,6 +55,8 @@ python3 scripts/run_upstream_nvidia.py --case all --strict --verbose
 # 不启动任何GPU内核的静态校验
 python3 scripts/validate_docs.py -v
 python3 scripts/validate_layout.py -v
+# 检查所有Markdown相对链接和章节片段（不访问外网）
+python3 scripts/validate_markdown_links.py -v
 ~~~
 
 Python 使用 Shell 安全引用输出命令，自研 checker 的命令行参数出于安全考虑隐藏，执行时仍传入原始参数。verbose 可能包含本机路径，不应分享包含秘密的日志。`-v` 不改变危险测试默认跳过、检测分类和 GPU 运行证据。
