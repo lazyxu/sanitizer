@@ -95,7 +95,7 @@ TSan 不等同于 NVIDIA `racecheck` 的 Shared Memory Hazard 检查，更不等
 2. **执行模型改变：** Device ASan 启用时，Kernel 并发会被强制串行化。不能用开启 ASan 后的运行结果，证明生产态多 Kernel 竞态已覆盖或性能无损。
 3. **私有内存压力：** Device ASan 可能增加 Private Memory 使用量、降低可用的最大 Workgroup Size，触发 `UR_RESULT_ERROR_INVALID_WORK_GROUP_SIZE`。
 4. **可能主动跳过部分检查：** GPU Workgroup 数量很大时，ASan 的 Local/Private 越界检查和 MSan 的 Local/Private 未初始化检查**可能被跳过**。因此退出码正常、无报告并不等于这些访问均经过检查。
-5. **运行时版本差异：** 当前 UR 通用规范在 Sanitzers 章节仍把 MSan/TSan 层标成 *planned*，但 Intel 2026.0 编译器文档列出了 MSan/TSan 的可执行示例。这反映不同文档和集成路径的进度口径，不能简单宣布所有 UR Backend 都已支持相同的设备 Sanitizer。
+5. **运行时版本差异：** 当前 UR 通用规范在 Sanitizers 章节仍把 MSan/TSan 层标成 *planned*，但 Intel 2026.0 编译器文档列出了 MSan/TSan 的可执行示例。这反映不同文档和集成路径的进度口径，不能简单宣布所有 UR Backend 都已支持相同的设备 Sanitizer。
 
 对上述限制，实验结果应同时记录 **Compiler/Runtime 版本、GPU 型号、Backend、Selector、实际并发模式、被跳过的访问、Report Buffer 完整性和实际 GPU 设备日志**。文档中的 Supported 不等于本项目已经实机验证。
 

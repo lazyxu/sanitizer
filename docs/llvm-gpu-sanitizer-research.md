@@ -334,6 +334,8 @@ Host allocation/free → GPU可见shadow/redzone更新
 
 ### 4.3 Intel oneAPI：设备侧 Compiler Sanitizers 与 Unified Runtime 层的责任边界
 
+**完整 Intel 2026.0 能力表、SYCL/OpenMP 构建运行、UR 架构、运行限制及官方证据请优先参见 [Intel oneAPI 设备端 Sanitizers](intel-oneapi-device-sanitizers.md)。** 本节仅保留研究所需的跨厂商组件分工摘要，不另维护第二份完整的版本化 Intel 专题。
+
 [2026 oneAPI Device-Side Compiler Sanitizers](https://www.intel.com/content/www/us/en/docs/dpcpp-cpp-compiler/developer-guide-reference/2026-0/device-side-compiler-sanitizers.html) 明确给出 SYCL／OpenMP 的 device ASan/MSan/TSan 编译开关、支持空间、选项和运行时错误类别，ASan可报告 device-global、buffer、USM、local/private及use-after-free等在其适用平台下的错误。[I01]
 
 [oneAPI Unified Runtime 规范](https://oneapi-src.github.io/unified-runtime/core/INTRO.html#sanitizers) 的原文：

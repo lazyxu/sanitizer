@@ -73,6 +73,8 @@ LLNL 的 rocmcc7.0.0 示例额外给 ASan 库 rpath；运行用 `HSA_XNACK=1 ASA
 
 ## 6. Intel：覆盖丰富，但配置与检查退化必须一起列
 
+> 以下为 2026-10-20 历史核验记录。当前版本化详细资料见 [Intel oneAPI 设备端 Sanitizers 专题](../intel-oneapi-device-sanitizers.md)，2026-10-23 已复核 Intel 2026.0 官方说明。本文保留取证历史，不并行维护正式详细规范。
+
 2026.0 device ASan 的正式表涵盖 global/USM/local/private OOB、misaligned、NULL、UAF、invalid argument、leak；SYCL另有 bad-context/bad-free/double-free/buffer，OpenMP不应照抄这些SYCL特有项。MSan自2025.1，local/private自2025.2；TSan自2025.2支持 device OpenMP/SYCL，侧重 device USM。
 
 总章限制：Linux、Ponte Vecchio GPU单卡配置；ASan强制kernel顺序执行；private memory增加可降低最大workgroup并触发 INVALID_WORK_GROUP_SIZE；GPU workgroups多时可跳过ASan local/private OOB与MSan local/private UUM检查。GPU元数据大小和运行配置会影响资源及检测能力。OpenMP需 Unified Runtime plugin和UR_ENABLE_LAYERS，SYCL/CPU及GPU selector与OpenMP不可混用。

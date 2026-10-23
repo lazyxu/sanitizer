@@ -252,6 +252,28 @@ check("三类映射取舍" in guide and "可恢复GPU缺页" in guide,
       "S01指南需引用XNACK含义及三项Shadow映射取舍")
 check("不新增第四种" in canonical,
       "核心分类不能把XNACK Shadow映射策略另算新算法")
+# 文档索引与 Intel 正式专题的覆盖防回归，不把厂商能力归为第四种基础空间算法。
+docs_index = read("docs/README.md")
+intel_guide = read("docs/intel-oneapi-device-sanitizers.md")
+vendor_registry = load_json("docs/research-notes/vendors_sources.json")
+vendor_notes = read("docs/research-notes/vendors.md")
+for required in ("core-design-comparison.md", "intel-oneapi-device-sanitizers.md",
+                 "llvm-gpu-sanitizer-research.md", "real-gpu-components-implementation.md",
+                 "samples/README.md", "gpu-actions-ci.md", "vendors_sources.json"):
+    check(required in docs_index, "统一文档导航缺少入口: " + required)
+for required in ("ASan", "MSan", "TSan", "Ponte Vecchio", "SYCL", "OpenMP",
+                 "Unified Runtime", "Level Zero", "2026.0", "-fsanitize=address",
+                 "-fsanitize=memory", "-fsanitize=thread", "串行", "跳过", "GPU_NOT_RUN"):
+    check(required in intel_guide, "Intel 技术专题缺少公开限制或实现入口: " + required)
+vendor_ids = {s.get("id") for s in vendor_registry.get("sources", []) if isinstance(s, dict)}
+check({"INTEL-DEVICE", "INTEL-LIMITS", "INTEL-UR"} <= vendor_ids,
+      "Intel 专题应登记编译器功能、系统限制和 UR 的三项官方来源")
+check("intel-oneapi-device-sanitizers.md" in root_readme
+      and "intel-oneapi-device-sanitizers.md" in canonical
+      and "intel-oneapi-device-sanitizers.md" in main
+      and "intel-oneapi-device-sanitizers.md" in vendor_notes,
+      "主入口、唯一分类、主研究和历史笔记必须引用同一个 Intel 专题")
+
 check("amd-gpu-asan-hardware-fallback.md" in root_readme
       and "amd-gpu-asan-hardware-fallback.md" in guide
       and "amd-gpu-asan-hardware-fallback.md" in main,

@@ -68,7 +68,7 @@
 
 ## 5. Intel与摩尔线程的正确位置
 
-- **Intel oneAPI**：[2026.0 Device-Side Compiler Sanitizers](https://www.intel.com/content/www/us/en/docs/dpcpp-cpp-compiler/developer-guide-reference/2026-0/device-side-compiler-sanitizers.html)公开GPU端ASan、MSan、TSan与global/local/private/UAF等能力；[系统要求与限制](https://www.intel.com/content/www/us/en/docs/dpcpp-cpp-compiler/developer-guide-reference/2026-0/compiler-sanitizers.html)明确部分GPU/运行模式限制，包括设备ASan下强制顺序执行的并发影响。**参考其编译器、Unified Runtime/设备库与功能覆盖**，不凭功能表推导全新第四种基础算法。
+- **Intel oneAPI**：详细机制、支持范围和运行命令见[独立 Intel 技术专题](intel-oneapi-device-sanitizers.md)。[2026.0 Device-Side Compiler Sanitizers](https://www.intel.com/content/www/us/en/docs/dpcpp-cpp-compiler/developer-guide-reference/2026-0/device-side-compiler-sanitizers.html)公开GPU端ASan、MSan、TSan与global/local/private/UAF等能力；[系统要求与限制](https://www.intel.com/content/www/us/en/docs/dpcpp-cpp-compiler/developer-guide-reference/2026-0/compiler-sanitizers.html)明确部分GPU/运行模式限制，包括设备ASan下强制顺序执行的并发影响。**参考其编译器、Unified Runtime/设备库与功能覆盖**，不凭功能表推导全新第四种基础算法。
 - **摩尔线程 MUSA Compute Sanitizer**：[官方用户指南](https://docs.mthreads.com/mooreperf/mooreperf-doc-online/musa_compute_sanitizer/user_guide/)公开global越界、MUSA API错误、需单独开启的显存泄漏。**具体内部Shadow/Runtime patch/来源分析未披露，必须标未知**，参考其对外诊断类型与报告质量，不另增基础算法。
 - **Initcheck / Racecheck / Synccheck**：是不同检查目标（定义性、HB/冲突、barrier/mask/phase），**不由任一基础Address Bounds Checker自动提供**。
 

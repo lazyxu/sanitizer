@@ -20,6 +20,9 @@
 
 ## 主要文档（避免重复方案计数）
 
+**建议首先阅读 [统一文档导航](docs/README.md)**，再按方案、厂商实现、硬件部署、测试或预算选择权威文档；主研究报告和历史笔记不作为第二套分类依据。
+
+- [Intel oneAPI 设备端 ASan/MSan/TSan 专题](docs/intel-oneapi-device-sanitizers.md)：官方 C/C++ 2026.0 设备能力、SYCL/OpenMP 编译运行示例、Unified Runtime 协作及限制，定位为成熟辅助参考。
 - **[核心方案与能力比较](docs/core-design-comparison.md)**：现行计数、来源、是否完全一致、三种参考配置能力表、D2/E/F与Intel/MUSA定位。
 - [S01厂商实施指南](docs/S01-vendor-implementation-guide.md)：NVIDIA运行时与编译期差异、AMD Shadow、无XNACK的软件替代、B1/I边界及逐组件伪代码。
 - [完整技术研究（23章、28场景）](docs/llvm-gpu-sanitizer-research.md)：目标ISA/内存语义、元数据、实现与性能、验收细节。

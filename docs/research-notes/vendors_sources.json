@@ -239,7 +239,7 @@
       "id": "INTEL-DEVICE",
       "title": "Device-Side Compiler Sanitizers",
       "url": "https://www.intel.com/content/www/us/en/docs/dpcpp-cpp-compiler/developer-guide-reference/2026-0/device-side-compiler-sanitizers.html",
-      "version": "C/C++2026.0; document date2026-04-28",
+      "version": "C/C++2026.0; document date2026-04-28; Intel references rechecked 2026-10-23",
       "sections": [
         "Device-Side AddressSanitizer",
         "Device-Side MemorySanitizer",
@@ -258,7 +258,7 @@
       "id": "INTEL-LIMITS",
       "title": "Compiler Sanitizers",
       "url": "https://www.intel.com/content/www/us/en/docs/dpcpp-cpp-compiler/developer-guide-reference/2026-0/compiler-sanitizers.html",
-      "version": "C/C++2026.0",
+      "version": "C/C++2026.0; Intel references rechecked 2026-10-23",
       "sections": [
         "System Requirements",
         "Limitations"
@@ -270,7 +270,25 @@
         "large workgroup counts may cause local/private ASan/MSan checks to be skipped",
         "OpenMP C/C++ GPU-only execution"
       ]
+    },
+    {
+      "id": "INTEL-UR",
+      "title": "Unified Runtime Specification — Introduction / Sanitizers",
+      "url": "https://oneapi-src.github.io/unified-runtime/core/INTRO.html#sanitizers",
+      "version": "Live UR specification, checked 2026-10-23; independent of Intel DPC++/C++ 2026.0",
+      "sections": [
+        "Sanitizers",
+        "Objective",
+        "Error Handling"
+      ],
+      "verified_claims": [
+        "Unified Runtime provides device sanitizer runtime integration, including an ASan layer",
+        "ASan support for adapters depends on UR virtual memory support and device shadow mapping",
+        "Some MSan/TSan layers are labelled planned in this specification while Intel versioned compiler documentation supplies product-specific commands"
+      ],
+      "caution": "Do not infer identical device/adapter support from the UR specification and the Intel 2026.0 compiler guide."
     }
   ],
-  "archive_note": "Research working notes, not the final specification. May contain early candidate conclusions. Refer to docs/llvm-gpu-sanitizer-research.md for final judgments. Internal retrieval identifiers were removed; no third-party full text is included."
+  "archive_note": "Research working notes, not the final specification. May contain early candidate conclusions. Refer to docs/llvm-gpu-sanitizer-research.md for final judgments. Internal retrieval identifiers were removed; no third-party full text is included.",
+  "intel_rechecked_at": "2026-10-23"
 }
