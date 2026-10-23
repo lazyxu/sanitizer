@@ -1,6 +1,6 @@
 # 自研 GPU Sanitizer：真实硬件实施的逐组件关键代码
 
-**版本：v2.5 · 2026-10-23 · 状态：设计与伪代码，尚未在目标 GPU 上实现或验收。**
+**版本：v2.7 · 2026-10-23 · 状态：设计与伪代码，尚未在目标 GPU 上实现或验收。**
 
 本文件只讨论能够随应用代码在**实体 GPU 执行**的设备检查器，或由实体 GPU 已具备的 MMU/Tag/Bounds 机制执行的检查。软件责任以 Compiler、KMD、UMD 三组计费；Device Runtime 虽由工具链或 UMD 交付，其检查指令**实际在 GPU 执行**。设备固件、RTL/硬件设计、CLI/测试作为跨组件专项，不能混为编译器功能。
 
@@ -44,6 +44,7 @@ struct SanReport {
 ~~~
 
 实际 ABI 还必须约定版本、模块 Build ID、原 PC / Patch PC 映射、字段对齐、设备报告缓冲区的原子写入及完成顺序；Global/Shared/Private 地址空间和活动 Mask 依 ISA 及 Kernel 约束编码。未覆盖、资源故障、GPU 未运行及检测命中必须区分状态，不能把零条 Report 当成已完成检查。
+**对象元数据的唯一扩展口径：** 上面的 `SanObject` 是用于说明检查器调用的基础字段，并非已经冻结的真实 ABI。Pool Suballocation、Tensor View、Import/Peer 与诊断需要根据实际支持的对象模型追加 `parent_object_id`、`backing_bo_id`、`mapping_id`、`address_space`、`permissions`、`allocation_site` 和可选 `view_shape/stride`。**这些字段必须按作用域和版本扩展，不能把同一个 GPUVA 或 BO Handle 误认为不可复用的 Allocation ID。** 主研究 §8.2/§17 用到的 32B 热对象/64B 完整对象只是预算示例，最终结构大小、Alignment 和版本以真实 Target ABI 复核，不可作为已有产品布局宣称。
 ## 2. Compiler：LLVM IR Pass + 后端最终访存审计（B/D/E；纯 C 可零修改）
 
 **修改位置**：Clang/LLVM GPU target sanitizer 选项，IR/MIR pass 注册，目标地址空间/指针表示，instrumentation lowering，机器指令覆盖表，DebugLoc 与 module capability manifest。IR 阶段插入检查只是必要条件；最终 ISA 必须覆盖原子、宽向量、predication、masked/EVL、异步/特殊 intrinsic。
@@ -105,6 +106,13 @@ bool withinOriginalObject(const PointerMeta& p, uint64_t width) {
 
 真实产品须覆盖声明支持的 phi/select、load/store pointer、ABI 和原子值/身份配对；不知道的来源标为 UNKNOWN/PARTIAL，而不是为旧指针凭当前地址重新选择活对象。
 
+### 2.1 目标 LLVM 状态传播与 Mask/Atomic 约束
+
+编译器实现应分别传递 **逻辑活动 Lane**、**逐 Vector Element Mask**、**EVL** 与机器指令 Predicate；部分目标在 Whole/Quad Wave Lowering 时改变硬件 EXEC，不能从当前 EXEC 直接推断应用语义下每个 Lane 都实际访存。对 Masked-Off 元素**不得加载 Pointer Metadata/Shadow**；真实访问的宽度、Offset 和 AddressSpace 必须一致。LLVM `convergent` 属性不自动提供 Barrier 或 Memory Fence。[研究 §7.2](llvm-gpu-sanitizer-research.md)、[LLVM Convergent Operations](https://llvm.org/docs/ConvergentOperations.html)。
+
+D2 的指针值和历史身份如要经内存传递，必须明确定义 `load/store`、`memcpy/memmove`、部分拷贝、`inttoptr/ptrtoint`、External ABI 和 Atomic Pointer 的传播闭包；普通 Debug Metadata 不能被当作会随指针值保存的可执行状态。LLVM 的 [pointers with external state](https://llvm.org/docs/LangRef.html#pointers-with-external-state) 可作为正式语义依据，但只有选用这类 Target 指针表示并落实 Backend/ABI 合约后才能使用对应保证。
+
+**Atomic Pointer 的发布**需要将 Pointer Value 与 Object ID/Epoch 视为一个一致对象（例如受支持的 Wide Atomic/CAS 或 Atomic 发布 Immutable Descriptor Handle）。两个互不关联的 Atomic Store 不会形成一个原子配对；任何依赖锁或版本协议的实现都必须覆盖全部参与方并验证 SIMT Forward Progress，未插桩 Writer 应明确降级。[研究 §12.3～12.4](llvm-gpu-sanitizer-research.md)
 ## 3. GPU Device Runtime：实际 GPU ISA 检查 + 稳定报告（B/C/D/E）
 
 **修改位置**：专用设备检查库 ABI、设备端 shadow/descriptor 索引、报告环形缓冲、无递归元数据访存标记、SIMT 安全错误路径。Device runtime 调用必须成为真实 GPU 可执行代码而非 Host 回调。
