@@ -6,6 +6,7 @@ import argparse
 import html
 from pathlib import Path
 import re
+import sys
 import unicodedata
 from urllib.parse import unquote, urlsplit
 
@@ -81,7 +82,7 @@ def normalize_destination(value: str) -> str:
     return html.unescape(re.split(r"\s+['\"]", value, maxsplit=1)[0])
 
 
-def check_markdown_links(root: Path) -> tuple[int, int, list[str]]:
+def check_markdown_links(root: Path, verbose: bool = False) -> tuple[int, int, list[str]]:
     """Return (scanned Markdown files, local fragment links, errors)."""
     root = root.resolve()
     paths = sorted(root.rglob("*.md"))
@@ -90,6 +91,8 @@ def check_markdown_links(root: Path) -> tuple[int, int, list[str]]:
     for path in paths:
         if any(part in {".git", "node_modules", ".venv"} for part in path.parts):
             continue
+        if verbose:
+            print(f"+ inspect {path.relative_to(root)}", file=sys.stderr)
         texts[path] = path.read_text(encoding="utf-8")
         ids[path] = anchors_for(texts[path])
     errors: list[str] = []
@@ -122,8 +125,10 @@ def check_markdown_links(root: Path) -> tuple[int, int, list[str]]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", nargs="?", type=Path, default=Path(__file__).resolve().parents[1])
+    parser.add_argument("-v", "--verbose", action="store_true",
+                        help="Show scanned Markdown paths")
     args = parser.parse_args()
-    docs, fragments, errors = check_markdown_links(args.root)
+    docs, fragments, errors = check_markdown_links(args.root, verbose=args.verbose)
     for issue in errors:
         print("MARKDOWN_LINK_FAILURE:", issue)
     if errors:
