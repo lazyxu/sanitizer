@@ -20,7 +20,7 @@ python3 scripts/run_samples.py --backend rocm --case S15 --mode both --strict
 
 ## 真实场景、错误原因、可检测算法、修复对照及实现要求
 
-以下章节直接对应[主调研文档 §18.15](../../docs/llvm-gpu-sanitizer-research.md#case-s15)的正式原理与验收设计。**其中的CUDA风格伪代码和受控allocator不一定与本目录中可编译程序逐行相同**；两者须按相同违规语义而非源码文字对齐。实际运行前确认目标机器码保留相关访存，不可以假设未定义行为一定触发。
+**本 README 是 S15 的唯一详细技术与验收规范。** [主研究 §18.15](../../docs/llvm-gpu-sanitizer-research.md#case-s15) 仅保留场景摘要与稳定入口。本页伪代码与可编译 CUDA/HIP 程序按**相同违规语义**对齐，不保证逐行一致；真机验收必须确认目标访存确实执行，不能把被优化消除的操作当成已检查。
 
 ### 18.15 S15：global同block、跨block竞争与合法atomic
 
@@ -43,7 +43,7 @@ wait_reset_to_zero_and_wait(x);
 good_increment<<<2, 1>>>(x);              // 独立合法反例：完成后计数应为2
 ~~~
 
-**实现路线与观测点。** 真实GPU Racecheck使用global规范对象和全grid线程身份维护冲突历史，消费真实同步scope、ordering和barrier事件；block barrier只向同block参与者提供同步。C可在可解码指令处提取load/store/atomic宽度及scope，再经runtime汇总HB；E结合编译器语义、缺失模块补丁和UMD launch事件。两者都必须另建设Racecheck，B的可寻址位和D1/D2对象检查只能确认访问对象，不能判定竞争。[P02][P03]
+**实现路线与观测点。** GPU Racecheck设备库使用global规范对象和全grid线程身份维护冲突历史，消费真实同步scope、ordering和barrier事件；block barrier只向同block参与者提供同步。C可在可解码指令处提取load/store/atomic宽度及scope，再经runtime汇总HB；E结合编译器语义、缺失模块补丁和UMD launch事件。两者都必须另建设Racecheck，B的可寻址位和D1/D2对象检查只能确认访问对象，不能判定竞争。[P02][P03]
 
 **修复、报告与边界。** `good_increment`用相同适用scope的原子操作访问同一计数器，不应报race；用block-scope原子跨block通信仍不足。relaxed仅保护该计数器：若用flag发布普通payload，仍须建立合适scope的release/acquire关系，且acquire读到对应发布值。[N08] 报告两端PC/block/thread、对象内字节、atomic属性和未成立的HB。未建模锁、跨domain同步、历史溢出或未插桩模块应降级；概率重复访问未报错不能作无竞争证明。[P08]
 

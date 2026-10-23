@@ -32,7 +32,7 @@ python3 scripts/run_samples.py --backend rocm --case S01 --mode both --strict
 
 ## 真实场景、错误原因、可检测算法、修复对照及实现要求
 
-以下章节直接对应[主调研文档 §18.1](../../docs/llvm-gpu-sanitizer-research.md#case-s01)的正式原理与验收设计。**其中的CUDA风格伪代码和受控allocator不一定与本目录中可编译程序逐行相同**；两者须按相同违规语义而非源码文字对齐。实际运行前确认目标机器码保留相关访存，不可以假设未定义行为一定触发。
+**本 README 是 S01 的唯一详细技术与验收规范。** [主研究 §18.1](../../docs/llvm-gpu-sanitizer-research.md#case-s01) 仅保留场景摘要与稳定入口。本页伪代码与可编译 CUDA/HIP 程序按**相同违规语义**对齐，不保证逐行一致；真机验收必须确认目标访存确实执行，不能把被优化消除的操作当成已检查。
 
 ### 18.1 S01：Global 对象头部与尾部越界
 
@@ -72,6 +72,12 @@ S01判断一次实际生效的4B Global访问是否越过64B逻辑对象；对�
 **首批真实硬件验收：** 在实体GPU运行`a[0]`、`a[15]`合法对照和`a[-1]`、`a[16]`非法访问，获取设备checker报告、PC、访问宽度、lane、异步metadata顺序和真实失败终止。没有真实GPU结果不得报告为已检出。
 
 [所有生产组件的关键实现代码/伪代码及汇总表](../../docs/real-gpu-components-implementation.md)
+
+**从原主报告归并的补充边界：**
+
+实际对象只有64字节，GPUVA页命中不等于逻辑对象访问合法。必须在目标GPU执行的Global Store之前做相应检查。
+
+**第一交付工作包：** LLVM在真实Global Store前插入设备Shadow检查，UMD发布64B逻辑长度与redzone，KMD复用正规映射、提交及错误契约。直接在实体GPU运行 `a[0]`、`a[15]`、`a[-1]`、`a[16]`，核对PC、lane、byte宽度、报告和安全终止。完整代码见[逐组件伪代码](../../docs/real-gpu-components-implementation.md)。
 
 ## 验收需要留下什么证据？
 

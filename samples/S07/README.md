@@ -20,7 +20,7 @@ python3 scripts/run_samples.py --backend rocm --case S07 --mode both --strict
 
 ## 真实场景、错误原因、可检测算法、修复对照及实现要求
 
-以下章节直接对应[主调研文档 §18.7](../../docs/llvm-gpu-sanitizer-research.md#case-s07)的正式原理与验收设计。**其中的CUDA风格伪代码和受控allocator不一定与本目录中可编译程序逐行相同**；两者须按相同违规语义而非源码文字对齐。实际运行前确认目标机器码保留相关访存，不可以假设未定义行为一定触发。
+**本 README 是 S07 的唯一详细技术与验收规范。** [主研究 §18.7](../../docs/llvm-gpu-sanitizer-research.md#case-s07) 仅保留场景摘要与稳定入口。本页伪代码与可编译 CUDA/HIP 程序按**相同违规语义**对齐，不保证逐行一致；真机验收必须确认目标访存确实执行，不能把被优化消除的操作当成已检查。
 
 ### 18.7 S07：Private／stack 越界与返回后使用指针
 
@@ -53,7 +53,7 @@ __global__ void s07_uar(uint32_t *out) {
 // s07_uar<<<1,32>>>(out);
 ~~~
 
-**哪里不对、怎样检。** 第一段属于 M3，D1 检查 `a` 的 16 B bounds；第二段属于 M5，D2 需保留指针预期的 thread／frame／epoch 并发现 frame 已结束。另一种真正可部署的方案是由B/D编译器在实际设备代码中生成frame对象bounds、frame生存期与call/return身份检查。B对第一段需要具备实际栈对象Bounds检查；返回后的旧指针还须保留frame对象生命周期与来源身份，单纯检查当前地址不保证检出。[L01][L05]
+**哪里不对、怎样检。** 第一段属于 M3，D1 检查 `a` 的 16 B bounds；第二段属于 M5，D2 需保留指针预期的 thread／frame／epoch 并发现 frame 已结束。另一种真正可部署的方案是由B/D编译器在实际设备代码中生成frame对象bounds、frame生存期与call/return身份检查。B的stack Redzone可以检查第一段；返回后检查还须实现延迟复用的 frame／fake-stack 等机制，普通栈地址重新变为有效后，单纯 poison 不再保证检出。[L01][L05]
 
 **组件观测。** compiler 区分源级局部对象、spill 槽及真实 frame 生存期；deviceRT 按 logical thread 和 frame 管理状态；UMD 提供 launch／线程上下文，heap 分配表不能代替栈对象表。相同数值栈偏移属于不同线程时，必须保留不同身份。
 

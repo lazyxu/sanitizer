@@ -78,35 +78,39 @@ CPU-only静态工作流有成功记录，仅表明清单、语法和虚构日志
 
 **这些分类代表预期而非实测：** 对每个支持集的`detect`，仍必须在真实目标硬件上获得日志才能确认。
 
+**文档分工：** 这里仅汇总厂商工具与预期；每例的**唯一详细技术说明、错误/合法对照、实际子范围、组件职责与验收规范**由本目录的独立 `Sxx/README.md` 维护。主研究[第18章](../docs/llvm-gpu-sanitizer-research.md#detection-scenarios)只提供结论与跳转，机器可读预期以 [manifest](manifest.json) 为准。
+
+**28个独立案例入口：** [S01](S01/README.md) · [S02](S02/README.md) · [S03](S03/README.md) · [S04](S04/README.md) · [S05](S05/README.md) · [S06](S06/README.md) · [S07](S07/README.md) · [S08](S08/README.md) · [S09](S09/README.md) · [S10](S10/README.md) · [S11](S11/README.md) · [S12](S12/README.md) · [S13](S13/README.md) · [S14](S14/README.md) · [S15](S15/README.md) · [S16](S16/README.md) · [S17](S17/README.md) · [S18](S18/README.md) · [S19](S19/README.md) · [S20](S20/README.md) · [S21](S21/README.md) · [S22](S22/README.md) · [S23](S23/README.md) · [S24](S24/README.md) · [S25](S25/README.md) · [S26](S26/README.md) · [S27](S27/README.md) · [S28](S28/README.md)。
+
 ## 3. 场景和检测机制对应
 
 | 场景 | 内容 | CUDA主要工具 | AMD GPU ASan | 注意 |
 |---|---|---|---|---|
-| S01 | Global头尾越界 | memcheck（预期） | GPU ASan（预期） | 需真实设备报告 |
-| S02 | 16B宽访问跨界 | memcheck（预期） | GPU ASan（预期） | 核对实际ISA宽度 |
-| S03 | 指令对齐 | memcheck（条件） | 条件 | 取决于lowering |
-| S04 | 从A越界进入live B | 不保证 | 不保证 | 需原对象provenance |
-| S05 | 子分配/tensor view | 不保证 | 不保证 | 需逻辑view约束 |
-| S06 | Shared/LDS越界 | memcheck（条件） | 条件 | 空间支持取决于平台 |
-| S07 | Private/stack | memcheck（条件） | 不保证 | GPU私有地址空间 |
-| S08 | 释放后使用 | memcheck（条件） | 条件 | GPU旧VA/硬件fault |
-| S09 | 地址复用旧指针 | 不保证 | 不保证 | 未复用时SKIP |
+| [S01](S01/README.md) | Global头尾越界 | memcheck（预期） | GPU ASan（预期） | 需真实设备报告 |
+| [S02](S02/README.md) | 16B宽访问跨界 | memcheck（预期） | GPU ASan（预期） | 核对实际ISA宽度 |
+| [S03](S03/README.md) | 指令对齐 | memcheck（条件） | 条件 | 取决于lowering |
+| [S04](S04/README.md) | 从A越界进入live B | 不保证 | 不保证 | 需原对象provenance |
+| [S05](S05/README.md) | 子分配/tensor view | 不保证 | 不保证 | 需逻辑view约束 |
+| [S06](S06/README.md) | Shared/LDS越界 | memcheck（条件） | 条件 | 空间支持取决于平台 |
+| [S07](S07/README.md) | Private/stack | memcheck（条件） | 不保证 | GPU私有地址空间 |
+| [S08](S08/README.md) | 释放后使用 | memcheck（条件） | 条件 | GPU旧VA/硬件fault |
+| [S09](S09/README.md) | 地址复用旧指针 | 不保证 | 不保证 | 未复用时SKIP |
 | S10–S11 | Invalid/double GPU free | API错误 | API错误 | 不算kernel GPU检测 |
-| S12 | GPU leak | memcheck leak（条件） | 不保证 | 需要定义检查点 |
-| S13 | 未初始化GPU Global读 | initcheck（预期） | 不支持本类检查 | 并非地址越界 |
-| S14 | Shared数据竞争 | racecheck（预期） | 不支持本类检查 | AMD ASan不是race checker |
+| [S12](S12/README.md) | GPU leak | memcheck leak（条件） | 不保证 | 需要定义检查点 |
+| [S13](S13/README.md) | 未初始化GPU Global读 | initcheck（预期） | 不支持本类检查 | 并非地址越界 |
+| [S14](S14/README.md) | Shared数据竞争 | racecheck（预期） | 不支持本类检查 | AMD ASan不是race checker |
 | S15–S16 | Global和跨queue race | 不保证 | 不保证 | 需要HB检查器 |
 | S17–S18 | Barrier、warp mask错误 | synccheck（条件） | 不支持本类检查 | 可导致hang |
-| S19 | GPU Async Copy缺wait | CUDA synccheck（条件） | 非等价功能占位 | CUDA需SM80，HIP无同等指令demo |
-| S20 | 异步释放次序 | memcheck（条件） | 不保证 | 真实stream时序 |
-| S21 | GPU Atomic越界 | memcheck（预期） | 条件 | Atomic同样检查范围 |
-| S22 | 无实际访存的Mask | **应无错误** | **应无错误** | 测试假阳性 |
-| S23 | Constant/资源边界 | 条件 | 不保证 | 不是完整texture权限测试 |
-| S24 | Host/GPU shared alias | 不保证 | 不保证 | 缺跨CPU/GPU race checker |
-| S25 | Atomic pointer value/identity | 不保证 | 不保证 | 需D2协议 |
-| S26 | 未插桩函数/覆盖缺口 | 条件 | 不保证 | 单TU演示，非完整混合多CU |
-| S27 | Graph replay旧指针 | memcheck（条件） | 不保证 | 可能API拒绝或GPU fault |
-| S28 | 多线程大量越界/日志 | memcheck（条件） | GPU ASan（条件） | 不证明工具元数据OOM |
+| [S19](S19/README.md) | GPU Async Copy缺wait | CUDA synccheck（条件） | 非等价功能占位 | CUDA需SM80，HIP无同等指令demo |
+| [S20](S20/README.md) | 异步释放次序 | memcheck（条件） | 不保证 | 真实stream时序 |
+| [S21](S21/README.md) | GPU Atomic越界 | memcheck（预期） | 条件 | Atomic同样检查范围 |
+| [S22](S22/README.md) | 无实际访存的Mask | **应无错误** | **应无错误** | 测试假阳性 |
+| [S23](S23/README.md) | Constant/资源边界 | 条件 | 不保证 | 不是完整texture权限测试 |
+| [S24](S24/README.md) | Host/GPU shared alias | 不保证 | 不保证 | 缺跨CPU/GPU race checker |
+| [S25](S25/README.md) | Atomic pointer value/identity | 不保证 | 不保证 | 需D2协议 |
+| [S26](S26/README.md) | 未插桩函数/覆盖缺口 | 条件 | 不保证 | 单TU演示，非完整混合多CU |
+| [S27](S27/README.md) | Graph replay旧指针 | memcheck（条件） | 不保证 | 可能API拒绝或GPU fault |
+| [S28](S28/README.md) | 多线程大量越界/日志 | memcheck（条件） | GPU ASan（条件） | 不证明工具元数据OOM |
 
 以上部分样例**仅验证原28场景的一个子情况**；源文件README明确限定，例如S19的HIP源码不具备与CUDA`cp.async`等价的硬件原语，S23未覆盖texture/surface所有边界模式，S26真正混合编译单元需要另加构建夹具，S28尚没有工具内部故障注入能力。不能把“源文件存在”写成“完整场景已经验收”。
 
@@ -117,4 +121,4 @@ CPU-only静态工作流有成功记录，仅表明清单、语法和虚构日志
 - [ROCm GPU ASan 7.2.4](https://rocm.docs.amd.com/projects/llvm-project/en/docs-7.2.4/conceptual/using-gpu-sanitizer.html)：xnack+、shared runtime、已知漏检。
 - [AMD ROCm Docker官方文档](https://rocm.docs.amd.com/projects/install-on-linux/en/docs-7.2.3/how-to/docker.html)。
 - [NVIDIA CUDA容器支持版本列表](https://gitlab.com/nvidia/container-images/cuda/blob/master/doc/supported-tags.md)。
-- [项目主研究报告](../docs/llvm-gpu-sanitizer-research.md)：模型路径、检测器算法与28场景的技术分解。
+- [项目主研究报告](../docs/llvm-gpu-sanitizer-research.md)：模型、检测算法与第18章28个案例的简短结论，详细实验均由各样例README维护。
