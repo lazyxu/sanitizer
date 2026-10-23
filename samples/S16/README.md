@@ -20,7 +20,7 @@ python3 scripts/run_samples.py --backend rocm --case S16 --mode both --strict
 
 ## 真实场景、错误原因、可检测算法、修复对照及实现要求
 
-以下章节直接对应[主调研文档 §18.16](../../docs/llvm-gpu-sanitizer-research.md#case-s16)的正式原理与验收设计。**其中的CUDA风格伪代码和受控allocator不一定与本目录中可编译程序逐行相同**；两者须按相同违规语义而非源码文字对齐。实际运行前确认目标机器码保留相关访存，不可以假设未定义行为一定触发。
+**本 README 是 S16 的唯一详细技术与验收规范。** [主研究 §18.16](../../docs/llvm-gpu-sanitizer-research.md#case-s16) 仅保留场景摘要与稳定入口。本页伪代码与可编译 CUDA/HIP 程序按**相同违规语义**对齐，不保证逐行一致；真机验收必须确认目标访存确实执行，不能把被优化消除的操作当成已检查。
 
 ### 18.16 S16：跨kernel／queue竞争与event正确反例
 
@@ -38,7 +38,7 @@ read_x<<<1, 1, 0, q1>>>(x, out);         // OK：writer -> event -> reader
 cudaDeviceSynchronize();
 ~~~
 
-**实现路线与观测点。** GPU Racecheck记录真实设备访存时钟，UMD把launch/queue/event依赖关联到同一执行记录。E由Host runtime/UMD记录event版本、record/wait、launch与完成事件，再将B所承载的额外race插桩或C采集的地址历史接入HB引擎；不能在每个kernel结束时无条件清空global历史。只有Host API回调而没有设备访问事件或可信访问范围声明，无法确定两个kernel是否碰同一字节。[N03][P02]
+**实现路线与观测点。** GPU Racecheck记录真实设备访存时钟；UMD将launch/queue/event命令依赖关联到同一执行记录，按实际scope/order建立HB。E由Host runtime/UMD记录event版本、record/wait、launch与完成事件，再将B所承载的额外race插桩或C采集的地址历史接入HB引擎；不能在每个kernel结束时无条件清空global历史。只有Host API回调而没有设备访问事件或可信访问范围声明，无法确定两个kernel是否碰同一字节。[N03][P02]
 
 **修复、报告与边界。** 上述event链及同一queue有序执行都是合法反例。设备内flag协议还须核对atomic scope与发布／获取，普通fence不能代替对端协议。报告应包含两个kernel、launch ID、queue、对象偏移及缺少的依赖边。驱动偶然串行、工具强制串行、默认stream配置改变或未执行目标路径，会影响实验覆盖；不能据此声称检查通过。基于随机延迟和值差异的发现仍是概率证据，须保留HB检测的独立口径。[P08]
 
