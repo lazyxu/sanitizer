@@ -1,5 +1,11 @@
 # GPU Sanitizer文稿修订记录
 
+## v2.7 · 2026-10-23 · 架构历史笔记与第8～17章实施表单源化
+
+- [历史架构笔记](research-notes/architecture.md) 约19.0 KB→6.9 KB，保留12节、原20个标题和R1～R9一手来源；完整方案表、预算数值、设备ABI和重复执行代码不再单独维护。
+- [主研究 §8～17](llvm-gpu-sanitizer-research.md) 保留23章、28例与原有锚点，去除重复 ObjectDesc、B/C/D/E/F逐层通用组件表及§16.9第二份软件预算总表；Guest/Host GPUVA身份、KMD真实支持条件、异步Free语义和性能设计继续保留。
+- [组件指南](real-gpu-components-implementation.md) 统一Compiler/Device Runtime/UMD/KMD/Firmware/RTL伪代码和报告ABI；预算数值唯一登记在 [estimates-v1.8.json](estimates-v1.8.json)。
+- 新增架构笔记、R1～R9、主研究23章/28例、稳定锚点及实现单源防回归。**所有结果仍仅文档/CPU静态检查，自研目标GPU状态为GPU_NOT_RUN**。
 ## v2.6 · 2026-10-23 · 厂商官方证据版本化与历史笔记去重
 
 - [厂商来源登记](research-notes/vendors_sources.json) 新增统一的 `vendor_profiles`：NVIDIA、AMD、Intel、MUSA 均具备产品版本、核验日期、GPU/OS 条件、插桩/运行库、Checker 范围、限制、证据 ID 与目标 GPU 状态；LLNL 现场版本与 AMD Technology Preview 严格分开。
