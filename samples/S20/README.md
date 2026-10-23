@@ -20,7 +20,7 @@ python3 scripts/run_samples.py --backend rocm --case S20 --mode both --strict
 
 ## 真实场景、错误原因、可检测算法、修复对照及实现要求
 
-以下章节直接对应[主调研文档 §18.20](../../docs/llvm-gpu-sanitizer-research.md#case-s20)的正式原理与验收设计。**其中的CUDA风格伪代码和受控allocator不一定与本目录中可编译程序逐行相同**；两者须按相同违规语义而非源码文字对齐。实际运行前确认目标机器码保留相关访存，不可以假设未定义行为一定触发。
+**本 README 是 S20 的唯一详细技术与验收规范。** [主研究 §18.20](../../docs/llvm-gpu-sanitizer-research.md#case-s20) 仅保留场景摘要与稳定入口。本页伪代码与可编译 CUDA/HIP 程序按**相同违规语义**对齐，不保证逐行一致；真机验收必须确认目标访存确实执行，不能把被优化消除的操作当成已检查。
 
 ### 18.20 S20：async free跨queue缺依赖与释放生效边界
 
@@ -40,7 +40,7 @@ cudaFreeAsync(p, q0);                    // BAD：fixed=false时无使用->free�
 cudaDeviceSynchronize();
 ~~~
 
-**实现路线与观测点。** UMD与GPU Device Runtime协同记录对象epoch、命令DAG、free请求、生效与完成；访问和free无序时报生命周期竞争，free生效后执行的访问报UAF。E由runtime/UMD将free命令及依赖下发，B按设备顺序poison；D2再传播旧指针身份，以覆盖随后同VA复用。free提交不能立即全局poison，同queue排在free之前的合法访问应放行。[N02][N03]
+**实现路线与观测点。** UMD与真实GPU检查器联合记录对象epoch、命令DAG、free请求、生效与完成；访问和free无序时报生命周期竞争，free生效后执行的访问报UAF。E由runtime/UMD将free命令及依赖下发，B按设备顺序poison；D2再传播旧指针身份，以覆盖随后同VA复用。free提交不能立即全局poison，同queue排在free之前的合法访问应放行。[N02][N03]
 
 **修复、报告与边界。** `fixed=true`建立合法链；同queue中“使用→free”也是合法反例。CUDA规定free操作开始后不能继续使用；`retire complete`是确认退休、回收描述符及后续复用的证据，不应把非法访问边界拖到完成，更不能用Host API返回代替设备时刻。[N08] 报告对象/epoch、最后使用queue与launch、free提交点及缺失依赖；有完成证据时补报实际退休节点。仅监控API调用顺序会误报或漏报；B遇同VA新分配重新unpoison可能漏旧指针，D2仍需完整身份传播；隐藏free、外部queue或不可见依赖必须输出unknown。
 
