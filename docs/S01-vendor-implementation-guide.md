@@ -223,23 +223,9 @@ Runtime/Reporter：设备错误PC/workgroup/lane、错误对象与源位置
 
 ### 2.5 AMD 官方GPU ASan验证命令与条件
 
-~~~bash
-# 必须在真正支持该offload arch及XNACK的AMD设备上执行。
-# 这里gfx90a只是官方示例，不能填一个设备并不支持的arch来伪造成功。
-export ROCM_ARCH=gfx90a:xnack+
-export HSA_XNACK=1
-export LD_LIBRARY_PATH=/opt/rocm/lib/asan:/opt/rocm/lib:$LD_LIBRARY_PATH
+**以 [AMD 硬件适配指南 §12 的官方环境验证命令](amd-gpu-asan-hardware-fallback.md) 为唯一完整命令入口**：仅在真实支持 `xnack+`、HMM 和对应版本 ASan HIP Runtime 的 GPU 上使用 `hipcc -fsanitize=address -shared-libsan --offload-arch=gfx...:xnack+`；还要实际检查 `/asan/` 下的 HIP 库及包含 `on amdgpu device` 的错误报告。设置环境变量不可能为不支持 XNACK 的芯片增加该能力。
 
-hipcc -x hip -std=c++17 -O1 -g -fsanitize=address -shared-libsan \
-  --offload-arch="$ROCM_ARCH" samples/S01/amd.hip.cpp -o s01_hip
-ldd ./s01_hip        # 确认ASan runtime/插桩HIP库路径
-./s01_hip --good
-./s01_hip --bad      # 应搜索明确标记“on amdgpu device N”的设备报告
-~~~
-
-AMD官方文档明确要求 `--offload-arch=gfx...:xnack+`，并指出在 `xnack-` 的目标上编译器可能给出warning、设备代码**没有插桩**，即使二进制运行正常也不能算GPU ASan通过。GPU Debug模式使用的ASan运行库也需要与编译版本匹配，并核查实际加载的是 `/asan/` 的HIP相关库。[ROCm GPU ASan官方Compiling章节](https://rocmdocs.amd.com/projects/llvm-project/en/latest/conceptual/using-gpu-sanitizer.html#compiling-for-asan)
-
-已知限制：有限Redzone会被wild访问跳过；Shadow状态若未正确维护可能误报/漏报；Private/stack设备地址空间并非天然全部覆盖，LDS/shared还有其降级处理。这些事实证明 **ASan不是KMD MMU检查，也不是完整来源/时间身份验证**。参考同一官方文档Known issues章节。
+可运行 S01 的 CUDA/HIP 样例、合法/非法输入与工具输出分类统一以 [S01 README](../samples/S01/README.md) 和 [manifest](../samples/manifest.json) 为准。不能把 Host CPU ASan 或普通 GPU API 返回码误算为设备访存检测。
 
 ### 2.6 AMD 式移植比 NVIDIA-R 更适合什么条件？
 
