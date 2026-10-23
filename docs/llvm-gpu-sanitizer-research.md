@@ -1137,6 +1137,8 @@ Device runtime在真实GPU上执行具体检查与状态更新；Compiler负责�
 - **R1 Racecheck：** NVIDIA shared hazard检测[N02]＋BARRACUDA的HB[P02]＋HiRace层次FSM[P03]＋SuperCollider重复观测[P08]作为可选研究机制；本项目按目标ISA真实scope/barrier和调度语义自行选择、适配和验收，不把概率观察当确定性race-free。
 - **S1 Synccheck：** 借鉴NVIDIA工具的barrier/sync分类[N02]；具体参与mask、phase/token、GPU指令级容错和报告是目标ISA的自主状态机。GPU设备端Synccheck实际参与集合与故障终止必须在实体GPU验证。
 
+<a id="component-estimates"></a>
+
 ## 16. 组件改动与代码量估算
 
 ### 16.1 估算口径、三组件归属与适用边界
@@ -1851,6 +1853,8 @@ GMSBench 中不同 checker 使用不同适用分母，HiRace 的 code/input 组�
 | 性能/长期运行 | 实体GPU应用基线、Sanitizer开销、显存/occupancy、长时间负载 | 需原始统计和相同条件对照 |
 
 **KMD专项必须覆盖**：metadata/report映射成功与失败；跨queue正确/错误依赖；真正运行中遇错后的abort或可靠拒绝；alias/import与context销毁的引用和报告；以及报告缓冲满、metadata OOM情况下不虚报clean。只完成源码/脚本设计时均不能宣称实卡通过。
+<a id="roadmap"></a>
+
 ## 20. 分阶段研发计划和团队安排
 
 ### 20.1 推荐交付阶段
