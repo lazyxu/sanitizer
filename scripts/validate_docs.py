@@ -296,6 +296,40 @@ check("Runtime Binary Rewriter" in implant and "生产 Compiler" in implant,
       "纯C的独立UMD Rewriter与生产Compiler职责缺失")
 check("S01-0 **真实GPU设备代码原型**" in guide,
       "S01首次必须交付可在GPU实际运行的设备代码")
+# S01 厂商差异与通用组件彻底去重；防止再次将泛用 ABI、重写器与 LLVM Pass 复制到 S01。
+check(len(guide) <= 21000,
+      "S01 厂商机制专题过长：应把通用组件代码移到 real-gpu-components-implementation.md")
+for required in (
+    "### 1.2 路径 NVIDIA-R", "### 1.3 路径 NVIDIA-C",
+    "### 2.2 1:8 Shadow", "### 2.4 无 XNACK",
+    "### 3.1 B1（原I）", "### 3.3 E：",
+    "-fdevice-sanitize=memcheck", "-shared-libsan",
+    "compute-sanitizer --tool memcheck", "唯一详细案例规范",
+    "real-gpu-components-implementation.md",
+):
+    check(required in guide, "S01去重不允许丢失厂商机制/工具命令/稳定小节: " + required)
+for duplicated in (
+    "struct SanAccessEvent {", "struct SanObject {",
+    "struct SanReport {", "struct PointerMeta {",
+    "PatchedModule patch_module(", "SanVerdict check_shadow(",
+    "### S01最小验收矩阵",
+):
+    check(duplicated not in guide, "S01不得重复定义案例或通用组件源码: " + duplicated)
+for required in (
+    "### 1.1 Sanitizer 共用元数据与报告 ABI",
+    "struct SanAccessEvent {", "struct SanObject {",
+    "struct SanReport {", "struct PointerMeta {",
+    "splitAndGuardMemoryOp(", "withinOriginalObject(",
+    "B2_SHADOW", "B1_CURRENT_LIVE_INTERVAL", "D1_ORIGINAL_OBJECT_BOUNDS",
+):
+    check(required in implant, "通用组件指南缺失唯一代码定义或模式协商: " + required)
+check("S01/README.md" in guide and "samples/manifest.json" in guide,
+      "S01厂商指南必须把详细场景和厂商预期交给各自权威来源")
+check(report.get("s01_guide_dedup", {}).get("implementation_source")
+      == "docs/real-gpu-components-implementation.md"
+      and report.get("s01_guide_dedup", {}).get("case_source")
+      == "samples/S01/README.md",
+      "文档审计必须声明S01厂商机制、通用组件、唯一案例各自归属")
 check("GPU_NOT_RUN" in audit and "UNSUPPORTED" in audit,
       "硬件审计必须声明真实GPU未运行与不可用能力")
 check("real-gpu-components-implementation.md" in root_readme,

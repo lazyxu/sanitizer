@@ -1,5 +1,12 @@
 # GPU Sanitizer文稿修订记录
 
+## v2.4 · 2026-10-23 · S01厂商机制与通用组件单源化
+
+- 瘦身[S01 厂商指南](S01-vendor-implementation-guide.md)：保留 NVIDIA NV-R/NV-C、AMD-B2 官方机制与条件、XNACK 边界、B1/E/F 归属及 S01 选型；去掉重复的 Binary Rewriter/LLVM/Shadow/对象报告伪代码和第二份案例验收矩阵。
+- [通用组件指南](real-gpu-components-implementation.md)作为唯一的 SanAccessEvent / SanObject / SanReport / PointerMeta 及安全 CFG 检查、模式协商实现入口；CPU 静态校验新增职责分离防回归。
+- [S01 唯一案例 README](../samples/S01/README.md)仍负责错误/合法代码、实际 CUDA/HIP 样例、厂商预期和验收说明；主研究保持 23 章和 28 场景不变。
+- 仅文档与校验/审计字段更新，不改变任何 GPU 编译器、驱动、程序或真实硬件验证状态。
+
 ## v2.3 · 2026-10-23 · 第18章单一详细案例规范及瘦身
 
 - 主研究保留23章、28个 `18.x` 子标题及 `#case-sxx` 稳定锚点；移除重复的错误代码、合法反例、设备责任与厂商预期表，改为紧凑摘要及一对一源码链接。
