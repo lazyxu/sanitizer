@@ -619,28 +619,12 @@ flowchart TD
 UMD负责应用逻辑对象，KMD负责其所管理的底层资源与执行契约；二者通过规范对象、BO/映射和命令ID关联，不能把每个用户态子分配当作一个新的KMD BO。设备检查可以通过诊断缓冲返回，硬件fault则经过KMD；两类错误通道需要关联和去重。
 
 
+
 ### 8.2 对象描述符：示意协议
 
-下面的字段是**设计草案**，不是要求立即冻结的二进制 ABI：
+**唯一通用设备 ABI 及 `SanObject` 字段定义在[组件指南 §1.1](real-gpu-components-implementation.md)**，不在主研究另立第二个 `ObjectDesc` 结构体。这里仅保留架构层的身份边界：逻辑对象 `allocation_id/epoch`、原始范围、Context/Owner、可选 Parent/View、AddressSpace/Permission 与映射 Backing/Mapping 必须分别表达，**不能把同一个 GPUVA、BO、FD 或物理页号当成唯一对象身份**。
 
-~~~c
-struct ObjectDesc {
-    uint64_t object_id;
-    uint64_t epoch;
-    uint64_t base;
-    uint64_t size;
-    uint64_t owner_context;
-    uint64_t parent_object_id;  // 可选：子分配或view
-    uint32_t address_space;
-    uint32_t permissions;
-    uint32_t state;            // pending/live/free-queued/dead/retired
-    uint32_t allocation_site;
-};
-~~~
-
-描述符还可能需要 peer alias、外部资源、共享／线程局部身份。不要在热路径每次读取全部字段：将检查必需字段与诊断扩展信息分开，并允许按 kernel／对象缓存。
-
-这里展示的字段合计 64 字节。第 17 章会单独比较 32 字节紧凑热描述符与 64 字节完整描述符，不能在预算中混用。
+§17.1 的 **64 B/entry** 是当时的完整研究描述符模型（6 个 64-bit 字段加 4 个 32-bit 字段），与 **32 B/entry** 紧凑热字段只是两种容量估算，不是编译或运行时已经冻结的 ABI；真正的结构体大小应按目标 ABI、对齐及实际需求测量。对于性能热路径，只传 Checker 必需字段，Parent/Callsite/Source 扩展由诊断侧关联。
 
 ### 8.3 统一事件集
 
@@ -713,23 +697,12 @@ stateDiagram-v2
 
 以下分工、接口字段与验收项是【工程建议】；官方资料用于校准职责及语义，不代表用户现有驱动已经具备这些能力。
 
+
 #### 顶层组件与内部边界
 
-本版统一以**编译器/设备检查库、KMD、UMD**作为三个生产软件责任包。设备检查库实际在GPU上运行；Host Runtime、Loader与CLI由UMD负责。Firmware和实体GPU硬件是额外生产实现责任，只在有对应职责时修改。
+本项目只按 **Compiler（含 GPU Device Checker）、UMD（含 Host Runtime/Allocator/Loader/Reporter）、KMD** 三类生产软件主体归责。Firmware 与 RTL 只有当真实平台能力、故障终止或 F1/F2 芯片扩展要求时才成为独立交付前提。详细的每层新源码、Device Checker ABI、Loader/Code Patch、KMD Map/Fault 和 Firmware 代码**统一见[组件实施指南 §1～§10](real-gpu-components-implementation.md)**；不在架构研究中重复完整组件矩阵。
 
-| 顶层组件 | 必须区分的子项 | 主要责任与输出 | 不应推导出的能力 |
-|---|---|---|---|
-| 编译器 | 前端／编译驱动 | sanitizer选项、源级对象／作用域信息、offload编译和链接规则、必要的语义标记 | 有源码和调试信息，不代表已经知道全部动态分配和异步释放时刻 |
-| 编译器 | LLVM中端 | 选择检查点，保留实际mask、访问宽度和原子语义；按路线生成shadow检查、bounds或identity传播；输出覆盖声明 | 一个通用load/store Pass不自动覆盖目标intrinsic、后端新生访存及未插桩模块 |
-| 编译器 | 后端／MC／链接 | 目标地址空间和调用约定、实际frame及资源布局、检查器helper链接、原始PC映射；C/E按需复用解码与重编码能力 | 后端能解码指令，不表示运行时patch器已经处理控制流、资源重算与代码生命周期 |
-| 编译器 | 随工具链交付的device检查库 | GPU侧shadow／descriptor查询、pointer metadata协议、allocator钩子、SIMT可前进的错误记录、受支持错误动作 | 设备检查库不归并成Host runtime；常规检查不能假设每次访存都调用KMD |
-| KMD | 特权内存与映射接口 | 接受并验证用户态请求，管理／接通BO、GPUVA映射与权限、必要的驻留／失效契约，返回实际结果 | BO映射范围不能替代框架子分配、tensor view、shared对象或线程私有frame边界 |
-| KMD | 提交、完成与故障接口 | 作业提交结果、依赖和完成证据；按平台能力与固件／硬件协作处理fault、abort、reset及context状态，并回传错误 | 完成fence不等于每条GPU访存轨迹；存在reset不等于存在细粒度dispatch abort或可恢复lane异常 |
-| UMD | Host runtime／API拦截／allocator适配 | 记录应用分配和子分配的语义、生存期、调用点、graph及queue依赖；关联成功／失败结果并去重 | 用户API返回、提交成功和设备完成是不同事件；底层驱动不知道的池内分配须由allocator提供 |
-| UMD | 用户态驱动／loader／JIT／patch管理 | 准备shadow与descriptor等资源，排入正确依赖；管理模块manifest、参数sidecar、代码patch、资源声明与缓存；调用KMD契约 | API拦截本身不能观察kernel内部每次访存；当前GPUVA反查不能恢复历史指针身份 |
-| UMD | 报告、符号化与CLI | 汇合编译器的PC／源码map、device检查记录、对象／队列语义及KMD故障；显示覆盖、资源失败和执行终态 | 空日志、未发生GPU fault或CPU静态通过均不能单独等同于检查通过 |
-
-**官方依据及适用边界。** DRM GPUVM文档把GPUVA映射与其backing GEM对象联系起来；GEM本身不理解缓冲内容，设备特定操作仍需驱动接口。[K01] DRM的reset约定由KMD判断和执行复位、上送fence／context错误，UMD检查提交结果并向应用报告。[K02] 据此，本报告把底层映射和故障契约归KMD，把应用对象语义及诊断归用户态；这是对自研架构的设计建议，不要求采用DRM类名或相同ioctl。
+**DRM/KMD 边界的官方事实：** GPUVA/BO 与 GEM/DRM 的底层资源层可以确认映射、权限、执行及故障，但不理解应用侧 Tensor/View 的分割或 Source Pointer 身份；RESET/Fault 的报告等级取决于具体驱动和硬件能力。[K01][K02] 因而本项目由 UMD 把应用分配真值与执行证据关联，而不是让 KMD 从 GPUVA 反推出源码对象。
 
 #### “必须支持”与“必须新增代码”分开记录
 
@@ -791,23 +764,13 @@ VFIO文档将设备访问、I/O地址映射及中断等接口分开，并在示�
 以下按B/C/D/E/F五个**工程交付标签**展开职责，它们不是五种独立检测谓词；三种核心成熟厂商参考配置另见[核心比较](core-design-comparison.md)。D拆分D1/D2；“新增”只指当前生产组件缺失的能力差额，公共底座及共享设备库计一次；不能把模拟的映射或Host异常当作真实KMD与GPU设备检查。
 
 
+
 ### 8.8 各生产组件的真实GPU可执行修改代码
 
-详见 **[逐组件关键代码与B～F实施矩阵](real-gpu-components-implementation.md)**。该独立指南逐项给出 Compiler 的 LLVM/MIR 插桩与最终机器访存覆盖、GPU Device Runtime 的设备端检查和报告、UMD 的对象和异步 Shadow 生命周期、C 的独立 Runtime Binary Rewriter、Host Runtime 的模块/queue/graph、KMD 的映射/提交/异常/终止、Firmware 的实际故障通路、RTL/MMU/Tag/Bounds 的实体硬件机制以及 CLI/CI 的实卡验收伪代码。
+**单一源码/伪代码权威：** [组件实施指南](real-gpu-components-implementation.md) 第 2～10 节依次给出 Compiler、GPU Device Runtime、UMD Allocator、Runtime Binary Rewriter、Host Launch、KMD、Firmware、RTL、CLI 的具体接线与安全失败路径。第 1.1 节集中定义 `SanAccessEvent/SanObject/SanReport`，第 3.1 节解释未映射 Shadow 的安全查询。此处不再重复九行代码职责表。
 
-| 组件 | 必须完成的检查链路 | 对应关键代码 |
-|---|---|---|
-| Compiler/LLVM GPU | 最终真实设备 ISA 的访存覆盖与 DebugLoc；D1/D2 来源保留 | 指南§2 |
-| GPU Device Runtime | Shader/Kernel 运行时实际查询 Shadow/Bounds/Identity 与设备报告 | 指南§3 |
-| UMD DebugAllocator/ShadowManager | alloc/free 的逻辑长度、epoch、queue依赖和资源可见性 | 指南§4 |
-| UMD Binary Rewriter | load/JIT 时decode→patch→encode，未知opcode拒绝 | 指南§5 |
-| Host Runtime / UMD Loader | capability、sidecar、提交依赖、覆盖/失败汇报 | 指南§6 |
-| KMD | BO/GPUVA映射、代码权限、fence、fault及运行中abort契约 | 指南§7 |
-| Firmware | 实际设备fault、停止、报告、恢复/重置（有相应职责时） | 指南§8 |
-| 实体GPU RTL | F1/F2需要真实硬件支持 | 指南§9 |
-| CLI/CI | GPU真实执行证据、错误和合法对照、不可用与覆盖失败分开 | 指南§10 |
+纯 C Runtime Patch 的**生产 Compiler 可以零修改**，目标 ISA 编译器库只是可选依赖；KMD 满足真实映射/完成/所选 Fault/Abort 契约时净新增也可以是 0。这是软件责任与**已验证**的硬件合同区别，不代表无需审计。
 
-**纯 C 运行时二进制插桩**可由UMD内部独立重写器完成，生产Compiler源码新增改动可以为0。**KMD**若已有所需映射、完成和fault契约，新增改动也可以为0；并不意味着未做接口验收。
 <a id="hardware-deployment-gate"></a>
 
 ## 9. 真实GPU部署准入
@@ -854,15 +817,12 @@ B2需要目标GPU可读、在dispatch前已映射和完成初始化的Shadow元�
 
 第一版可选择“独立 GPU pass＋复用 LLVM 通用工具”来减少对上游大型 ASan pass 的侵入；若目标与现有上游支持高度相似，也可以扩展原有实现。两者应以改动可维护性和地址空间语义为准。
 
+
 ### 10.4 编译器、KMD、UMD支持与修改
 
-**shadow。** 
+B2 的实施所需：Compiler 对声明支持的 Global 访问生成真实设备检查并验证最终 ISA，GPU Device Runtime 安全读取 Shadow/Poison，UMD 按分配逻辑长度和 Queue/Fence 生命周期初始化/退役元数据，KMD 保证必要的 GPUVA/BO Mapping、权限、完成和故障动作。B1 的 Device Live Registry 是**当前地址有效性**变体，不新增空间判定等级。
 
-| 路线 | 组件 | 必须支持的契约／交付物 | 是否必须新改代码及判断条件 |
-|---|---|---|---|
-| B：shadow | 编译器 | 前／中／后端建立声明范围内的检查覆盖；device库执行shadow查询、mask和完整范围检查、错误记录与所选失败策略 | sanitizer从零建设时需要新增插桩与device库；已有实现可移植。后端新增访存和目标intrinsic须各自覆盖或标缺口 |
-| B：shadow | KMD | 按所选布局提供shadow／日志BO和GPUVA映射、权限及使用寿命；保证相关提交／完成；支持所选错误策略要求的fault／abort／reset路径 | 既有契约充分可0新增。缺少所需VA布局、映射生效依赖、错误完成或可靠终止时按需改；不以GPU可缺页作为所有B实现的硬前提 |
-| B：shadow | UMD | 维护真实分配／子分配事件，分配和初始化shadow，将poison／unpoison排入正确依赖；传入context，链接模块并报告覆盖 | 必须有这条集成路径；可复用P，缺失的shadow资源管理及异步生命周期适配需新增。KMD不会替UMD自动poison每个池内对象 |
+真正的 IR/MIR Pass、`safeShadowLookupNoFault`、`sanMalloc/sanFreeAsync` 和 KMD Submit/Fault 代码均以[组件指南 §2～§7](real-gpu-components-implementation.md)为准；没有 XNACK 时三种 Shadow 映射取舍仅在 [AMD 硬件适配 §2](amd-gpu-asan-hardware-fallback.md)维护。本章不再重复另一套逐层代码表。
 
 ### 10.5 能力边界与退出条件
 
@@ -899,18 +859,12 @@ UMD 在模块加载或 JIT 产物生成后取得目标代码，解析指令与�
 
 它能覆盖无法重编译的模块，但“API 拦截”本身不能看到 kernel 内每次访存。也需要区分中间表示重写与最终机器码重写：例如 BARRACUDA 的 binary-level 路径依赖从 fat binary 提取 PTX，不能据此认为其能够处理所有纯机器码。[P02]
 
+
 ### 11.2 编译器、KMD、UMD支持与修改
 
-**NVIDIA官方手册对默认运行时工具明确说明：[Compute Sanitizer](https://docs.nvidia.com/compute-sanitizer/ComputeSanitizer/index.html#compilation-options)不需要特殊编译参数；设备Patch Callback可以用现有nvcc另编译工具模块，这不意味着原应用重编译或生产编译器要改动。完整纠正与实现方式见[S01运行时二进制插桩指南](S01-vendor-implementation-guide.md#121-不要求特殊编译到底意味着什么)。**
+**厂商公开机制重点：** NVIDIA 默认 Compute Sanitizer Runtime Binary Instrumentation 不要求应用用特殊编译选项。对自研 C，独立 UMD Rewriter 可 Decode/Insert Stub/Relocate/Re-Encode 已有 GPU Binary，**生产 Compiler 新增源码可以为 0**；使用既有 MC 库仅是可选复用。[N02][N03] NVIDIA 与自研的不同及工具 Patch 命令见 [S01 厂商指南](S01-vendor-implementation-guide.md)。
 
-**binary。** 
-
-| 路线 | 组件 | 必须支持的契约／交付物 | 是否必须新改代码及判断条件 |
-|---|---|---|---|
-| C：binary | **生产Compiler（可保持零改动）** | 已编译GPU binary直接输入；不需要LLVM Pass、CodeGen或MC新增能力，也不要求重新编译原应用；既有反汇编/MC库可选复用 | **纯runtime模式修改生产Compiler代码=0**；即使自研工具需要写decoder，也不意味着必须改Compiler |
-| C：binary | **Runtime Binary Rewriter（UMD内独立模块）** | 必须有目标ISA解码、访存opcode/谓词/宽度语义、patch stub插入、re-encode、branch relocation、寄存器/scratch/resource重算及原PC映射 | 可使用只读MC库，或在UMD工具域自建；二者都不要求修改Compiler。未知opcode显式PARTIAL_COVERAGE |
-| C：binary | KMD | 接受经过许可的可执行代码资源、更新后的资源声明与正常提交；提供代码／数据映射寿命、完成及所选失败路径 | 现有正式加载／执行接口充分可0新增；仅在代码加载／权限／调试或终止接口缺失时新增正规契约，不默认要求KMD实现二进制重写 |
-| C：binary | UMD | module loader/JIT调用Runtime Binary Rewriter，维护分配、队列/事件、patch cache、报告和卸载生命周期；使用现有编译器另编译工具自己的设备Patch callback（不修改编译器） | 需要允许的二进制重写/装载接口，不可绕过代码签名、资源验证与KMD权限；API拦截本身不等于设备访存已经插桩 |
+KMD 提供**正规、受授权的可执行代码映射、资源校验、提交/完成和错误终止**，而不是代替 UMD 进行字节码重写。精确的 UMD Patch/Original PC 映射实现与不支持 Opcode 时的拒绝策略只维护在[组件指南 §5～§7](real-gpu-components-implementation.md)。不能以 API 拦截或源码未知时的推断替代真 GPU 访问证据。
 
 ### 11.3 必须单独预算的工程风险
 
@@ -996,18 +950,12 @@ D1 可以先带来明显的覆盖提升。D2 会改变更多组件契约，不�
 
 若只能控制部分参与者，不能声称 D2 在该边界保持精确时间身份。使用 seqlock 或锁也不自动解决未受控 writer、ABA 或 GPU 前进性问题。
 
+
 ### 12.5 编译器、KMD、UMD支持与修改
 
-**对象bounds与时间身份。** D1和D2分行列出，不将身份传播合并成普通bounds支持。
+**D1 与 D2 必须分开验收：** D1 由 Compiler 在可证明闭包内保持 Pointer Original Object Base/Bounds，通过 UMD 参数 Sidecar 或被支持的 ABI 交给设备 Checker；当前 Live Allocation 查询不能提供同等级保证。D2 需要随指针跨 GEP/Call/Memory/Copy/Atomic/ABI 保留 Allocation ID/Epoch，UMD 按真实 free-effective / Retire 生命周期发布。KMD 只提供底层 GPUVA/BO、完成、隔离和必要的安全回收契约，不能从当前裸 GPUVA 恢复旧指针来源。
 
-| 路线 | 组件 | 必须支持的契约／交付物 | 是否必须新改代码及判断条件 |
-|---|---|---|---|
-| D1：bounds | 编译器 | 保留可恢复的原对象bounds，传播到检查点；前端／IR／后端与device描述符查询配套，来源丢失显式降级 | 通常需新增对象分析与传播；只查询当前地址所属分配不能算D1闭合。子对象／view边界需额外输入 |
-| D1：bounds | KMD | 为描述符及日志提供普通BO／GPUVA资源和一致的提交、完成、回收、错误接口；返回backing／映射结果供关联 | 既有契约充分可0新增；KMD无需替代编译器传播源级对象。只有实际布局或错误接口不足才改 |
-| D1：bounds | UMD | 登记应用对象与合法子范围，建立kernel参数sidecar和外部资源关联，按依赖发布／回收描述符 | 需具备bounds对象服务；P已有事件可复用。未知provenance不能在launch时只按当前VA反查后冒充原对象 |
-| D2：identity | 编译器 | 在声明支持集合内闭合指针身份传播，覆盖call／return、spill／reload、pointer load/store、copy、atomic和ABI；device库保证值与身份匹配 | 必须有完整身份协议；不能以对象表增设generation字段代替。已有D1只复用共有部分，D2独有传播／原子发布仍需实现 |
-| D2：identity | KMD | 提供元数据存储、映射、完成与安全退休等底层契约；跨context／导入所需的backing关系须可关联 | 现有契约充分可0新增；KMD不负责自动恢复旧裸指针身份。只有所需共享／隔离／退休接口确有缺口时新增 |
-| D2：identity | UMD | allocator创建不可混淆的分配实例；参数、graph捕获和受控Host边界保留原身份；按设备依赖退休旧描述符和pointer metadata | 需要身份与生命周期集成；设备内部每次指针传播仍归编译器／device库。不能在同VA复用后把旧指针重标成新对象 |
+唯一的 PointerMeta/Bounds 检查、Pointer Atomic 配对、UMD Metadata/Graph 生命周期与 KMD 代码在[组件指南 §1.1、§2～§7](real-gpu-components-implementation.md)。目标 ABI 支持不足时必须输出 UNKNOWN/PARTIAL，不能继续宣称完整 D2。
 
 ### 12.6 子对象和 tensor view
 
@@ -1078,17 +1026,12 @@ UMD 依据这些字段选择原代码、已插桩代码、patch 后代码或拒�
 
 普通二进制 fallback 不能凭空为一个裸地址恢复它曾经属于哪个旧对象。
 
+
 ### 13.4 编译器、KMD、UMD支持与修改
 
-**hybrid。** 
+E 是 B/D 编译期检查与 C 受控 Binary Fallback 的**集成包**。Compiler 产出精确覆盖 Manifest 与稳定 Device ABI，UMD 按实际模块、Opcode、对象来源和完整 Code Hash 选择编译期检查/Runtime Patch/明确拒绝；所有模式共享对象、报告和身份协议。KMD 只提供所选能力契约的并集，**不因混合模式重复建设一套独立内核驱动**。
 
-| 路线 | 组件 | 必须支持的契约／交付物 | 是否必须新改代码及判断条件 |
-|---|---|---|---|
-| E：hybrid | 编译器 | B／D支持的编译覆盖、稳定manifest、边界摘要及兼容device检查库；按每条边界声明bounds／identity保证 | 在已有B／D上补齐混合协议；共享检查器复用。binary fallback不能补回已经丢失的D2来源 |
-| E：hybrid | KMD | 提供所选B／D及C子集所需契约的并集；不同模式共用明确的context、映射、提交和错误路径 | 不因“混合”自动增加一套KMD；现有契约充分可0新增，新增项由具体缺口决定 |
-| E：hybrid | UMD | 按模块选择编译插桩、binary补充或拒绝／降级；共享对象表和报告ABI，防止重复插桩；管理跨模式参数和代码生命周期 | 需要loader策略、版本校验及跨模式适配。B/C/D共有的分配与报告底座复用；每段代码分别展示实际保证 |
-
-第16章的P＋E生产基础估算为核心69–132 kLOC、测试59–113 kLOC；KMD真实契约缺口另计。E按B全量、D独有部分、C fallback子集和集成去重，不直接叠加B/C/D总量。
+可执行的 Loader/Runtime 模式选择、Patch 和错误回传均归[组件指南 §5～§7](real-gpu-components-implementation.md)；源码规模和 P/B/D/C 增量去重的**唯一正式预算**归[预算 JSON](estimates-v1.8.json)及主报告 §16。不能把当前地址回退当成 D1/D2 来源保证。
 
 <a id="route-e-platforms"></a>
 
@@ -1117,17 +1060,12 @@ E按共享对象表和设备检查库去重预算，不把B/C/D公共模块重�
 | Metadata cache／MLB | per-SM 缓存、失效和一致性协议 | profile、lookup、free 生命周期 | cache 大小和工作集有关 |
 | 同步事件 trace | barrier／atomic／queue 事件输出 | race/sync 分析、流量控制 | 全访存 trace 的带宽可能不可接受 |
 
+
 ### 14.2 编译器、KMD、UMD及硬件支持
 
-**hardware。** 
+F1/F2 的准入条件是**芯片真实存在**可被 Compiler 选择的 Tag/Bounds ISA/RTL，且由 KMD/Firmware 暴露 Context、Metadata、失效、一致性和 Fault/Abort 契约；UMD 管理对应生命周期和设备报告。缺芯片能力时不能凭软件 Shadow/Bounds Helper 伪称硬件 Sanitizer。
 
-| 路线 | 组件 | 必须支持的契约／交付物 | 是否必须新改代码及判断条件 |
-|---|---|---|---|
-| F：hardware | 编译器 | 根据选定机制生成tag／bounds／metadata指令或标记，传播所需来源；device库承担尚未硬化的检查和报告 | 所用ISA／ABI已有支持时可复用；新指令、新指针表示或上下文参数需要修改。已有目标ISA功能可复用 |
-| F：hardware | KMD | 接通所选硬件的特权配置、metadata资源、context状态、失效／一致性、fault归因及终止／恢复；与固件职责明确 | 只有所需机制和契约均已存在才可能0新增；新寄存器、fault类型、context保存恢复或失效路径通常需配套改动。不能由软件预算推定硬件已经存在 |
-| F：hardware | UMD | 分配并发布tag／bounds／metadata，配置所支持模式，处理alias／peer／迁移和回收，解释硬件错误并给出覆盖边界 | 需与选定硬件语义集成；已有库可复用。硬件仅提供加速查询时，软件仍承担对象、身份和生命周期正确性 |
-
-新指令之外还需明确metadata权限、cache一致性、free失效、context切换、peer/迁移和fault重放。硬件、固件与RTL/DV是外部前提，设计规格本身不代表硅片已经具备能力。GPUArmor提供软硬协同研究参照，基线仍按第5章区分。[P04]
+完整的 Compiler/UMD/KMD/Firmware/RTL 伪代码和目标设备验收仅在[组件指南 §8～§9](real-gpu-components-implementation.md)维护。硬件性能结论需针对目标芯片与具体 Benchmark 测量，不能以 GPUArmor 模拟论文或生产软件 kLOC 代替真实 RTL/DV 工期。[P04]
 
 ### 14.3 选择 F 的证据门槛
 
@@ -1406,19 +1344,13 @@ K-F只为未具备的真实驱动状态契约计费。F基础预算已包含UMD�
 | F 需要新硬件或大幅新增固件 | 不纳入软件表 | 不纳入软件表 | ISA/RTL/DV/性能模型/硅片和超出接线范围的固件另立计划。 |
 | 完整D2时间身份、值级MSan或通用跨CPU/GPU TSan | 单独设计 | 单独设计 | 必须设计真正能在GPU执行的检查代码，不得以Host事件记录代替；具体语义另外评审。 |
 
+
 ### 16.9 只统计真实GPU产品组件与条件KMD缺口
 
-正式预算只计算Compiler（含GPU设备运行库）、UMD、必要时的KMD；同一公共底座P只计算一次。以下是在目标软件栈已有、KMD原有映射/完成接口足够、软件硬件能力前提成立时的**未实测设计范围**，不包含实体芯片RTL/DV/新增固件及全新GPU栈。C在纯runtime方案下可把设备patch库和重写器全部归入UMD，使生产Compiler新增源码为0，不改变核心总额。
+**正式数值只维护一套：** [`estimates-v1.8.json`](estimates-v1.8.json) 中的 `production.routes`、第 16.5 节的 P＋B/C/D/E/F 总量以及第 16.8 节的 KMD 条件性缺口表。这里不再复制相同的 5 行区间表，避免三处数字各自漂移。
 
-| 方案 | 核心 kLOC | 手写测试 kLOC | 核心＋测试 kLOC | 关键前提 |
-|---|---:|---:|---:|---|
-| P＋B | 25–48 | 21–39 | 46–87 | LLVM设备检查器、Shadow、UMD映射与生命周期 |
-| P＋C | 31–60 | 27–51 | 58–111 | 成熟目标ISA decoder/encoder和合法patch装载 |
-| P＋D | 46–89 | 39–74 | 85–163 | D1/D2保留各自来源和ABI前提 |
-| P＋E | 69–132 | 59–113 | 128–245 | B/D/C受控子集去重，模式兼容 |
-| P＋F | 23–46 | 22–42 | 45–88 | **实体F1/F2 Tag/Bounds对象检查硬件已存在**；芯片新增另估算 |
+成本计算为：公共 P **只计一次** + 所选 B/C/D/E/F 生产软件新增 + **代码审计确认**未满足的 KMD 契约包 + 独立 Init/Race/Sync 检查器 + 另行立项的 Firmware/RTL/DV。仅有真实 Tag/Bounds 硬件时，F 的软件估算才成立；`C` 纯 Runtime 的 Compiler 净新增可以为 0。所有 kLOC 属规划区间，不是实测源码量。
 
-组合公式为“所选P＋路线生产软件区间＋**经源码审计证明确实缺失**的KMD契约包＋可选额外checker区间＋另行立项的Firmware/RTL/DV”。不得直接叠加多个P；同一映射、报告、对象表、终止代码只计一次。详见[生产预算JSON](estimates-v1.8.json)与[逐组件源码入口](real-gpu-components-implementation.md)。
 ### 16.10 将区间转为项目预算与算术校验
 
 建议以两周左右技术摸底收集 opcode/访存类型、kernel 与 allocator/API 数量、已支持的 patch 模式、module ABI 数量、现有 KMD 契约、实际设备与编译产物差异，以及**目标实体GPU实际ISA、元数据访问、完成和fault接口的代码级契约**。先做可运行的最小链路，再按“接口、算法、失败路径、兼容、验证”建立工作包和责任人；人月需要结合团队经验与审查/验证成本估计，不用统一的每天写多少行换算。
