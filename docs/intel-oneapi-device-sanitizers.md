@@ -5,6 +5,8 @@
 
 项目三种核心参考配置的唯一分类仍见 [核心方案](core-design-comparison.md)；自研 GPU 组件设计见 [真实设备组件实施](real-gpu-components-implementation.md)。本页仅记录 Intel 的成熟产品能力、构建与运行入口、已公开限制及对自研 GPU 的工程启示。
 
+**厂商证据唯一登记：** [INTEL-DEVICE / INTEL-LIMITS / INTEL-UR 官方来源及 `intel-oneapi-device-sanitizers` Profile](research-notes/vendors_sources.json)。此页解释这些来源在 Intel 2026.0 产品中的具体含义；通用 UR 规范的状态不自动等同于该版本所有 Adapter 均已支持。
+
 ## 1. 它是什么：Intel GPU，并非新的 Sanitizer 算法分类
 
 Intel oneAPI DPC++/C++ Compiler 提供面向 **SYCL** 与 **OpenMP C/C++ Offload** 的设备侧 ASan、MSan、TSan。软件层包括 `icpx` / LLVM 编译期设备插桩、SYCL/OpenMP Runtime、**Unified Runtime (UR)** Sanitizer 支撑以及 Intel **Level Zero** 等设备后端。它既不是一块特殊的 Sanitizer GPU，也不能因支持 ASan/MSan/TSan 就认为其内部实现了 NVIDIA 的私有 Binary Rewriter。

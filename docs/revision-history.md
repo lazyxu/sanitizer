@@ -1,5 +1,12 @@
 # GPU Sanitizer文稿修订记录
 
+## v2.6 · 2026-10-23 · 厂商官方证据版本化与历史笔记去重
+
+- [厂商来源登记](research-notes/vendors_sources.json) 新增统一的 `vendor_profiles`：NVIDIA、AMD、Intel、MUSA 均具备产品版本、核验日期、GPU/OS 条件、插桩/运行库、Checker 范围、限制、证据 ID 与目标 GPU 状态；LLNL 现场版本与 AMD Technology Preview 严格分开。
+- [历史厂商笔记](research-notes/vendors.md) 变为版本化索引及纠正记录，不再复制完整厂家功能矩阵。主研究 §4.1～4.4 保留机制对比和重要条件，§4.9～4.10 转为官方来源/专题索引，不再重复机器码/支持版本与构建命令。
+- 统一 README、三种核心方案和 NVIDIA/AMD/Intel 专题的证据链接，增加结构化校验、官方 source ID 引用及“公开产品能力≠自研 GPU 实卡结果”防回归。
+- 主研究保留 23 章和 28 场景、全部已知锚点；未修改 GPU 程序、驱动或检测器实现，真实硬件状态仍为 `GPU_NOT_RUN`。
+
 ## v2.5 · 2026-10-23 · AMD硬件适配与通用设备代码单源化
 
 - [AMD硬件适配专题](amd-gpu-asan-hardware-fallback.md)完整保留官方ROCm `xnack+`/HMM要求、可恢复缺页与HMM差异、三种Shadow物理映射取舍、Sparse GPUVA约束及无故障重试测试矩阵。

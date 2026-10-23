@@ -68,9 +68,11 @@
 
 ## 5. Intel与摩尔线程的正确位置
 
-- **Intel oneAPI**：详细机制、支持范围和运行命令见[独立 Intel 技术专题](intel-oneapi-device-sanitizers.md)。[2026.0 Device-Side Compiler Sanitizers](https://www.intel.com/content/www/us/en/docs/dpcpp-cpp-compiler/developer-guide-reference/2026-0/device-side-compiler-sanitizers.html)公开GPU端ASan、MSan、TSan与global/local/private/UAF等能力；[系统要求与限制](https://www.intel.com/content/www/us/en/docs/dpcpp-cpp-compiler/developer-guide-reference/2026-0/compiler-sanitizers.html)明确部分GPU/运行模式限制，包括设备ASan下强制顺序执行的并发影响。**参考其编译器、Unified Runtime/设备库与功能覆盖**，不凭功能表推导全新第四种基础算法。
-- **摩尔线程 MUSA Compute Sanitizer**：[官方用户指南](https://docs.mthreads.com/mooreperf/mooreperf-doc-online/musa_compute_sanitizer/user_guide/)公开global越界、MUSA API错误、需单独开启的显存泄漏。**具体内部Shadow/Runtime patch/来源分析未披露，必须标未知**，参考其对外诊断类型与报告质量，不另增基础算法。
-- **Initcheck / Racecheck / Synccheck**：是不同检查目标（定义性、HB/冲突、barrier/mask/phase），**不由任一基础Address Bounds Checker自动提供**。
+**统一厂商证据：** [版本化厂商对照](research-notes/vendors.md) 与 [原始官方来源及机器可读 Profile](research-notes/vendors_sources.json)。其中按 `version_baseline`、`hardware_requirements`、`detector_scope`、`known_limitations`、`source_ids` 记录事实；详细功能和编译命令只在厂商专题维护。
+
+- **Intel oneAPI：** 设备 ASan/MSan/TSan 及 SYCL/OpenMP/Unified Runtime 的成熟参考，精确平台条件和支持限制以 [Intel 专题](intel-oneapi-device-sanitizers.md) 为准；不是第四种基础空间算法。
+- **MUSA：** 已公开的 Global 越界、GPU API 错误和可选 Leak 检测有参考价值，但内部 Shadow/Runtime Patch/来源分析未被公开材料证明，必须标未知；不从品牌数量增加算法数量。
+- **Initcheck / Racecheck / Synccheck：** 值定义性、数据竞争和同步属于另外的检测目标，不由任一基础 Address Bounds Checker 自动提供。
 
 ## 6. 唯一建议实施顺序
 

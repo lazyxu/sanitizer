@@ -310,6 +310,108 @@ docs_index = read("docs/README.md")
 intel_guide = read("docs/intel-oneapi-device-sanitizers.md")
 vendor_registry = load_json("docs/research-notes/vendors_sources.json")
 vendor_notes = read("docs/research-notes/vendors.md")
+
+# 第四阶段：厂商一手证据用统一 Profile 表达，不能只改静态 Markdown 表格。
+profiles = vendor_registry.get("vendor_profiles", [])
+expected_profiles = (
+    "nvidia-compute-sanitizer",
+    "amd-rocm-gpu-asan",
+    "intel-oneapi-device-sanitizers",
+    "moore-threads-musa-compute-sanitizer",
+)
+check(vendor_registry.get("schema_version") == 2
+      and isinstance(profiles, list)
+      and [p.get("profile_id") for p in profiles if isinstance(p, dict)]
+          == list(expected_profiles),
+      "厂商证据必须有固定顺序、唯一的四个版本化 Profile（不增加第四种算法）")
+source_records = vendor_registry.get("sources", [])
+source_record_ids = [x.get("id") for x in source_records if isinstance(x, dict)]
+check(len(source_record_ids) == len(set(source_record_ids))
+      and len(source_record_ids) >= 16,
+      "厂商官方来源 ID 必须唯一并保留已有的官方来源")
+required_profile_strings = (
+    "profile_id", "vendor", "product", "version_baseline",
+    "evidence_checked_at", "canonical_detail", "verification_status"
+)
+required_profile_lists = (
+    "hardware_requirements", "instrumentation", "runtime_requirements",
+    "detector_scope", "known_limitations", "source_ids"
+)
+for profile in profiles:
+    if not isinstance(profile, dict):
+        check(False, "厂商 Profile 记录必须为object")
+        continue
+    vendor_name = profile.get("vendor", "<unknown>")
+    for field in required_profile_strings:
+        check(isinstance(profile.get(field), str)
+              and bool(profile.get(field).strip()),
+              f"{vendor_name} 缺少非空版本化证据字段 {field}")
+    for field in required_profile_lists:
+        check(isinstance(profile.get(field), list)
+              and bool(profile.get(field))
+              and all(isinstance(t, str) and t.strip()
+                      for t in profile.get(field, [])),
+              f"{vendor_name} 缺少结构化列表字段 {field}")
+    check(set(profile.get("source_ids", [])) <= set(source_record_ids),
+          f"{vendor_name} Profile 来源未登记在 sources[].id")
+    check(str(profile.get("verification_status", "")).find("USER_TARGET_GPU_NOT_RUN") >= 0,
+          f"{vendor_name} 厂商公开能力不可冒充自研GPU已运行")
+    detail = str(profile.get("canonical_detail", ""))
+    check(detail.startswith("docs/") and (ROOT / detail).is_file(),
+          f"{vendor_name} 指向不存在的唯一厂商详细资料：{detail}")
+    check(bool(re.fullmatch(r"20\d\d-\d\d-\d\d",
+                            str(profile.get("evidence_checked_at", "")))),
+          f"{vendor_name} 缺少精确来源核验日期")
+expected_routes = {
+    "nvidia-compute-sanitizer": ["NV-R", "NV-C"],
+    "amd-rocm-gpu-asan": ["AMD-B2"],
+    "intel-oneapi-device-sanitizers": [],
+    "moore-threads-musa-compute-sanitizer": [],
+}
+for profile in profiles:
+    if not isinstance(profile, dict):
+        continue
+    identifier = profile.get("profile_id")
+    check(profile.get("reference_configurations") == expected_routes.get(identifier),
+          f"{identifier} 的成熟参考配置分类被错误增减")
+check("AMD-LLNL" in source_record_ids
+      and "AMD-PREVIEW-713" in source_record_ids
+      and any("preview" in str(s.get("caution", "")).lower()
+              for s in source_records if isinstance(s, dict)
+              and s.get("id") == "AMD-PREVIEW-713"),
+      "必须区分 AMD 稳定版本、LLNL 现场指南与 Technology Preview")
+check("INTEL-UR" in source_record_ids
+      and any("adapter" in str(s.get("caution", "")).lower()
+              for s in source_records if isinstance(s, dict)
+              and s.get("id") == "INTEL-UR"),
+      "UR通用规范不能代替Intel设备产品版本的支持结论")
+check(len(vendor_notes) < 5100
+      and all(f"## {i}. " in vendor_notes for i in range(1, 9))
+      and "vendors_sources.json" in vendor_notes,
+      "历史厂商笔记必须为简短的8节导航/纠正说明，不得恢复完整重复表")
+main_vendor_start = main.index("### 4.1 NVIDIA Compute Sanitizer")
+main_vendor_end = main.index("### 4.5 LLVM 上游", main_vendor_start)
+main_vendor_text = main[main_vendor_start:main_vendor_end]
+check(len(main_vendor_text) < 6200
+      and all(x in main_vendor_text for x in (
+          "#### 4.1.1", "#### 4.1.2", "#### 4.1.3",
+          "### 4.2 AMD", "### 4.3 Intel", "### 4.4 MUSA")),
+      "主报告第4章厂商机制应有摘要与原有锚点，但不能恢复重复的完整厂商手册")
+main_catalog = main.split("### 4.9 对每种产品机制最有价值的源码／官方证据入口")[1]
+main_catalog = main_catalog.split("## 5. 核心论文", 1)[0]
+check(len(main_catalog) < 2400 and "~~~bash" not in main_catalog
+      and "vendors_sources.json" in main_catalog,
+      "主报告 §4.9～4.10 不得复制可漂移的第二套版本表和编译命令")
+check(report.get("vendor_evidence_normalization", {}).get("profiles") == 4
+      and report.get("vendor_evidence_normalization", {}).get("source") ==
+          "docs/research-notes/vendors_sources.json"
+      and report.get("vendor_evidence_normalization", {}).get("target_gpu_status") ==
+          "GPU_NOT_RUN",
+      "v2.6 审计必须登记唯一厂商证据、四类Profile及未运行的目标GPU")
+check(all("research-notes/vendors_sources.json" in x for x in
+          (root_readme, canonical, main, intel_guide, amd_guide, guide, docs_index)),
+      "根导航、核心分类、主稿、三厂商专题必须引用统一结构化证据登记")
+
 for required in ("core-design-comparison.md", "intel-oneapi-device-sanitizers.md",
                  "llvm-gpu-sanitizer-research.md", "real-gpu-components-implementation.md",
                  "samples/README.md", "gpu-actions-ci.md", "vendors_sources.json"):
