@@ -301,30 +301,73 @@ check("GPU_NOT_RUN" in audit and "UNSUPPORTED" in audit,
 check("real-gpu-components-implementation.md" in root_readme,
       "README必须链接逐组件修改代码")
 
-# S01～S28 主稿正例/反例、样例与生产责任映射。
+# 第18章只保留稳定摘要，S01～S28 独立README是唯一详细规范。
+# 不允许将原来的28份完整伪代码和厂商结果矩阵重新复制到主稿。
 headings = re.findall(r"^### 18\.(\d+)\s+S(\d{2})[：:]", main, re.M)
-check(len(headings) == 28, "主稿必须恰好保留28个错误场景")
-for i, (seq, suffix) in enumerate(headings, start=1):
-    check(int(seq) == i and int(suffix) == i, f"主稿场景顺序异常：S{i:02d}")
-
-part = main.split("### 18.29 28个场景的真实GPU生产职责与验收映射")
-matrix = part[1].split("### 18.30")[0] if len(part) > 1 else ""
-mapped = re.findall(r"^\|\s*\[(S\d{2})\]\(#case-s\d{2}\)", matrix, re.M)
 expected = [f"S{i:02d}" for i in range(1, 29)]
-check(mapped == expected, "§18.29必须按S01～S28覆盖全部28项，不重漏")
-check(len(manifest.get("cases", [])) == 28, "samples/manifest.json需要28案例")
+check(len(headings) == 28, "主稿必须恰好保留18.1～18.28的28个场景标题")
+for i, (seq, suffix) in enumerate(headings, start=1):
+    check(int(seq) == i and int(suffix) == i, f"主稿场景标题或顺序异常：S{i:02d}")
 
-for case in expected:
+check("### 18.29 28个场景的真实GPU生产职责与验收映射" in main
+      and "### 18.30 CUDA/AMD HIP 真实设备样例与运行入口" in main,
+      "跨案例生产职责和设备样例入口必须保留")
+check(len(manifest.get("cases", [])) == 28, "samples/manifest.json需要28案例")
+check([x.get("id") for x in manifest.get("cases", [])] == expected,
+      "manifest 的28案例顺序须与主稿一致")
+sample_index = read("samples/README.md")
+check("唯一详细技术说明" in sample_index and "manifest.json" in sample_index,
+      "样例索引必须声明独立README及manifest为对应唯一规范")
+
+start_group = main.find("### 18.29 28个场景的真实GPU生产职责与验收映射")
+end_group = main.find("### 18.30 CUDA/AMD HIP 真实设备样例与运行入口", start_group)
+group_section = main[start_group:end_group] if start_group >= 0 and end_group >= 0 else ""
+group_links = re.findall(r"\[(S\d{2})\]\(#case-(s\d{2})\)", group_section)
+check(len(group_links) == 28 and set(group_links) ==
+      {(case, case.lower()) for case in expected},
+      "§18.29必须通过按检查类别分组的链接恰好覆盖28例，不能重漏")
+check("| 场景 | CUDA完整源码 |" not in main
+      and "| 场景 | 真实GPU检查与验收关键点 |" not in main,
+      "主稿不得恢复重复的28例源码矩阵及逐例职责矩阵")
+
+for i, case in enumerate(expected, start=1):
+    anchor = f'<a id="case-{case.lower()}"></a>'
+    next_anchor = (f'<a id="case-s{i+1:02d}"></a>' if i < 28
+                   else '<a id="scenario-platforms"></a>')
+    st = main.find(anchor)
+    en = main.find(next_anchor, st + len(anchor)) if st >= 0 else -1
+    section = main[st:en] if st >= 0 and en >= 0 else ""
+    check(main.count(anchor) == 1 and
+          f"### 18.{i} {case}" in section,
+          f"{case}的原主稿锚点与标题必须保留且唯一")
+    check(len(section.splitlines()) <= 13 and "~~~" not in section,
+          f"{case}主稿摘要过长或又出现重复代码，请维护到案例README")
+    for suffix in ("README.md", "cuda.cu", "amd.hip.cpp"):
+        check(f"../samples/{case}/{suffix}" in section,
+              f"{case}主稿必须一对一链接 {suffix}")
+    check(f"[{case}]({case}/README.md)" in sample_index,
+          f"样例索引缺少 {case} 的独立详细规范入口")
+
     doc = read(f"samples/{case}/README.md")
-    check(f"### 18.{int(case[1:])} {case}" in doc or case == "S01",
-          f"{case}说明中缺少真实场景细节")
+    check(f"### 18.{i} {case}" in doc,
+          f"{case}唯一详细规范缺少对应场景的完整技术说明")
+    check("唯一详细技术与验收规范" in doc
+          and f"../../docs/llvm-gpu-sanitizer-research.md#case-{case.lower()}" in doc,
+          f"{case}必须声明自己是唯一详细规范并反链原有主稿锚点")
+    check("以下章节直接对应[主调研文档" not in doc,
+          f"{case}不能再把主稿摘要声明为正式详细验收规范")
     check("## 验收需要留下什么证据？" in doc and "GPU_NOT_RUN" in doc,
-          f"{case}必须有明确的实卡验收与未运行分类")
+          f"{case}必须保留实卡验收口径与未运行状态")
     check("## 实体GPU生产组件职责" in doc or case == "S01",
-          f"{case}需要生产设备检查器与KMD/UMD职责")
+          f"{case}必须包含真实设备Checker和UMD/KMD职责")
     for filename in ("README.md", "cuda.cu", "amd.hip.cpp"):
         check((ROOT / "samples" / case / filename).is_file(),
-              f"缺少样例：samples/{case}/{filename}")
+              f"{case}缺少源文件：{filename}")
+
+check("S01/README.md" in guide and "唯一详细案例规范" in guide,
+      "S01厂商指南须链接单一案例技术规范，不另行维护重复64B案例表")
+check(report.get("scenario_documentation", {}).get("canonical_case_readmes") == 28,
+      "文档审计快照需要登记28个唯一详细案例README及第18章瘦身状态")
 
 # 只计算可交付生产软件，C纯Runtime的Compiler新增源码可以为零。
 routes = budget.get("production", {}).get("routes", {})
