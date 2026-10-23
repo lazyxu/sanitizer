@@ -449,6 +449,53 @@ for num in range(2, 12):
           f"逐组件指南缺少§{num}代码/汇总章节")
 check("Runtime Binary Rewriter" in implant and "生产 Compiler" in implant,
       "纯C的独立UMD Rewriter与生产Compiler职责缺失")
+
+# v2.7：研究历史、架构推理、组件实现、数字预算互不重复，并保留稳定深链接。
+arch_notes = read("docs/research-notes/architecture.md")
+archive_chapters = [int(n) for n in re.findall(r"^## (\d+)\. ", arch_notes, re.M)]
+check(archive_chapters == list(range(1, 13)) and len(arch_notes) < 9000,
+      "架构历史笔记必须保留12节、不得恢复重复的19KB架构/预算说明")
+ids = re.findall(r"^\| (R\d) \|", arch_notes, re.M)
+check(ids == [f"R{i}" for i in range(1, 10)],
+      "历史架构笔记必须一一保留R1～R9的原始技术来源")
+check("GPU_NOT_RUN" in arch_notes and "core-design-comparison.md" in arch_notes
+      and "llvm-gpu-sanitizer-research.md" in arch_notes
+      and "real-gpu-components-implementation.md" in arch_notes
+      and "estimates-v1.8.json" in arch_notes,
+      "架构历史笔记不得另立方案/实现/预算单一来源或隐藏真实设备状态")
+check("| 路线（均含P） |" not in arch_notes
+      and "struct SanContext {" not in arch_notes
+      and "struct ObjectDesc {" not in arch_notes,
+      "架构历史笔记应引用正式预算及组件ABI，不可复制整套表和源码")
+for anchor_id in ("component-contracts", "hardware-deployment-gate",
+                  "route-b-platforms", "route-c-platforms",
+                  "route-d-platforms", "route-e-platforms", "route-f-platforms"):
+    check(main.count(f'<a id="{anchor_id}"></a>') == 1,
+          "主研究第8～17章必须保留重要稳定锚点: " + anchor_id)
+for chapter in range(8, 18):
+    check(bool(re.search(rf"^## {chapter}\. ", main, re.M)),
+          f"主研究架构与性能章节 {chapter} 缺失")
+check("struct ObjectDesc {" not in main
+      and "| 路线 | 组件 | 必须支持的契约／交付物 |" not in main
+      and "### 8.8 各生产组件的真实GPU可执行修改代码" in main
+      and "32 B" in main and "64 B" in main,
+      "主研究需保留预算模型和锚点，但不得恢复重复组件结构及责任矩阵")
+for key in ("### 1.1 Sanitizer 共用元数据与报告 ABI",
+            "struct SanObject {", "parent_object_id", "mapping_id",
+            "### 2.1 目标 LLVM 状态传播与 Mask/Atomic 约束",
+            "Whole/Quad Wave", "pointers-with-external-state",
+            "Immutable Descriptor Handle", "safeShadowLookupNoFault"):
+    check(key in implant, "实现指南必须有唯一对象/掩码/身份检查入口: " + key)
+check(report.get("architecture_note_canonicalization", {}).get("archive_sections") == 12
+      and report.get("architecture_note_canonicalization", {}).get("budget_source")
+          == "docs/estimates-v1.8.json"
+      and report.get("architecture_note_canonicalization", {}).get("target_gpu")
+          == "GPU_NOT_RUN",
+      "v2.7审计须记录历史架构笔记、正式预算和未运行的目标GPU")
+check("research-notes/architecture.md" in root_readme
+      and "research-notes/architecture.md" in docs_index,
+      "项目入口和文档导航都应包含非权威的历史架构证据")
+
 check("S01-0 **真实GPU设备代码原型**" in guide,
       "S01首次必须交付可在GPU实际运行的设备代码")
 # S01 厂商差异与通用组件彻底去重；防止再次将泛用 ABI、重写器与 LLVM Pass 复制到 S01。
