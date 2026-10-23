@@ -1,6 +1,6 @@
 {
-  "version": "2.1",
-  "as_of": "2026-10-22",
+  "version": "2.2",
+  "as_of": "2026-10-23",
   "scope": "repository document and structural evidence only",
   "status": "DOCUMENT_REVIEW; PHYSICAL_GPU_NOT_RUN",
   "target_project_gpu_implementation": "NOT_IMPLEMENTED_OR_INSPECTED",
@@ -148,7 +148,7 @@
   "KMD_increment_condition": "only proven missing production contracts",
   "C_runtime_compiler_source_changes_possible": 0,
   "F_hardware_caveat": "actual GPU silicon must implement feature, otherwise unsupported",
-  "CI_results": "PENDING_HEAD_STATIC_CI",
+  "CI_results": "CPU_STATIC_CI_HEAD_DEPENDENT; GPU_NOT_RUN",
   "claimed_real_gpu_detection": false,
   "report_meaning": "structural validation evidence, not running code on any target GPU",
   "legacy_text_cleanup": {
@@ -210,5 +210,16 @@
     "document_cleanup_scope": "Deprecated non-core routes and standalone auxiliary strategy descriptions excluded; AMD-B2 retains algorithm-essential Shadow/Poison semantics"
   },
   "ancillary_route_catalog_removed": true,
-  "hardware_guard_experiment_source_removed": true
+  "hardware_guard_experiment_source_removed": true,
+  "intel_evidence_review": {
+    "vendor_product": "Intel oneAPI DPC++/C++ 2026.0",
+    "official_documents": [
+      "INTEL-DEVICE",
+      "INTEL-LIMITS",
+      "INTEL-UR"
+    ],
+    "status": "DOCUMENT_VERIFIED_NOT_GPU_EXECUTED",
+    "implementation_impact": "Supplementary compiler/runtime reference; does not add a fourth spatial checker configuration",
+    "authoritative_detail": "docs/intel-oneapi-device-sanitizers.md"
+  }
 }
