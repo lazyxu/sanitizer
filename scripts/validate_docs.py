@@ -668,18 +668,43 @@ check(report.get("chapter_count") == len(chapters) and
       report.get("scenarios_count") == len(headings),
       "审计报告的章节或场景数量已过期")
 
-# Markdown相对链接必须指向真实存在的仓库文件/目录；不依赖历史预算。
-markdowns = [ROOT / "README.md"] + list((ROOT / "docs").rglob("*.md")) + list((ROOT / "samples").rglob("README.md"))
-for doc in markdowns:
-    inspect(doc)
-    txt = doc.read_text(encoding="utf-8")
-    for target in re.findall(r"\]\(([^)\n]+)\)", txt):
-        target = target.split(' "', 1)[0]
-        if target.startswith(("#", "/", "http:", "https:", "mailto:", "data:")):
-            continue
-        local = unquote(target.split("#", 1)[0])
-        check((doc.parent / local).exists(),
-              f"失效链接：{doc.relative_to(ROOT)} -> {target}")
+# v2.8: historical project progress, evidence classifications and frozen numeric budget.
+progress = read("docs/research-progress.md")
+integrity = report.get("documentation_integrity", {})
+check("2026-10-23" in progress and "文档 v2.8" in progress
+      and "v2.2" in progress and "v2.7" in progress
+      and "GPU_NOT_RUN" in progress,
+      "研究进度必须正确区分v2.8文档整理与尚未实现的真实GPU Checker")
+check("v2.8" in root_readme and "scripts/validate_markdown_links.py" in root_readme
+      and "8 个自有" in root_readme,
+      "根目录入口应反映8个支持-v的脚本与v2.8文档状态")
+check(report.get("version") == "2.8"
+      and integrity.get("version") == "v2.8"
+      and integrity.get("target_gpu_execution") == "GPU_NOT_RUN"
+      and integrity.get("validator") == "scripts/validate_markdown_links.py"
+      and integrity.get("budget_numeric_revision") == "1.8 (unchanged)",
+      "审计快照版本、文件锚点校验及预算口径应与v2.8一致")
+check(budget.get("version") == "1.8"
+      and "estimates-v1.8.json" in progress
+      and "估算" in progress,
+      "文档版本升级不允许暗改正式工程预算数字或声称完成实测")
+for fragment in integrity.get("restored_main_fragments", []):
+    check(main.count(f'<a id="{fragment}"></a>') == 1
+          and f"(#{fragment})" in main,
+          "主研究目录稳定锚点及对应跳转必须一一保留: " + fragment)
+check(all(x in docs_index for x in (
+    "validate_markdown_links.py", "research-progress.md",
+    "estimates-v1.8.json",
+)), "统一导航必须可到达链接校验、进度和预算原始来源")
+
+# 所有Markdown相对路径和GitHub式章节fragment必须能导航。
+# 既检查指向其他文件的 #slug，也检查同文件内的 #case-sxx 等旧锚点。
+from validate_markdown_links import check_markdown_links
+
+markdown_count, fragment_count, link_failures = check_markdown_links(ROOT)
+check(markdown_count >= 40 and fragment_count >= 20,
+      "Markdown目录或本地章节深链接意外减少，须核查覆盖清单")
+FAILURES.extend(link_failures)
 
 if FAILURES:
     for error in FAILURES:

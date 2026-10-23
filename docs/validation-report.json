@@ -1,5 +1,5 @@
 {
-  "version": "2.7",
+  "version": "2.8",
   "as_of": "2026-10-23",
   "scope": "repository document and structural evidence only",
   "status": "DOCUMENT_REVIEW; PHYSICAL_GPU_NOT_RUN",
@@ -7,8 +7,8 @@
   "physical_gpu_checker_result": "GPU_NOT_RUN",
   "real_gpu_performance": "NOT_MEASURED",
   "document": "docs/llvm-gpu-sanitizer-research.md",
-  "main_document_blob_sha": "c15c6db0100a83e7debf9f8d0868311cc59808ea",
-  "main_line_count": 2230,
+  "main_document_blob_sha": "9fb7933097f238164c954945a24e4d29c43c00cd",
+  "main_line_count": 2234,
   "chapter_count": 23,
   "scenarios_count": 28,
   "reference_entries": 39,
@@ -148,7 +148,7 @@
   "KMD_increment_condition": "only proven missing production contracts",
   "C_runtime_compiler_source_changes_possible": 0,
   "F_hardware_caveat": "actual GPU silicon must implement feature, otherwise unsupported",
-  "CI_results": "PENDING_HEAD_STATIC_CI; PHYSICAL_GPU_NOT_RUN",
+  "CI_results": "CPU_STATIC_CI_REQUIRES_EXACT_HEAD_VERIFICATION; PHYSICAL_GPU_NOT_RUN",
   "claimed_real_gpu_detection": false,
   "report_meaning": "structural validation evidence, not running code on any target GPU",
   "legacy_text_cleanup": {
@@ -338,5 +338,35 @@
     "guaranteed_unchanged": "23 chapters, 28 cases, B/C/D/E/F original estimates, hardware-not-run status",
     "source_changes": "DOCUMENT_ONLY; no CUDA/HIP/target checker implementation",
     "target_gpu": "GPU_NOT_RUN"
+  },
+  "documentation_integrity": {
+    "version": "v2.8",
+    "validator": "scripts/validate_markdown_links.py",
+    "integrated_audit": "scripts/validate_docs.py",
+    "regression_tests": "tests/test_markdown_links.py",
+    "ci_workflow": ".github/workflows/sample-structure.yml",
+    "markdown_scan_scope": "all repository Markdown files",
+    "checks": [
+      "local path resolution",
+      "same-file fragments",
+      "cross-file fragments",
+      "GitHub Unicode headings",
+      "duplicate slugs",
+      "explicit HTML ID anchors",
+      "reference definitions"
+    ],
+    "restored_main_fragments": [
+      "component-estimates",
+      "roadmap"
+    ],
+    "snapshot_date": "2026-10-23",
+    "progress_source": "docs/research-progress.md",
+    "research_document": "docs/llvm-gpu-sanitizer-research.md",
+    "budget_source": "docs/estimates-v1.8.json",
+    "budget_numeric_revision": "1.8 (unchanged)",
+    "chapter_count": 23,
+    "sample_scenarios": 28,
+    "target_gpu_execution": "GPU_NOT_RUN",
+    "external_web_links_checked": false
   }
 }
