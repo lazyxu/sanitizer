@@ -1,5 +1,12 @@
 # GPU Sanitizer文稿修订记录
 
+## v2.5 · 2026-10-23 · AMD硬件适配与通用设备代码单源化
+
+- [AMD硬件适配专题](amd-gpu-asan-hardware-fallback.md)完整保留官方ROCm `xnack+`/HMM要求、可恢复缺页与HMM差异、三种Shadow物理映射取舍、Sparse GPUVA约束及无故障重试测试矩阵。
+- 通用Compiler/Device Checker/UMD/KMD/固件与报告伪代码归 [唯一组件实施指南](real-gpu-components-implementation.md)；设备运行库新增 `safeShadowLookupNoFault` 设计，先核实元数据页状态，再执行Shadow Load。
+- [S01厂商机制指南](S01-vendor-implementation-guide.md)保留AMD机制/版本与选型，但官方完整构建命令统一引用AMD硬件专题；根入口与文档导航同步澄清唯一职责。
+- 新增CPU静态回归：12个章节、XNACK/HMM/Shadow三取舍、软件元数据缺页安全、重复代码禁止和ABI跨文档引用；不改变GPU测试代码、实际硬件能力或 `GPU_NOT_RUN`。
+
 ## v2.4 · 2026-10-23 · S01厂商机制与通用组件单源化
 
 - 瘦身[S01 厂商指南](S01-vendor-implementation-guide.md)：保留 NVIDIA NV-R/NV-C、AMD-B2 官方机制与条件、XNACK 边界、B1/E/F 归属及 S01 选型；去掉重复的 Binary Rewriter/LLVM/Shadow/对象报告伪代码和第二份案例验收矩阵。

@@ -1,5 +1,5 @@
 {
-  "version": "2.4",
+  "version": "2.5",
   "as_of": "2026-10-23",
   "scope": "repository document and structural evidence only",
   "status": "DOCUMENT_REVIEW; PHYSICAL_GPU_NOT_RUN",
@@ -162,7 +162,9 @@
     "document": "docs/amd-gpu-asan-hardware-fallback.md",
     "status": "DESIGN_ONLY",
     "hardware_requirements": "official ROCm XNACK/HMM distinct from self-hosted GPU-resident Shadow/Bounds",
-    "implementation_status": "NOT_IMPLEMENTED_OR_INSPECTED"
+    "implementation_status": "NOT_IMPLEMENTED_OR_INSPECTED",
+    "scope": "Hardware/OS requirements, XNACK/HMM, Shadow allocation tradeoffs and no-retry page mapping; shared checker code elsewhere",
+    "deduplicated_implementation": "docs/real-gpu-components-implementation.md"
   },
   "route_taxonomy_audit": {
     "status": "DOCUMENT_SPECIFIED_NOT_HARDWARE_VERIFIED",
@@ -241,13 +243,13 @@
     "hardware_execution": "GPU_NOT_RUN"
   },
   "s01_guide_dedup": {
-    "version": "v2.4",
+    "version": "v2.5",
     "vendor_mechanisms_source": "docs/S01-vendor-implementation-guide.md",
     "implementation_source": "docs/real-gpu-components-implementation.md",
     "case_source": "samples/S01/README.md",
     "vendor_expected_outcomes_source": "samples/manifest.json",
-    "vendor_guide_characters": 17290,
-    "component_guide_characters": 15965,
+    "vendor_guide_characters": 16818,
+    "component_guide_characters": 17383,
     "preserved_modes": [
       "NV-R",
       "AMD-B2",
@@ -258,5 +260,25 @@
     ],
     "semantic_claim": "Document-only role consolidation; no algorithm, GPU ISA, C/HIP sample or hardware acceptance changed",
     "target_gpu_status": "GPU_NOT_RUN"
+  },
+  "hardware_guide_dedup": {
+    "version": "v2.5",
+    "hardware_source": "docs/amd-gpu-asan-hardware-fallback.md",
+    "implementation_source": "docs/real-gpu-components-implementation.md",
+    "vendor_mechanisms_source": "docs/S01-vendor-implementation-guide.md",
+    "case_source": "samples/S01/README.md",
+    "unique_hardware_sections": [
+      "XNACK retryable page faults",
+      "Linux HMM",
+      "full physical shadow allocation",
+      "gpuMalloc shadow backing and unchecked map fault",
+      "on-demand shadow with safe index",
+      "sparse GPUVA",
+      "pre-launch mapping",
+      "official ROCm xnack+ validation"
+    ],
+    "safe_device_lookup": "safeShadowLookupNoFault",
+    "physical_gpu_execution": "GPU_NOT_RUN",
+    "change_scope": "Documentation, source-of-truth pointers, and CPU static checks only"
   }
 }
