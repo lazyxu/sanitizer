@@ -20,7 +20,7 @@ python3 scripts/run_samples.py --backend rocm --case S08 --mode both --strict
 
 ## 真实场景、错误原因、可检测算法、修复对照及实现要求
 
-以下章节直接对应[主调研文档 §18.8](../../docs/llvm-gpu-sanitizer-research.md#case-s08)的正式原理与验收设计。**其中的CUDA风格伪代码和受控allocator不一定与本目录中可编译程序逐行相同**；两者须按相同违规语义而非源码文字对齐。实际运行前确认目标机器码保留相关访存，不可以假设未定义行为一定触发。
+**本 README 是 S08 的唯一详细技术与验收规范。** [主研究 §18.8](../../docs/llvm-gpu-sanitizer-research.md#case-s08) 仅保留场景摘要与稳定入口。本页伪代码与可编译 CUDA/HIP 程序按**相同违规语义**对齐，不保证逐行一致；真机验收必须确认目标访存确实执行，不能把被优化消除的操作当成已检查。
 
 ### 18.8 S08：Free 已生效、地址尚未复用的 UAF
 
