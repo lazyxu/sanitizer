@@ -668,18 +668,14 @@ check(report.get("chapter_count") == len(chapters) and
       report.get("scenarios_count") == len(headings),
       "审计报告的章节或场景数量已过期")
 
-# Markdown相对链接必须指向真实存在的仓库文件/目录；不依赖历史预算。
-markdowns = [ROOT / "README.md"] + list((ROOT / "docs").rglob("*.md")) + list((ROOT / "samples").rglob("README.md"))
-for doc in markdowns:
-    inspect(doc)
-    txt = doc.read_text(encoding="utf-8")
-    for target in re.findall(r"\]\(([^)\n]+)\)", txt):
-        target = target.split(' "', 1)[0]
-        if target.startswith(("#", "/", "http:", "https:", "mailto:", "data:")):
-            continue
-        local = unquote(target.split("#", 1)[0])
-        check((doc.parent / local).exists(),
-              f"失效链接：{doc.relative_to(ROOT)} -> {target}")
+# 所有Markdown相对路径和GitHub式章节fragment必须能导航。
+# 既检查指向其他文件的 #slug，也检查同文件内的 #case-sxx 等旧锚点。
+from validate_markdown_links import check_markdown_links
+
+markdown_count, fragment_count, link_failures = check_markdown_links(ROOT)
+check(markdown_count >= 40 and fragment_count >= 20,
+      "Markdown目录或本地章节深链接意外减少，须核查覆盖清单")
+FAILURES.extend(link_failures)
 
 if FAILURES:
     for error in FAILURES:

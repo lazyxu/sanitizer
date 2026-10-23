@@ -29,13 +29,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Compile Python scripts (syntax only)
-        run: python3 -m py_compile scripts/run_samples.py scripts/run_upstream_nvidia.py scripts/validate_layout.py scripts/validate_docs.py tests/test_gpu_runner.py tests/test_upstream_nvidia.py
+        run: python3 -m py_compile scripts/run_samples.py scripts/run_upstream_nvidia.py scripts/validate_layout.py scripts/validate_docs.py scripts/validate_markdown_links.py tests/test_gpu_runner.py tests/test_upstream_nvidia.py tests/test_markdown_links.py
       - name: Bash syntax
         run: bash -n scripts/setup-docker.sh scripts/run-all.sh scripts/ci-gpu.sh
       - name: Verify pinned NVIDIA sources, license, and regression manifest (CPU only)
         run: python3 scripts/run_upstream_nvidia.py --validate-only
       - name: Validate case source inventory (not nvcc/hipcc)
         run: python3 scripts/validate_layout.py
+      - name: Validate Markdown local paths and heading fragments
+        run: python3 scripts/validate_markdown_links.py
       - name: Audit production checker hardware deployability and component ownership
         run: python3 scripts/validate_docs.py
       - name: Unit-test GPU report classification with synthetic logs
