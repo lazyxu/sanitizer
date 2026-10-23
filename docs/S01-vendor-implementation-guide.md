@@ -1,6 +1,6 @@
 # S01 GPU Sanitizer厂商参考与目标组件实施：NV-R / AMD-B2 / NV-C
 
-**版本 2.0 · 2026-10-22 · 适用对象：目标实体GPU、LLVM Compiler/Device Runtime、UMD、KMD，以及实际需要的Firmware/RTL。**
+**版本 2.4 · 2026-10-23 · 适用对象：目标实体GPU、LLVM Compiler/Device Runtime、UMD、KMD，以及实际需要的Firmware/RTL。**
 
 > 本文是面向研发落地的**厂商方案优先**设计说明，不是某个闭源 GPU Sanitizer 的反编译说明。凡“厂商官方确认”的机制都给出来源与限长英文原文；凡没有公开具体实现的数据结构、ISA 注入方法或内核接口，均明确写作**本项目建议实现**，不冒充 NVIDIA/AMD 的私有实现。
 >
@@ -18,31 +18,11 @@
 
 基础 S01 的可验收能力是“已追踪对象在有效布局中的 Global 字节可访问性”。**当前 GPUVA 有效≠原对象合法**。如果 A 尾部刚好邻接存活的 B，裸地址查询可能找到 B 并通过；必须保留访问的预期原对象 A（例如编译期 Base/Bounds、设备端真实携带的来源token）才可提供更强保证（主报告 S04）；单纯根据当前地址查表不足。
 
-访问完整区间的溢出安全判断：
-
-~~~cpp
-enum class SanVerdict { VALID, OOB, UNKNOWN_OBJECT, TOOL_FAILURE };
-
-bool within(uint64_t addr, uint64_t width,
-            uint64_t original_base, uint64_t original_size) {
-    if (width == 0) return true; // 只有调用方确认“实际没有访存”时才能使用
-    if (addr < original_base || width > original_size) return false;
-    uint64_t off = addr - original_base;
-    return off <= original_size - width;
-}
-~~~
-
-上式必须给定**正确的对象身份**；若按当前地址查询到邻接对象 B，它不能证明 A 的访问合法。所有检查必须在实际 load/store 生效前完成，保留活跃 lane、谓词、宽度、GPU PC、context 和访问类型；不能因为应用源码出现越界表达式，就断言最终 ISA 一定保留了该访存。
+**判定边界：** S01 必须在真实 GPU Global Store 生效之前校验完整访问宽度与活跃 Lane，不能把 GPUVA 页已映射误认为原对象访问合法。溢出安全的对象 Bounds、缺失对象与工具故障的通用接口统一在 [组件实施指南 §2～3](real-gpu-components-implementation.md) 维护；S01 的具体合法/非法输入与预期报告只在 [唯一案例 README](../samples/S01/README.md) 维护。
 
 ### 需要改动的生产组件（含GPU检查库）
 
-**各组件逐条伪代码另见 [真实GPU组件实施指南](real-gpu-components-implementation.md)。**
-
-| 层 | 作用 | 是否必须新增代码的判断 |
-|---|---|---|
-| Compiler | 为编译期方案插桩、保留原对象或调试映射；**NVIDIA-R纯运行时模式无需它参与** | **NVIDIA-R：生产编译器可保持完全不改（新增0）**。可选择复用现有MC库，或由UMD侧独立开发机器码解码器；AMD式LLVM ASan与NVIDIA编译期式Bounds才需要编译器改动 |
-| KMD | GPUVA/BO映射、执行提交与完成、所选错误策略需要的fault/abort或reset | 有足够既有契约则可以新增 **0**；KMD不应代替UMD凭空推断每个tensor长度 |
-| UMD | 用户逻辑 requested_size、分配/释放与异步顺序、module load/patch、Shadow/对象表、诊断解析 | 各真机方案都需要UMD侧可靠对象事件，但实现量不同 |
+**通用组件职责、设备执行 ABI、资源生命周期和异常终止统一在 [真实 GPU 组件实施指南](real-gpu-components-implementation.md) 定义。** 本指南只解释三种成熟厂商参考配置在 Compiler 是否需要修改、UMD 是否需要 Binary Rewriter、Device Runtime 如何判定和硬件前提上的差异；不再单独维护第二份 Compiler/UMD/KMD 实现表。
 
 ---
 
@@ -103,64 +83,11 @@ NVIDIA 公开 [Patching API Guide](https://docs.nvidia.com/compute-sanitizer/San
 
 #### 若模仿 NVIDIA-R，自研 GPU 每个组件要改什么？
 
-| 组件 | 需要交付的新增模块／具体接口 | 需要验证的关键边界 |
-|---|---|---|
-| **Compiler（生产编译器）** | **默认无新增修改：0。** 原流程生成GPU二进制即可；可读取既有目标ISA规范、现有反汇编工具或DebugInfo；不强制新增LLVM Pass/MC/CodeGen | 如果二进制是签名/加密/不可重写格式，运行时插桩需先验证允许的正规工具接口；不能把“改编译器”伪装成唯一解 |
-| **Runtime Binary Rewriter（UMD侧独立库）** | **真正负责**机器码 decode/访存opcode与谓词/宽度/地址空间语义、插入patch stub、branch relocation、encode、reg/scratch/resource usage重算。可选择调用现有MC库但不修改它，也可以自建decoder/encoder | 每个实际Global opcode都有准确语义；未支持的明确记录PARTIAL_COVERAGE。重写后需要执行等价性测试及资源审计 |
-| **UMD（主要工作包）** | 装载/调用Runtime Binary Rewriter，负责`SanModulePatcher`、`SanPatchCache`、`SanAllocationRegistry`、`SanReportDecoder`与设备Patch模块；拦截用户模块/JIT load、alloc/free、launch/event，维护原PC→新PC映射 | 用户requested_size与BO大小不同；代码签名与运行权限、缓存版本+ABI变化；多stream/graph/device-side allocator覆盖；不能绕过正常loader/KMD安全检查 |
-| **KMD** | 复用合法的可执行代码映射、BO/GPUVA、提交/完成、出错context处理；若资源描述/运行中终止接口缺失，单列修改 | 不允许通过任意可写可执行映射绕过代码安全策略；部分硬件fault可能只有粗粒度定位 |
+**核心区别：生产 Compiler 可以零修改。** 已编译用户 Binary 由 UMD 内独立的 Runtime Binary Rewriter 处理：识别目标 ISA 访存及谓词/宽度、插入真正 GPU 可执行的检查 Stub、重定位控制流及 PC、核算寄存器与 Scratch。现成 MC 解码器仅是可选复用，不能当成修改生产 LLVM 的强制条件。
 
-#### 核心代码应该是什么样？（自研伪代码，不是 NVIDIA 内部实现）
+**唯一通用实现代码：** [组件指南 §5（patchOnLoad、正规设备代码权限、未知 Opcode）](real-gpu-components-implementation.md)、[§3（设备 Checker 与报告）](real-gpu-components-implementation.md)。UMD 仍须关联逻辑分配与 Stream/Graph、Patch 缓存及原 PC，KMD 在映射、执行或终止契约确有缺口时才改动。
 
-~~~cpp
-struct MemorySite {
-    uint64_t original_pc;
-    uint32_t opcode, access_bytes, address_space, predicate, mask_kind;
-    bool read, write, atomic;
-};
-
-// UMD Loader: 新旧PC映射与覆盖能力检查都是必要交付。
-PatchedModule patch_module(const Module& module) {
-    auto code = target_isa_decode(module);
-    CodeBuilder result;
-    for (auto& insn : code) {
-        if (is_supported_global_access(insn)) {
-            // 只在实际执行该指令的lane/element上查地址；
-            // 不得为masked-off地址制造shadow访问或误报。
-            result.emit_guarded_check(insn.predicate, insn.active_mask,
-                                      insn.gpuva_operands, insn.access_bytes,
-                                      insn.original_pc);
-            result.emit_original_if_check_ok(insn);
-        } else {
-            if (may_perform_memory_access(insn)) result.mark_partial_coverage(insn);
-            result.emit_original(insn);
-        }
-    }
-    result.relocate_branches_calls_and_pcs();
-    result.recompute_register_scratch_resources();
-    return result.finish();
-}
-~~~
-
-**上述 `target_isa_decode`、`CodeBuilder`、重定位与资源计算全部属于独立 Runtime Binary Rewriter/UMD 工具库，不是对生产 Compiler 的必需改动；既有LLVM MC库只是可选复用依赖。**
-
-其中 `emit_guarded_check` **必须**落成目标 GPU 上真正能执行的检查指令序列或设备函数，不是 Host检查函数。需要失败动作（继续/终止）与barrier-safe策略，以免出错lane提前退出让其他lane卡在barrier。
-
-Device Checker 使用 current-live-range 语义的示例：
-
-~~~cpp
-SanVerdict check_current_allocation(uint64_t addr, uint32_t width,
-                                    const AllocationSnapshot& snapshot) {
-    if (!width || width - 1 > UINT64_MAX - addr) return SanVerdict::OOB;
-    auto region = snapshot.find_containing(addr); // device-friendly index
-    if (!region) return SanVerdict::UNKNOWN_OBJECT; // 不允许视为合法
-    if (!region->live) return SanVerdict::OOB;
-    return within(addr,width,region->base,region->requested_size)
-         ? SanVerdict::VALID : SanVerdict::OOB;
-}
-~~~
-
-以上仅是**借鉴公开观察点、独立设计的候选实现**。NVIDIA真实Memcheck如何布置设备元数据、如何与驱动深层配合，不能凭公开Patching API推断细节。并且当前地址有效性检查可能把相邻B识别成合法，属于该等级的已知限制。
+这是借鉴 NVIDIA 公开机制的**自研实现建议**，并非其私有重写器源码。基础 NV-R 检查当前有效地址，仍可能漏掉 S04 的 A 派生指针进入 Live B。
 
 #### 用 NVIDIA 原生工具先验证 S01
 
@@ -201,36 +128,9 @@ Compute Sanitizer memcheck运行时提供分配/报告/元数据服务
 
 #### 若模仿 NVIDIA-C，自研 GPU 各组件要改什么？
 
-| 组件 | 具体交付 |
-|---|---|
-| **Compiler（最主要）** | `GPUProvenancePass`：识别Kernel参数关联对象root，跟踪GEP/phi/select/调用与ABI；`GPUBoundsInstrumentation`：在实际访存前查原对象base/size；输出来源是否已知、检查点/覆盖等级和site_id |
-| **UMD** | `ObjectRegistry`维护allocation ID/原始逻辑范围；`KernelArgSidecar`对公开裸指针参数提供expected object ID/base/size；模块ABI版本、图重放和间接指针数据结构的支持集合 |
-| **KMD** | 原有合法BO/GPUVA、同步及错误管理；无需在每条GPU访存时恢复指针来源；可重用接口时新增0 |
+这里反而**需要 Compiler 改动**：识别指针的原始 Root/Base/Size，在 GEP、phi/select、参数、调用与受支持的指针存储/载入路径传播 expected object；UMD 为已知 Kernel 参数提供对象 Sidecar，KMD 不能从裸 GPUVA 恢复原对象 A。
 
-一个比较小、但完整表达关键保证的伪代码：
-
-~~~cpp
-struct PointerMeta {
-    uint64_t current_gpuva;   // 指针算术修改该值
-    uint64_t object_base;     // 派生后保持原根对象
-    uint64_t object_size;
-    uint64_t object_id;
-    bool provenance_known;
-};
-
-PointerMeta gep(PointerMeta p, int64_t offset) {
-    p.current_gpuva = checked_pointer_offset(p.current_gpuva, offset);
-    return p; // 保留A的expected object，不从当前地址反查到B
-}
-
-SanVerdict check_d1(const PointerMeta& p, uint32_t bytes) {
-    if (!p.provenance_known) return SanVerdict::UNKNOWN_OBJECT;
-    return within(p.current_gpuva,bytes,p.object_base,p.object_size)
-         ? SanVerdict::VALID : SanVerdict::OOB;
-}
-~~~
-
-**真正难点：** 编译器不能只传播顶层 `kernel(int* a)`，还要明确覆盖指针载入/存储、整数往返、间接调用、模板/库边界、真实Atomic Pointer值与身份的一致性。S01最初可以仅支持已知Kernel指针参数；本报告S04/S09/S25则要求独立追加元数据传播和生命周期能力。
+指针值和原对象元数据的通用表示、溢出安全 Bounds 检查与 ABI 只维护在 [组件指南 §2、§6](real-gpu-components-implementation.md)。来源 unknown 必须单独记为覆盖降级，不得宣称具备 S04 对 Live B 的 D1 保证。
 
 官方用法：
 
