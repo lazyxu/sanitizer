@@ -229,12 +229,15 @@ check(all("auxiliary" not in str(x).lower() for x in budget.get("nonstandalone_f
 
 amd_guide = read("docs/amd-gpu-asan-hardware-fallback.md")
 for required in (
-    "XNACK", "HMM", "无XNACK", "无HMM", "无硬件", "Compiler",
+    "XNACK", "HMM", "无XNACK", "Compiler",
     "LLVM", "Device Runtime", "UMD", "KMD", "Firmware", "RTL",
     "Shadow", "Interval", "GPU", "TOOL_FAILURE", "S01",
 ):
     check(required.lower() in amd_guide.lower(),
           "AMD指南未解释硬件缺失路径或组件: " + required)
+check(("无 HMM" in amd_guide or "无HMM" in amd_guide)
+      and ("缺少专用 Shadow 硬件指令" in amd_guide or "无硬件" in amd_guide),
+      "AMD指南必须解释缺少HMM及Shadow硬件指令的可部署软件路径")
 # XNACK与Shadow三种映射取舍必须保留，避免把GPU缺页恢复误说成Shadow合法性判断。
 for required in (
     "### 2.1 XNACK 的具体功能",
