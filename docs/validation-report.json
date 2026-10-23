@@ -1,5 +1,5 @@
 {
-  "version": "2.3",
+  "version": "2.4",
   "as_of": "2026-10-23",
   "scope": "repository document and structural evidence only",
   "status": "DOCUMENT_REVIEW; PHYSICAL_GPU_NOT_RUN",
@@ -239,5 +239,24 @@
     "chapter_scope": "summary / links / grouped responsibilities / runner entry, without copied case bodies",
     "validation_script": "scripts/validate_docs.py",
     "hardware_execution": "GPU_NOT_RUN"
+  },
+  "s01_guide_dedup": {
+    "version": "v2.4",
+    "vendor_mechanisms_source": "docs/S01-vendor-implementation-guide.md",
+    "implementation_source": "docs/real-gpu-components-implementation.md",
+    "case_source": "samples/S01/README.md",
+    "vendor_expected_outcomes_source": "samples/manifest.json",
+    "vendor_guide_characters": 17290,
+    "component_guide_characters": 15965,
+    "preserved_modes": [
+      "NV-R",
+      "AMD-B2",
+      "NV-C",
+      "B1",
+      "E",
+      "F"
+    ],
+    "semantic_claim": "Document-only role consolidation; no algorithm, GPU ISA, C/HIP sample or hardware acceptance changed",
+    "target_gpu_status": "GPU_NOT_RUN"
   }
 }

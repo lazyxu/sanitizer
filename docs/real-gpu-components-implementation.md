@@ -1,6 +1,6 @@
 # 自研 GPU Sanitizer：真实硬件实施的逐组件关键代码
 
-**版本：v2.0 · 2026-10-22 · 状态：设计与伪代码，尚未在目标 GPU 上实现或验收。**
+**版本：v2.4 · 2026-10-23 · 状态：设计与伪代码，尚未在目标 GPU 上实现或验收。**
 
 本文件只讨论能够随应用代码在**实体 GPU 执行**的设备检查器，或由实体 GPU 已具备的 MMU/Tag/Bounds 机制执行的检查。软件责任以 Compiler、KMD、UMD 三组计费；Device Runtime 虽由工具链或 UMD 交付，其检查指令**实际在 GPU 执行**。设备固件、RTL/硬件设计、CLI/测试作为跨组件专项，不能混为编译器功能。
 
@@ -22,6 +22,28 @@ Host 应用 / SDK
 
 只有设备端真实命中的访存/故障和可归因的运行日志才可升级为 GPU_DETECTED；无 GPU 硬件时应保持 GPU_NOT_RUN。任何缺少代码生成、资源映射、异步可见性、可靠终止的一环，都必须返回 UNSUPPORTED / PARTIAL_COVERAGE / TOOL_FAILURE，不能静默返回 clean。
 
+### 1.1 Sanitizer 共用元数据与报告 ABI
+
+下列三个结构体是全项目**唯一的通用结构设计入口**。S01 厂商比较和各案例 README 只链接此处，不分别重写 Report / Allocation 的字段和发布规则。示意代码还不是目标 GPU 已交付的稳定二进制 ABI。
+
+~~~cpp
+struct SanAccessEvent {
+    uint64_t context_id, launch_id, gpu_pc, gpuva;
+    uint32_t block_id, lane_id, bytes, kind, space, byte_enable;
+    uint32_t site_id;
+};
+struct SanObject {
+    uint64_t allocation_id, base_gpuva, requested_size, generation;
+    uint32_t state, owner_context;
+};
+struct SanReport {
+    uint32_t checker_id, error_kind, coverage_status, dropped_count;
+    SanAccessEvent access;
+    uint64_t expected_object_id, object_base, object_size;
+};
+~~~
+
+实际 ABI 还必须约定版本、模块 Build ID、原 PC / Patch PC 映射、字段对齐、设备报告缓冲区的原子写入及完成顺序；Global/Shared/Private 地址空间和活动 Mask 依 ISA 及 Kernel 约束编码。未覆盖、资源故障、GPU 未运行及检测命中必须区分状态，不能把零条 Report 当成已完成检查。
 ## 2. Compiler：LLVM IR Pass + 后端最终访存审计（B/D/E；纯 C 可零修改）
 
 **修改位置**：Clang/LLVM GPU target sanitizer 选项，IR/MIR pass 注册，目标地址空间/指针表示，instrumentation lowering，机器指令覆盖表，DebugLoc 与 module capability manifest。IR 阶段插入检查只是必要条件；最终 ISA 必须覆盖原子、宽向量、predication、masked/EVL、异步/特殊 intrinsic。
@@ -51,6 +73,37 @@ for (MachineMemOp m : finalizedISA(fn))
 ~~~
 
 **D1/D2 特别注意**：原对象 token 必须在 GEP/phi/select/参数/函数调用和被支持的 spill/reload 中传播；不能在 dereference 时通过当前地址反查对象来冒充历史来源。D2 对包含指针的存储、复制和原子发布，需要约定指针值与身份元数据的一致性；不支持的 ABI 用 unknown 标记。
+
+**Compiler CFG 必须将检查结果作为原 GPU 访存的执行条件**。仅插入没有返回值的错误日志 Helper 然后无条件发出原 Store，不构成安全检查。必须保持 Predicate/EVL/活跃 Lane 与原访问一致，错误分支按可证明的 SIMT 终止协议处理。
+
+~~~cpp
+// 目标无关伪代码：真正实现需匹配具体 LLVM 版本和 GPU Backend。
+Verdict v = emitDeviceCheckBefore(actualGpuMemoryOp);
+splitAndGuardMemoryOp(actualGpuMemoryOp, v == VALID);
+// 对未知 Opcode 或不可守卫的 Memory Effect 写入 Coverage Manifest。
+~~~
+
+**D1 原对象元数据与溢出安全 Bounds 检查（仅在来源已知时承诺）：**
+
+~~~cpp
+struct PointerMeta {
+    uint64_t current_gpuva, object_base, object_size, object_id;
+    bool provenance_known;
+};
+PointerMeta pointerOffset(PointerMeta p, int64_t delta) {
+    p.current_gpuva = checkedPointerOffset(p.current_gpuva, delta);
+    return p; // 不因为算出的地址进入 Live B 而改写原对象 A
+}
+bool withinOriginalObject(const PointerMeta& p, uint64_t width) {
+    if (!p.provenance_known || width == 0 ||
+        p.current_gpuva < p.object_base || width > p.object_size)
+        return false; // 非访存元素应先在 Mask 层排除
+    const uint64_t off = p.current_gpuva - p.object_base;
+    return off <= p.object_size - width;
+}
+~~~
+
+真实产品须覆盖声明支持的 phi/select、load/store pointer、ABI 和原子值/身份配对；不知道的来源标为 UNKNOWN/PARTIAL，而不是为旧指针凭当前地址重新选择活对象。
 
 ## 3. GPU Device Runtime：实际 GPU ISA 检查 + 稳定报告（B/C/D/E）
 
@@ -167,6 +220,26 @@ LaunchResult launchChecked(Kernel k, Args args, Queue q) {
 ~~~
 
 **不漏报要求**：UNSUPPORTED、partial、报告丢失、tool OOM/timeout 与干净运行分开；图捕获/replay 每次带执行 ID，不把创建时的对象身份自动沿用至未来执行。
+
+### 6.1 自研 GPU 的统一检查模式能力协商
+
+模式选择属于 UMD/Host Runtime 与 Compiler Manifest 的**通用契约**，而不是 S01 或 AMD 厂商指南各有一个独立选择器。B2 Shadow 和 B1 区间表都是当前地址有效性检查的表示策略；已证明来源传播的 D1 可以作为额外检查能力叠加。
+
+~~~cpp
+Mode selectPrimaryGpuChecker(TargetGPU gpu, Registry reg, Manifest m) {
+    if (!gpu.can_execute_checked_isa) return UNSUPPORTED;
+    if (gpu.can_read_device_metadata && reg.shadow_pre_mapped &&
+        reg.shadow_ready_fence) return B2_SHADOW;
+    if (gpu.can_read_device_metadata && reg.intervals_pre_mapped &&
+        reg.interval_ready_fence) return B1_CURRENT_LIVE_INTERVAL;
+    if (m.provenance_complete && m.original_bounds_in_args_or_registers)
+        return D1_ORIGINAL_OBJECT_BOUNDS;
+    return UNSUPPORTED;
+}
+// D1 来源保证和 B2 当前地址检查能否同时启用，须按能力清单决定。
+~~~
+
+严格路径在任何必需 Shadow、Registry、Report 或映射未就绪时应失败并拒绝 Kernel Dispatch；不存在 GPU 可恢复缺页时不能依赖执行过程自动补映射。详见 [AMD 硬件适配与三种 Shadow 取舍](amd-gpu-asan-hardware-fallback.md)。
 
 ## 7. KMD：GPUVA/BO、特权资源、提交、错误与终止（B/C/D/E/F）
 
