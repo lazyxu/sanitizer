@@ -1,6 +1,6 @@
 # LLVM GPU Sanitizer：自研真实GPU技术设计
 
-**版本 v2.6 · 2026-10-23｜设计与样例阶段；目标自研GPU真实检查器未实现，GPU_NOT_RUN。**
+**版本 v2.7 · 2026-10-23｜设计与样例阶段；目标自研GPU真实检查器未实现，GPU_NOT_RUN。**
 
 本项目为自研 LLVM GPU Backend、GPU Device Runtime、UMD/KMD及可能涉及的Firmware/RTL，研究GPU空间/时间内存错误、Initcheck、Racecheck和Synccheck。**先明确参考设计而不重复创造产品路线：重点参考2家厂商（NVIDIA、AMD），基础空间检查采用3种值得比较的厂商技术配置。**
 
@@ -30,7 +30,7 @@
 - [AMD无XNACK/HMM硬件适配与Shadow取舍](docs/amd-gpu-asan-hardware-fallback.md)：**XNACK 缺页重试、HMM 区别、三种 Shadow 映射及稀疏 GPUVA 安全性**；通用组件代码只在前述实现指南，绝非官方ROCm绕过开关。
 - [版本化厂商证据及核验资料](docs/research-notes/vendors.md)、[机器可读证据登记](docs/research-notes/vendors_sources.json)、[实体GPU硬件部署审计](docs/hardware-deployability-audit.md)。
 - [生产软件工程量估算（沿用v1.8数值）](docs/estimates-v1.8.json)：B/C/D/E/F按**责任包**估算，公共P一次计费，F不含RTL/ASIC成本。
-- [研究进度](docs/research-progress.md)、[修订历史](docs/revision-history.md)、[结构审计记录](docs/validation-report.json)。
+- [研究进度](docs/research-progress.md)、[历史架构取证笔记](docs/research-notes/architecture.md)（仅保留 R1～R9 原始来源和勘误）、[修订历史](docs/revision-history.md)、[结构审计记录](docs/validation-report.json)。
 
 ## GPU样例与CI
 
