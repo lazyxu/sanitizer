@@ -1,6 +1,6 @@
 # LLVM GPU Sanitizer：自研真实GPU技术设计
 
-**版本 v2.5 · 2026-10-23｜设计与样例阶段；目标自研GPU真实检查器未实现，GPU_NOT_RUN。**
+**版本 v2.6 · 2026-10-23｜设计与样例阶段；目标自研GPU真实检查器未实现，GPU_NOT_RUN。**
 
 本项目为自研 LLVM GPU Backend、GPU Device Runtime、UMD/KMD及可能涉及的Firmware/RTL，研究GPU空间/时间内存错误、Initcheck、Racecheck和Synccheck。**先明确参考设计而不重复创造产品路线：重点参考2家厂商（NVIDIA、AMD），基础空间检查采用3种值得比较的厂商技术配置。**
 
@@ -25,10 +25,10 @@
 - [Intel oneAPI 设备端 ASan/MSan/TSan 专题](docs/intel-oneapi-device-sanitizers.md)：官方 C/C++ 2026.0 设备能力、SYCL/OpenMP 编译运行示例、Unified Runtime 协作及限制，定位为成熟辅助参考。
 - **[核心方案与能力比较](docs/core-design-comparison.md)**：现行计数、来源、是否完全一致、三种参考配置能力表、D2/E/F与Intel/MUSA定位。
 - [S01厂商实施指南](docs/S01-vendor-implementation-guide.md)：NVIDIA运行时与编译期、AMD Shadow、B1/E及无XNACK支持边界，**只保留厂商机制与选型**。
-- [完整技术研究（23章、28场景）](docs/llvm-gpu-sanitizer-research.md)：目标ISA/内存语义、元数据、实现与性能、验收细节。
+- [完整技术研究（23章、28场景）](docs/llvm-gpu-sanitizer-research.md)：目标 ISA /内存语义、元数据、实现与性能；§4 保留厂商机制对比，版本清单和运行命令由证据登记及专题维护。
 - [各组件唯一实现 ABI 与关键伪代码](docs/real-gpu-components-implementation.md)：Compiler、Device Runtime（含 safe Shadow Lookup）、UMD、KMD、Firmware/RTL及CLI。
 - [AMD无XNACK/HMM硬件适配与Shadow取舍](docs/amd-gpu-asan-hardware-fallback.md)：**XNACK 缺页重试、HMM 区别、三种 Shadow 映射及稀疏 GPUVA 安全性**；通用组件代码只在前述实现指南，绝非官方ROCm绕过开关。
-- [实体GPU硬件部署审计](docs/hardware-deployability-audit.md)、[厂商资料与架构笔记](docs/research-notes/)。
+- [版本化厂商证据及核验资料](docs/research-notes/vendors.md)、[机器可读证据登记](docs/research-notes/vendors_sources.json)、[实体GPU硬件部署审计](docs/hardware-deployability-audit.md)。
 - [生产软件工程量估算（沿用v1.8数值）](docs/estimates-v1.8.json)：B/C/D/E/F按**责任包**估算，公共P一次计费，F不含RTL/ASIC成本。
 - [研究进度](docs/research-progress.md)、[修订历史](docs/revision-history.md)、[结构审计记录](docs/validation-report.json)。
 
