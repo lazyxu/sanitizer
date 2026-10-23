@@ -1,6 +1,6 @@
 # 自研 GPU Sanitizer：真实硬件实施的逐组件关键代码
 
-**版本：v2.4 · 2026-10-23 · 状态：设计与伪代码，尚未在目标 GPU 上实现或验收。**
+**版本：v2.5 · 2026-10-23 · 状态：设计与伪代码，尚未在目标 GPU 上实现或验收。**
 
 本文件只讨论能够随应用代码在**实体 GPU 执行**的设备检查器，或由实体 GPU 已具备的 MMU/Tag/Bounds 机制执行的检查。软件责任以 Compiler、KMD、UMD 三组计费；Device Runtime 虽由工具链或 UMD 交付，其检查指令**实际在 GPU 执行**。设备固件、RTL/硬件设计、CLI/测试作为跨组件专项，不能混为编译器功能。
 
@@ -143,6 +143,30 @@ CheckResult fail(DevCtx& ctx, Error kind, gpuva addr, uint64_t n) {
 }
 ~~~
 
+### 3.1 GPU Global Shadow 的安全查找契约（适用于无可恢复缺页目标）
+
+此处是 **B2 Checker 的唯一设备查询实现入口**；映射取舍、XNACK/HMM 的平台解释由 [AMD 专题 §2](amd-gpu-asan-hardware-fallback.md) 负责。GPU 检查器**不能先盲读未经映射的 Shadow，再希望 GPU Page Fault 由 CPU 自动恢复**。即便使用平坦 VA 公式或 Sparse VMM，仍要保证计算后的每个 Shadow Granule 在读取前是设备可访问的。
+
+~~~cpp
+// 设备端示意：Directory 根/Present 结构必须自身始终映射。
+ShadowResult safeShadowLookupNoFault(DevCtx& ctx, gpuva appAddr, uint64_t bytes) {
+    if (!validAddressArithmetic(appAddr, bytes)) return {RANGE_OVERFLOW};
+    if (!ctx.metadataReady) return {TOOL_FAILURE};
+    for (Granule g : touchedShadowGranules(appAddr, bytes)) {
+        // 此步不能读取未知映射的叶子 Shadow。
+        ShadowPageState state = ctx.alwaysMappedRoot.lookup(g);
+        if (state == UNKNOWN_ADDRESS_SPACE) return {UNSUPPORTED_ADDRESS};
+        if (state == REGISTERED_BUT_NOT_MAPPED) return {TOOL_FAILURE};
+        if (!state.ready || !state.physicallyMapped) return {TOOL_FAILURE};
+        byte shadow = gpuLoadShadow(state.leaf, g);
+        if (!allRequestedBytesAddressable(shadow, g, appAddr, bytes))
+            return {OUT_OF_BOUNDS};
+    }
+    return {VALID};
+}
+~~~
+
+在声明**仅跟踪自研 `gpuMalloc/gpuFree` Global Memory** 且登记完整时，可在对象 Registry 已验证的前提下将未登记目标地址归类为 INVALID/OOB；对 Host Mapped、Peer/External 等可能合法但未登记的地址，则必须先标 UNKNOWN/UNSUPPORTED，不能直接误报。跨 Shadow 页和跨 Granule 都要检查，根/Present 自身不可缺页。设备端返回 TOOL_FAILURE 时不允许继续原非法 GPU Store；UMD/Allocator 的映射、Poison、Present 更新与 Launch/Fence 顺序见 §4/§6。
 **错误时不能继续执行非法访存**。必须在实际 GPU 上证明 dispatch/context abort 可靠、其他 lane 不会悬挂在 barrier；否则该模式启动前应拒绝。不能仅让一条 lane return；不能把日志空间不足误报为程序 clean。Shadow 1:8 的可表示性限制、非连续有效字节以及 suballocation，须按对象描述符或更细粒度方案补充，不虚报保证。
 
 ## 4. UMD DebugAllocator / ShadowManager：对象真值与队列依赖（B/D/E）

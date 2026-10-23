@@ -1,6 +1,6 @@
 # S01 GPU Sanitizer厂商参考与目标组件实施：NV-R / AMD-B2 / NV-C
 
-**版本 2.4 · 2026-10-23 · 适用对象：目标实体GPU、LLVM Compiler/Device Runtime、UMD、KMD，以及实际需要的Firmware/RTL。**
+**版本 2.5 · 2026-10-23 · 适用对象：目标实体GPU、LLVM Compiler/Device Runtime、UMD、KMD，以及实际需要的Firmware/RTL。**
 
 > 本文是面向研发落地的**厂商方案优先**设计说明，不是某个闭源 GPU Sanitizer 的反编译说明。凡“厂商官方确认”的机制都给出来源与限长英文原文；凡没有公开具体实现的数据结构、ISA 注入方法或内核接口，均明确写作**本项目建议实现**，不冒充 NVIDIA/AMD 的私有实现。
 >
@@ -199,7 +199,7 @@ Runtime/Reporter：设备错误PC/workgroup/lane、错误对象与源位置
 
 **一个 Shadow Byte 不能表达同 Granule 内任意不连续的合法子区域。** 因而 S05 的子对象问题与一般指针来源检查不能单凭 1:8 Shadow 自动解决。
 
-具体 64 B 地址、合法反例和实际可执行程序在 [S01 唯一案例 README](../samples/S01/README.md)；通用按访问宽度检查与安全元数据访问代码在 [组件指南 §3](real-gpu-components-implementation.md)，而无 XNACK 的三种物理映射取舍在 [AMD 硬件专题 §2](amd-gpu-asan-hardware-fallback.md)。Shadow 缺失或未就绪不允许被默认为 VALID。
+具体 64 B 地址、合法反例和实际可执行程序在 [S01 唯一案例 README](../samples/S01/README.md)；通用按访问宽度检查与 `safeShadowLookupNoFault` 在 [组件指南 §3.1](real-gpu-components-implementation.md)，无 XNACK 的三种物理映射取舍在 [AMD 硬件专题 §2](amd-gpu-asan-hardware-fallback.md)。Shadow 缺失或未就绪不允许被默认为 VALID。
 
 ### 2.3 如果模仿 AMD，需要怎样修改每个组件？
 
@@ -223,23 +223,9 @@ Runtime/Reporter：设备错误PC/workgroup/lane、错误对象与源位置
 
 ### 2.5 AMD 官方GPU ASan验证命令与条件
 
-~~~bash
-# 必须在真正支持该offload arch及XNACK的AMD设备上执行。
-# 这里gfx90a只是官方示例，不能填一个设备并不支持的arch来伪造成功。
-export ROCM_ARCH=gfx90a:xnack+
-export HSA_XNACK=1
-export LD_LIBRARY_PATH=/opt/rocm/lib/asan:/opt/rocm/lib:$LD_LIBRARY_PATH
+**以 [AMD 硬件适配指南 §12 的官方环境验证命令](amd-gpu-asan-hardware-fallback.md) 为唯一完整命令入口**：仅在真实支持 `xnack+`、HMM 和对应版本 ASan HIP Runtime 的 GPU 上使用 `hipcc -fsanitize=address -shared-libsan --offload-arch=gfx...:xnack+`；还要实际检查 `/asan/` 下的 HIP 库及包含 `on amdgpu device` 的错误报告。设置环境变量不可能为不支持 XNACK 的芯片增加该能力。
 
-hipcc -x hip -std=c++17 -O1 -g -fsanitize=address -shared-libsan \
-  --offload-arch="$ROCM_ARCH" samples/S01/amd.hip.cpp -o s01_hip
-ldd ./s01_hip        # 确认ASan runtime/插桩HIP库路径
-./s01_hip --good
-./s01_hip --bad      # 应搜索明确标记“on amdgpu device N”的设备报告
-~~~
-
-AMD官方文档明确要求 `--offload-arch=gfx...:xnack+`，并指出在 `xnack-` 的目标上编译器可能给出warning、设备代码**没有插桩**，即使二进制运行正常也不能算GPU ASan通过。GPU Debug模式使用的ASan运行库也需要与编译版本匹配，并核查实际加载的是 `/asan/` 的HIP相关库。[ROCm GPU ASan官方Compiling章节](https://rocmdocs.amd.com/projects/llvm-project/en/latest/conceptual/using-gpu-sanitizer.html#compiling-for-asan)
-
-已知限制：有限Redzone会被wild访问跳过；Shadow状态若未正确维护可能误报/漏报；Private/stack设备地址空间并非天然全部覆盖，LDS/shared还有其降级处理。这些事实证明 **ASan不是KMD MMU检查，也不是完整来源/时间身份验证**。参考同一官方文档Known issues章节。
+可运行 S01 的 CUDA/HIP 样例、合法/非法输入与工具输出分类统一以 [S01 README](../samples/S01/README.md) 和 [manifest](../samples/manifest.json) 为准。不能把 Host CPU ASan 或普通 GPU API 返回码误算为设备访存检测。
 
 ### 2.6 AMD 式移植比 NVIDIA-R 更适合什么条件？
 

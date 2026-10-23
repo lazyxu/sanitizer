@@ -1,6 +1,6 @@
-# AMD GPU AddressSanitizer 机制复刻：逐组件修改、硬件依赖与无硬件特性替代路径
+# AMD GPU AddressSanitizer：XNACK/HMM 硬件依赖、Shadow 映射取舍与软件替代
 
-**版本：v2.0 · 2026-10-22 · 目标：在自研实体GPU上实现真实可执行的Address Sanitizer；不是移植仅限于某一厂商的GPU配置，也不是已有产线实现。**
+**版本：v2.5 · 2026-10-23 · 目标：在自研实体GPU上实现真实可执行的Address Sanitizer；不是移植仅限于某一厂商的GPU配置，也不是已有产线实现。**
 
 本指南区分两件事：(1) AMD ROCm 7.2.4 当前官方 GPU ASan 的已支持环境；(2) 自研LLVM GPU后端可以采取的等效软件检查架构。两者不能互相推导硬件支持。产品检查的执行点始终是真实GPU上的load/store/atomic之前的设备指令或真实MMU硬件，绝非仅有Host API拦截。
 
@@ -62,172 +62,67 @@
 
 **归纳：** ①主要付出物理显存，②可能在未映射 Shadow 上直接 Fault，③通常增加显式索引开销。已驻留 Shadow 若在 Kernel 仍可能访问时被透明换出，也不能再依赖 XNACK 缺页重试；要么保持驻留，要么在后续使用前显式迁回。三种方式均可用于不具备 XNACK/HMM 的自研 B2，但都不等于能够直接运行 AMD 官方 GPU ASan。
 
+### 2.3 无 XNACK 下的 Shadow 页有效性前置检查
+
+关键顺序是 **先证明 Shadow 页可读，再执行 Shadow Load**：软件两级 Directory 或始终有效的 Present 元数据区可预先判定是否映射；GPU MMU 稀疏映射本身不能自动处理未映射的任意野指针。示意 `safeShadowLookupNoFault` 与结果区分只在[通用组件指南 §3](real-gpu-components-implementation.md)维护；这里规定硬件前提与错误归属。
+
+**显式映射的发布顺序：** `alloc backing → 建立 PTE/访问权限 → 初始化 Shadow/Poison → GPU fence 可见 → publish Ready/Present → launch`；Unmap/复用必须先结束可能读取旧映射的 GPU 操作，再撤销 Present 与物理页。若页大小大于逻辑 Shadow 字节，多个细小 Allocation 应尽量共用 Shadow 页，不能把每次 64B `gpuMalloc` 直接等同于 64KiB Shadow 物理分配。按页共享和 TLB 的真实性能必须实测。
+
 ## 3. Clang/Driver与构建系统
 
-自研编译开关不要直接照搬AMDGPU的xnack+强制检查。先检测目标GPU真实能力，并按业务契约选择算法；同时把未支持空间/指令写入manifest。若是实际AMD ROCm官方工具，仍必须遵守它的xnack+及运行库要求。
+**AMD 官方与自研 Target 不能混为同一配置：** ROCm GPU ASan 的受支持路径使用 `xnack+` 目标、HMM 和配套 ASan Runtime；自研 LLVM 后端不必照搬 `:xnack+` 编译门槛，但必须声明实际设备能否 Load 元数据、映射 Shadow、发布 Queue Fence、可靠处理错误。若当前模式不满足这些契约，Compiler/Loader 必须标明 `UNSUPPORTED`，不能生成“只检查 CPU”的假成功。
 
-~~~cpp
-SanMode chooseSanitizer(const TargetCaps& caps) {
-  if (!caps.gpu_loads_device_metadata) return Unsupported;
-  if (caps.flat_gpuva_window && caps.shadow_backing_ready) return B_ShadowFlat;
-  if (caps.device_descriptor_access && caps.alloc_registry_abi) return B_Interval;
-  return Unsupported;
-}
-if (using_official_rocm_gpu_asan && !actual_xnack_plus_supported)
-  fail_build("GPU ASan device instrumentation unavailable"); // 不悄悄生成CPU-only成功
-link_device_library(mode, san_abi_version);
-emit_module_manifest(mode, supported_opcodes, addr_spaces, unchecked_sites);
-~~~
+**唯一通用实现位置：** [组件指南 §2](real-gpu-components-implementation.md) 的 LLVM Pass、Target 最终 ISA 覆盖清单；[§6.1](real-gpu-components-implementation.md) 的 `B2_SHADOW` / `B1_CURRENT_LIVE_INTERVAL` / `D1_ORIGINAL_OBJECT_BOUNDS` 能力协商及 `metadata_ready`。本专题只保留**缺 XNACK/HMM 时的硬件选择条件**，不再复制独立 `chooseSanitizer` 代码。
 
-**无XNACK替代：**自研Pass不依赖XNACK编译目标；使用设备global metadata load读取预驻留的B2 Shadow，或使用B1 GPU端当前Live区间查询；如果来源可证明，D1可直接比较寄存器/参数base/limit。**B1/B2都不能仅凭地址判断恢复原对象来源**。**无HMM替代：**Host内存中的指针不能被当成GPU指针传给设备，UMD必须提供实际GPUVA并在launch前完成descriptor上传与fence。此替代是新实现，不是“让现有ROCm官方ASan在不支持架构上可用”的命令行技巧。
+
 
 ## 4. LLVM IR Pass：访存前检查（Compiler，方案B）
 
-分早期对象语义、优化后IR检查与最终ISA审计三阶段：D1来源身份需要在优化可能丢弃前传播；B地址检查放在保持真实访问、masked条件与地址空间语义的阶段；late audit确保后端新增的访存仍有检查点。
+**AMD 特有注意点：** LLVM 上游 AddressSanitizer 的 AMDGPU 分支存在 Target AddressSpace 与 Generic Pointer 分类条件；LDS/Shared 和 Private/Stack 是否插桩还受真实 Lowering 和官方版本限制。启用 CPU ASan Pass **不能**证明自研 GPU ISA 的 Load/Store/Atomic、Masked/EVL、Async/Image 均被检查。
 
-~~~cpp
-for (auto& insn : device_fn.instructions()) {
-  if (is_sanitizer_internal(insn)) continue;
-  for (auto m : classify_memory_effects(insn)) {
-    if (!known_bytes_and_active_mask(m)) {
-      manifest.uncovered(m.site, "UNKNOWN_FOOTPRINT"); continue;
-    }
-    Mask effective = active_lanes(m) & active_elements(m) & evl_mask(m);
-    if (!is_supported_addrspace(m.space)) {
-      manifest.uncovered(m.site, "UNSUPPORTED_ADDRSPACE"); continue;
-    }
-    emit_before(insn, call_device_check(
-      m.address, m.bytes, m.kind, m.space, effective, m.site,
-      original_object_token_if_available(m)));
-  }
-}
-~~~
-
-必须包含Load/Store/Atomic、masked/VP、memcpy、device malloc、image/surface、async-copy语义，且逐个声明支持范围。原子操作保持一次原子，不允许改写成非原子的load/store。被mask关闭元素绝不访问Shadow或报告误报。AddressSpace(3)/(5)在LLVM当前AMDGPU路径存在特定排除/处理，不能直接以AMD当前Pass成功推断已覆盖LDS/private。
+自研编译插桩、有效 Lane/元素 Mask、范围宽度、原子操作不降级、合法/非法访问的 CFG Guard 与最终覆盖 `Manifest` 的**唯一通用示意代码**在[组件指南 §2](real-gpu-components-implementation.md)。AMD 官方具体已知能力与不足在本指南 §1；未支持的地址空间/Opcode 明确 `PARTIAL_COVERAGE` 或 `UNSUPPORTED`。
 
 ## 5. Target Backend / MC：最终机器访存覆盖
 
-~~~cpp
-for (MachineMemOp op : final_target_isa(kernel)) {
-  if (op.is_trusted_device_checker) continue;
-  if (!op.has_dominating_check_with_matching_mask_width_space()) {
-    manifest.record_uncovered(op.pc, op.opcode, op.space);
-  }
-}
-if (strict_mode && manifest.has_uncovered_memory_effects()) reject_load();
-~~~
+**缺少专用 Shadow 硬件指令不阻止 AMD-B2 类软件检测。** GPU 能执行正常 Global Load、整数运算、比较和控制流，即可实现已映射 Shadow 的设备端判定。实际限制是额外指令、Cache/TLB、Register/Scratch/Occupancy 成本，而非检测算法丧失合法性。
 
-**没有专用硬件指令的替代：**用现有目标GPU integer/branch/global-load生成检查Stub，不要求新增bounds硬件指令。**若Target不暴露特殊async/image真实足迹：**该类opcode标PARTIAL/UNSUPPORTED，不能让后端audit假通过。目标资源压力也应测量register/scratch/occupancy及编译时间。
+Target 可能在 LLVM IR 插桩后 Lower 出新的访存；最终 ISA 的字节足迹、Predicate、AddressSpace、Atomic、Image/Async 必须复核。统一 Machine Opcode Coverage Audit 与严格拒绝机制见 [组件指南 §2](real-gpu-components-implementation.md)，此处不重复维护机器码检查循环。
 
 ## 6. GPU Device Runtime：Shadow和对象区间两种可部署实现
 
-经典Shadow查询1:8时必须包含所有跨granule有效字节，不能只检查起始地址。地址端点计算先检查整数溢出，区分Generic/Global/Shared/Private。Shadow读本身需要合法映射，所有元数据helper标记可信避免递归插桩。
+**没有 XNACK 的关键专属约束：** 对应用地址计算出 Shadow 地址之后，**绝不能在未验证页映射或 Metadata Ready 之前直接发出 Shadow Global Load**。可能合法但未登记的外部地址应返回 `UNKNOWN/UNSUPPORTED`；已声明跟踪的对象却缺少所需 Shadow，则是 `TOOL_FAILURE` 或启动前拒绝，不能把不存在的页当成 `0x00`。对于 1:8 Shadow，必须覆盖宽访问穿过的全部 Granule，并防止整数回绕。
 
-~~~cpp
-__device__ SanVerdict check_access(GpuVA addr, uint64_t bytes,
-                                    Space space, ActiveMask mask,
-                                    SiteId site) {
-  if (!active(mask) || bytes == 0) return VALID;
-  if (bytes - 1 > MAX_GPUVA - addr) return fail_and_block(RANGE_OVERFLOW, site);
-  if (!metadata_ready()) return fail_tool_and_block(METADATA_UNAVAILABLE);
-  if (space == Global && ctx.mode == Shadow) {
-    for (auto g : all_granules_intersecting(addr, bytes))
-      if (!shadow_encodes_all_accessed_bytes_valid(g, addr, bytes))
-        return fail_and_block(OUT_OF_BOUNDS, site);
-  } else {
-    auto d = device_descriptor_lookup(addr, space, block_id(), thread_id());
-    if (!d.found || !range_within_original_object(d, addr, bytes))
-      return fail_and_block(OBJECT_BOUNDS, site);
-  }
-  return VALID;
-}
-~~~
-
-**元数据映射无法满足B2要求时：**UMD应先证明既有GPUVA与Shadow映射满足所选B2机制；若不具备所需映射但能够读取设备对象索引，可以改用B1当前Live Allocation查询。只有在全查找链路可在真实GPU执行并在dispatch开始前可见时才能算设备检查。基于当前地址查live allocation的区间表是B1地址级检查，无法自动发现A指针访问live B；要D1原对象token才能发现。
-
-**无自动页换入：**metadata必须全驻留且保证合法映射，缺页不做透明Host补救；分配/上传失败拒绝launch而不是访问空Shadow。若报告资源不足，设置sticky TOOL_FAILURE且阻止相应GPU访存。
+[组件指南 §3](real-gpu-components-implementation.md) 是统一的设备端安全查询、Bounds、错误标志和 `Report` 实现位置。本指南 §2.2 的三种 Shadow 物理分配策略是**内存映射取舍**，不是三种不同的检查语义。B1 是设备端当前 Live Allocation 区间查询；A 派生指针进入仍存活的 B 时不能无来源元数据直接获得 D1 保证。
 
 ## 7. UMD：DebugAllocator、ShadowManager和异步生命周期
 
-UMD是对象语义的权威来源：物理BO长度不等于逻辑对象长度；pool内suballocation、tensor view、external import以及graph replay要有不同的对象/映射身份。映射和命令完成由KMD提供底层证据。
+UMD 需要区别应用请求的 `requested_size`、实际 BO Backing Bytes 和保护区大小；在 `gpuMalloc/gpuFree`、Pool Suballocation、External Import、Graph Replay 等对象生命周期节点，确保 Shadow 映射、Poison 和 Ready Fence 的发布顺序正确。**无 HMM 时，不能直接把未映射的普通 Host Pointer 当作 GPU 指针**；必要 Registry/Descriptor 应通过正式 DMA/Copy 路径上传设备 BO。
 
-~~~cpp
-Allocation san_alloc(Queue& q, size_t n) {
-  auto bo = driver.allocate_backing(round_up(n + redzones));
-  auto obj = registry.create(bo.gpuva, n, bo.backing_length, next_id());
-  auto shadow = device_shadow_mapping_for(obj);
-  Fence ready = q.enqueue(shadow_poison_redzones_and_unpoison_body(obj, shadow));
-  return {obj.gpuva, obj.id, ready}; // 所有kernel必须在ready之后
-}
-Fence san_free(Queue& q, Allocation obj, FenceSet final_uses) {
-  auto barrier = q.wait_for(final_uses);
-  auto poison = q.enqueue_after(barrier, poison_and_retire_metadata(obj));
-  return q.enqueue_after(poison, retire_allocation(obj));
-}
-~~~
-
-**无HMM替代：**Host为Registry生成连续descriptor快照，使用真实DMA/copy engine或UMD认可的上传路径拷贝到GPU元数据BO；Gpu launch依赖上传fence；设备写的报告在完成fence后读回。**元数据映射失败：**只有在事先声明且设备可执行的B1模式能满足所需覆盖时才可使用；否则拒绝任务。**若无前进性或可靠abort：**默认strict模式拒绝风险配置。
-
-Shadow Poison/Unpoison必须保证合法stream-before关系，不按Host API返回时间直接宣称GPU free已生效。地址复用后旧指针的身份判断仍须由D2承担。
+元数据缺页不能在 Kernel 执行期间依赖 Host 自动补映射；`gpuFree` Host 返回也不代表设备端 Poison 已生效。详细 `SanObject`、`sanMalloc`/`sanFreeAsync`、跨队列依赖和 `Launch` 路径只维护在[组件指南 §1.1、§4、§6](real-gpu-components-implementation.md)。地址复用的旧指针需要 D2，而不是只更新 B2 Poison。
 
 ## 8. KMD：真实GPU映射、权限和完成，不强制每条路线都改
 
-KMD实际责任为BO/GPUVA、合法元数据页权限、代码对象装载、queue提交、fence与fault传递；不从裸GPUVA推导tensor view或原始指针身份。已有接口足够时新增KMD代码可为零。
+**没有 XNACK/等效恢复机制：** KMD 应在 Kernel 可执行之前建立合法 Shadow/Report/Descriptor GPUVA 映射与必要的 PTE/权限（Shadow 读、Report 写）并保证 TLB 和 Fence 顺序；绝不能预期执行中的 Fault 会自动恢复。若不支持稀疏 VMM，可采用事先证明能够合法访问的固定设备 BO 或软件安全索引，但**未映射 Shadow 的直接读取依然不安全**。
 
-~~~cpp
-SubmitResult submit_checked(Context ctx, Binary checked, BO metadata,
-                            BO report, Fence ready) {
-  require(can_map_gpu_metadata(ctx, metadata));
-  require(validate_gpu_code_and_usage(ctx, checked));
-  require(metadata.page_permissions == GPU_READ);
-  require(report.page_permissions.has(GPU_WRITE));
-  return submit_gpu_job(ctx, checked, {metadata, report}, wait=ready);
-}
-~~~
-
-**无XNACK：**KMD不启用page-fault retry，改为在launch前全部映射必要metadata/Shadow；缺页视为配置或运行失败。**没有GPU VMM权限功能：**采用本来就能让GPU合法访问的预留设备BO，硬件隔离能力仍缺失；对于需要进程隔离的保证，不能用仅UMD登记对象来冒充KMD权限。**KMD未暴露真实GPU完成fence：**必须补对应契约，否则无法证明Shadow更新、报告回读和异步释放时序。
+KMD 已有 BO/GPUVA、Code Permission、Submit/Completion/Fault/Abort 接口满足需要时，新增源码可以为零；缺少可靠设备完成 Fence 就不能声称 Shadow 初始化或异步释放顺序正确。通用提交/权限检查的唯一代码见 [组件指南 §7](real-gpu-components-implementation.md)。
 
 ## 9. Firmware / Trap / 错误终止
 
-这是最容易被低估的**真正硬件依赖**。发现一个非法store后不能只在一个lane return，让别的lane停在barrier。推荐区分：(a)真正的设备硬件trap/context abort；(b)有明确可证明的指令级谓词屏蔽+统一错误完成；(c)二者都没有则不支持严格安全停止保证。
+发现非法 GPU Store 后需要**真正阻止非法访存**，并向整个执行/Context 发布失败；仅让出错 Lane `return` 可能破坏 Barrier 参与集合并造成死锁。可以依赖已有可靠的 Dispatch/Context Abort，或在明确支持范围内使用谓词屏蔽与统一的错误完成协议；二者都无法证明时应拒绝该 Strict 模式，而不是无条件报告成功。
 
-~~~cpp
-DeviceResult on_san_error(Context& ctx, Access a) {
-  report_sticky_error_before_completion(ctx, a.site, a.address);
-  if (caps.safe_dispatch_abort) return request_real_abort(ctx.dispatch);
-  if (caps.can_predicate_suppress_invalid_memory_effect &&
-      caps.has_defined_failure_completion)
-    return suppress_memory_effect_and_mark_dispatch_failed();
-  return MODE_UNSUPPORTED; // 必须在launch前预测并拒绝无法安全处理的模式
-}
-~~~
-
-无硬件trap的谓词屏蔽只能防止当次非法访存生效；被屏蔽load的后续值没有正常应用语义，整个dispatch结果必须标为失败，不能宣称应用继续计算正确。对atomic/copy/async、barrier参与集合和并发错误，需要单独证明屏蔽不会破坏硬件前进性。Firmware若已有正确停止API，仅按KMD/UMD协议补接线；不存在时不应虚构。
+Firmware/KMD 和设备 Checker 的通用错误执行代码、Report 可见性和恢复/终止状态机已在 [组件指南 §3、§7～8](real-gpu-components-implementation.md) 定义。本节保留**缺可恢复缺页时不能依赖故障补映射、缺可靠 Abort 时不能承诺设备继续正确运行**的硬件边界。
 
 ## 10. RTL/实体硬件：仅F1/F2条件性Tag/Bounds硬件
 
-- **F1 硬件Tag：**实体芯片需比较指针tag与memory tag并在正确ISA异常点处理，不允许把CPU ASan的软件Tag函数称为硬件支持。无硬件时使用D1的原对象Bounds，或在D2受控ABI内显式携带object_id/epoch并执行GPU软件比较。
-- **F2 硬件Bounds：**没有descriptor硬件比较单元时，Compiler以原本可执行的GPU integer/branch/load来比较base、limit、访问宽度。只有保留来源token才能提供真正的原对象检查，不能靠当前GPUVA反查。
+**F1 硬件 Tag 与 F2 硬件 Bounds** 只有在真实目标 GPU 具备所需的 ISA/RTL/元数据、失效和 Fault 协议时才能声明硬件实现。缺少专用 Shadow/Tag/Bounds 指令时使用 LLVM 插桩和正常 GPU Global Load/Compare/Branch，不能把软件检测称为硬件能力。即使硬件只看当前有效 GPUVA，也不会凭空获得 D1 原对象来源。
 
-**硬件逻辑缺失的准确代价：**软件增大指令量、寄存器、访存和metadata占用；无法覆盖未插桩kernel；专用硬件fault isolation、周期精度及透明硬件检测也不会因软件替代自动获得。是否投资新RTL须在同一真实GPU应用上测量B/D软件瓶颈后决定。
+条件性 RTL/Firmware/Tag/Bounds 的唯一通用源码与真实芯片验收在[组件指南 §8～9](real-gpu-components-implementation.md)；专用硬件是否值得研发，须在自研设备软件 B2/D1 的同条件显存和性能结果出现后再评估。
 
 ## 11. Reporter、CLI与失败分类
 
-~~~cpp
-Result aggregate_gpu_result(Completion done, ReportBuffer report,
-                            CoverageManifest coverage) {
-  if (!done.real_gpu_executed) return GPU_NOT_RUN;
-  if (report.overflow || report.metadata_oom || done.report_failed)
-    return TOOL_FAILURE;
-  if (!coverage.all_required_gpu_ops_checked) return PARTIAL_COVERAGE;
-  if (report.has_matching_device_oob) return GPU_DETECTED;
-  if (done.hw_fault) return DEVICE_FAULT; // 不等于精确对象越界
-  if (!done.completed_normally) return TOOL_FAILURE;
-  return CLEAN_FOR_DECLARED_COVERAGE;
-}
-~~~
+**判定优先级必须清楚：** 没有真实目标 GPU 执行证据时为 `GPU_NOT_RUN`；Metadata/Report OOM 或日志丢失时为 `TOOL_FAILURE`；所需指令或模块未插桩则为 `PARTIAL_COVERAGE/UNSUPPORTED`；仅在确有对应设备报告时才可归类 `GPU_DETECTED`，完成执行但未发现错误不代表超出声明范围的 `CLEAN`。
 
-至少记录真实GPU型号/ISA、编译/运行库版本、模块hash和PC映射、访问宽度、space、lane、block、分配/epoch、Checker版本、未覆盖指令与拒绝原因。Host ASan、普通API错误和GPU设备错误分别记录，不混合统计。
+报告中的设备型号、PC/Module Build ID、访问宽度、Lane、对象/Generation、Meta Ready 状态和 Context/Queue 应由统一 `SanReport` ABI 承载；Host API、CPU ASan、GPU Fault、GPU AddressSanitizer 的设备报告须分别归类。通用 Reporter/CLI 的唯一代码在 [组件指南 §1.1、§10](real-gpu-components-implementation.md)。
 
 ## 12. CI、S01样例、无XNACK实验及验收次序
 

@@ -229,12 +229,15 @@ check(all("auxiliary" not in str(x).lower() for x in budget.get("nonstandalone_f
 
 amd_guide = read("docs/amd-gpu-asan-hardware-fallback.md")
 for required in (
-    "XNACK", "HMM", "无XNACK", "无HMM", "无硬件", "Compiler",
+    "XNACK", "HMM", "无XNACK", "Compiler",
     "LLVM", "Device Runtime", "UMD", "KMD", "Firmware", "RTL",
     "Shadow", "Interval", "GPU", "TOOL_FAILURE", "S01",
 ):
     check(required.lower() in amd_guide.lower(),
           "AMD指南未解释硬件缺失路径或组件: " + required)
+check(("无 HMM" in amd_guide or "无HMM" in amd_guide)
+      and ("缺少专用 Shadow 硬件指令" in amd_guide or "无硬件" in amd_guide),
+      "AMD指南必须解释缺少HMM及Shadow硬件指令的可部署软件路径")
 # XNACK与Shadow三种映射取舍必须保留，避免把GPU缺页恢复误说成Shadow合法性判断。
 for required in (
     "### 2.1 XNACK 的具体功能",
@@ -254,6 +257,54 @@ check("三种核心取舍" in guide and "可恢复 GPU Page Fault" in guide
       "S01指南需引用XNACK含义及三项Shadow映射取舍")
 check("不新增第四种" in canonical,
       "核心分类不能把XNACK Shadow映射策略另算新算法")
+
+# AMD硬件专题只保留Xnack/HMM与Shadow映射的硬件特有内容，通用设备代码须只有一个权威位置。
+amd_hardware_chapters = [int(n) for n in re.findall(r"^## (\d+)\. ", amd_guide, re.M)]
+check(amd_hardware_chapters == list(range(1, 13)),
+      "AMD硬件适配指南必须保留1～12节与原有章节锚点")
+for required in (
+    "### 2.1 XNACK 的具体功能",
+    "### 2.2 没有 XNACK 且没有等效缺页重试机制",
+    "### 2.3 无 XNACK 下的 Shadow 页有效性前置检查",
+    "Page Fault 不代表每次都新分配物理内存",
+    "HMM（Linux Heterogeneous Memory Management）不是 XNACK",
+    "① 全量物理 Shadow 预分配",
+    "② 随 `gpuMalloc` 分配 Shadow",
+    "③ 按需物理 Shadow + 安全的两级 Shadow 索引",
+    "GPUVA 虚拟地址预留", "稀疏 GPUVA",
+    "safeShadowLookupNoFault",
+    "## 12. CI、S01样例、无XNACK实验及验收次序",
+    "-fsanitize=address -shared-libsan",
+    "real-gpu-components-implementation.md",
+):
+    check(required in amd_guide,
+          "AMD硬件专题不能丢失XNACK/HMM/Shadow三取舍、映射安全与官方运行方式: " + required)
+for deprecated_duplicate in (
+    "SanMode chooseSanitizer(",
+    "for (auto& insn : device_fn.instructions())",
+    "__device__ SanVerdict check_access(",
+    "Allocation san_alloc(",
+    "SubmitResult submit_checked(",
+    "DeviceResult on_san_error(",
+    "Result aggregate_gpu_result(",
+):
+    check(deprecated_duplicate not in amd_guide,
+          "AMD硬件专题重复维护通用实现代码: " + deprecated_duplicate)
+check(implant.count("safeShadowLookupNoFault(") == 1
+      and "REGISTERED_BUT_NOT_MAPPED" in implant
+      and "UNKNOWN_ADDRESS_SPACE" in implant
+      and "GPU Global Shadow 的安全查找契约" in implant,
+      "设备运行库必须统一处理未映射Shadow、未知地址及工具元数据失败")
+check("export ROCM_ARCH=gfx90a" not in guide
+      and "-shared-libsan" in guide
+      and "amd-gpu-asan-hardware-fallback.md" in guide,
+      "S01需引用AMD的唯一官方构建命令，不能再复制完整脚本")
+check(report.get("hardware_guide_dedup", {}).get("hardware_source")
+      == "docs/amd-gpu-asan-hardware-fallback.md"
+      and report.get("hardware_guide_dedup", {}).get("implementation_source")
+      == "docs/real-gpu-components-implementation.md",
+      "硬件适配与通用Device Checker源码应在审计中分属唯一文档")
+
 # 文档索引与 Intel 正式专题的覆盖防回归，不把厂商能力归为第四种基础空间算法。
 docs_index = read("docs/README.md")
 intel_guide = read("docs/intel-oneapi-device-sanitizers.md")
