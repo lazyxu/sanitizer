@@ -1,5 +1,5 @@
 {
-  "version": "2.2",
+  "version": "2.3",
   "as_of": "2026-10-23",
   "scope": "repository document and structural evidence only",
   "status": "DOCUMENT_REVIEW; PHYSICAL_GPU_NOT_RUN",
@@ -7,8 +7,8 @@
   "physical_gpu_checker_result": "GPU_NOT_RUN",
   "real_gpu_performance": "NOT_MEASURED",
   "document": "docs/llvm-gpu-sanitizer-research.md",
-  "main_document_blob_sha": "4747496ba72ef0166ab09644c1d9098e9204b327",
-  "main_line_count": 2946,
+  "main_document_blob_sha": "5008a70079fd7e176de20f20a4f7ded83a82c030",
+  "main_line_count": 2416,
   "chapter_count": 23,
   "scenarios_count": 28,
   "reference_entries": 39,
@@ -148,7 +148,7 @@
   "KMD_increment_condition": "only proven missing production contracts",
   "C_runtime_compiler_source_changes_possible": 0,
   "F_hardware_caveat": "actual GPU silicon must implement feature, otherwise unsupported",
-  "CI_results": "CPU_STATIC_CI_HEAD_DEPENDENT; GPU_NOT_RUN",
+  "CI_results": "PENDING_HEAD_STATIC_CI; PHYSICAL_GPU_NOT_RUN",
   "claimed_real_gpu_detection": false,
   "report_meaning": "structural validation evidence, not running code on any target GPU",
   "legacy_text_cleanup": {
@@ -221,5 +221,23 @@
     "status": "DOCUMENT_VERIFIED_NOT_GPU_EXECUTED",
     "implementation_impact": "Supplementary compiler/runtime reference; does not add a fourth spatial checker configuration",
     "authoritative_detail": "docs/intel-oneapi-device-sanitizers.md"
+  },
+  "scenario_documentation": {
+    "version": "v2.3",
+    "authoritative_detail": "samples/Sxx/README.md",
+    "canonical_case_readmes": 28,
+    "executable_sources_per_case": [
+      "cuda.cu",
+      "amd.hip.cpp"
+    ],
+    "authoritative_vendor_expectations": "samples/manifest.json",
+    "research_chapter": "docs/llvm-gpu-sanitizer-research.md#detection-scenarios",
+    "research_case_headings": 28,
+    "stable_case_anchors": 28,
+    "chapter_18_characters": 13907,
+    "grouped_component_responsibilities": 7,
+    "chapter_scope": "summary / links / grouped responsibilities / runner entry, without copied case bodies",
+    "validation_script": "scripts/validate_docs.py",
+    "hardware_execution": "GPU_NOT_RUN"
   }
 }
