@@ -1,5 +1,5 @@
 {
-  "version": "2.5",
+  "version": "2.6",
   "as_of": "2026-10-23",
   "scope": "repository document and structural evidence only",
   "status": "DOCUMENT_REVIEW; PHYSICAL_GPU_NOT_RUN",
@@ -7,8 +7,8 @@
   "physical_gpu_checker_result": "GPU_NOT_RUN",
   "real_gpu_performance": "NOT_MEASURED",
   "document": "docs/llvm-gpu-sanitizer-research.md",
-  "main_document_blob_sha": "5008a70079fd7e176de20f20a4f7ded83a82c030",
-  "main_line_count": 2416,
+  "main_document_blob_sha": "f6e4afa8411cde296dcfb03a704781ce077619d1",
+  "main_line_count": 2317,
   "chapter_count": 23,
   "scenarios_count": 28,
   "reference_entries": 39,
@@ -280,5 +280,38 @@
     "safe_device_lookup": "safeShadowLookupNoFault",
     "physical_gpu_execution": "GPU_NOT_RUN",
     "change_scope": "Documentation, source-of-truth pointers, and CPU static checks only"
+  },
+  "vendor_evidence_normalization": {
+    "version": "v2.6",
+    "source": "docs/research-notes/vendors_sources.json",
+    "schema_version": 2,
+    "source_records": 16,
+    "profiles": 4,
+    "profile_ids": [
+      "nvidia-compute-sanitizer",
+      "amd-rocm-gpu-asan",
+      "intel-oneapi-device-sanitizers",
+      "moore-threads-musa-compute-sanitizer"
+    ],
+    "official_docs_evidence_only": true,
+    "normalized_fields": [
+      "vendor",
+      "product",
+      "version_baseline",
+      "evidence_checked_at",
+      "hardware_requirements",
+      "instrumentation",
+      "runtime_requirements",
+      "detector_scope",
+      "known_limitations",
+      "reference_configurations",
+      "source_ids",
+      "canonical_detail",
+      "verification_status"
+    ],
+    "human_summary": "docs/research-notes/vendors.md",
+    "research_main": "docs/llvm-gpu-sanitizer-research.md#vendor-deep-dive",
+    "status": "STRUCTURED_VENDOR_EVIDENCE_NO_TARGET_GPU_EXECUTION",
+    "target_gpu_status": "GPU_NOT_RUN"
   }
 }
