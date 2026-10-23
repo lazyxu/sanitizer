@@ -1602,13 +1602,13 @@ K-F只为未具备的真实驱动状态契约计费。F基础预算已包含UMD�
 
 ## 18. 检测场景与实例分析
 
-本章将前面的能力、算法和组件职责落实到具体错误。每个场景回答六个问题：**什么输入和执行条件会触发；哪一行或哪一对事件有问题；违反了什么约束；有哪些检测方案；哪些组件必须提供信息；修复后与合法反例应得到什么结果。** S01～S28 是场景编号；M1～M6、I1、R1、S1、A1 是第2章的检测能力编号，与第20章里程碑 M0～M6 不同。
+本章保留**28项场景的摘要与稳定锚点**；每个案例的触发前提、错误/合法代码、检测算法、设备组件要求、可执行 CUDA/HIP 样例及验收要点，由对应的 [Sxx README](../samples/README.md) **唯一维护**，工具预期以 [manifest](../samples/manifest.json) 为准。S01～S28 是场景编号；M1～M6、I1、R1、S1、A1 是第2章的检测能力编号，与第20章里程碑 M0～M6 不同。
 
-**例子的地位与使用方式。** 除明确标注的规范事实外，本章是【工程建议】的原创教学和验收设计，尚未在用户 GPU 上编译或运行。代码采用 C/CUDA 风格伪代码及少量 ISA 风格操作，`alloc`、`kernel`、`consume`、`thread_id`、受控 allocator 和 metadata API 都表示相应语义，不是声称用户 SDK 已有同名接口。源级例子中的非法访问会涉及未定义行为；真实验收需要确认目标访问在优化后确实存在，必要时用受控 IR/MIR/ISA 测试补充，不能要求运行时报告一个已被编译器消除的操作。
+**例子与证据口径。** 各案例 README 的受控 allocator / ISA 伪代码不一定逐行等同可执行样例，也不意味着目标自研 GPU 已具有对应接口或硬件检测能力；真实验收须核对最终 ISA、合法反例和原始 GPU 报告。
 
 未另外说明时，分配成功、对象已发布且具有例中声明的访问权限；用于隔离单一错误的初始化和队列同步必须执行。一个场景里的错误版、修复版和其他变体应独立运行，不能让前一次非法操作污染后一次判断。访问范围统一使用半开区间 `[addr, addr+width)`；实际实现使用防整数溢出的等价比较，不直接信任可能回绕的 `addr+width`。
 
-**本版组件口径。** Device Runtime由编译器等生产责任包交付但在实体GPU执行；SDK/Host Runtime/Loader/CLI归UMD；KMD仅承担特权资源与故障契约。每例的实际生产责任见[§18.29](#scenario-platforms)和[关键代码](real-gpu-components-implementation.md)。
+**本版组件口径。** Device Runtime 执行 GPU 检查，SDK/Host Runtime/Loader/CLI 由 UMD 管理，KMD 承担资源和故障契约。按类别的责任见[§18.29](#scenario-platforms)，逐案例细节见 Sxx README，通用代码见[组件指南](real-gpu-components-implementation.md)。
 
 **厂商核心参照配置、判定语义、工程包与Checker类别是四个不同维度。** 主要厂商是NVIDIA、AMD；基础空间参考配置是NV-R、AMD-B2、NV-C，其中前两者同属当前地址有效性等级。B/C/D/E/F仅是工程实施与预算标签，E不增加独立访存判定算法，F需要实体芯片支持。Init/Race/Sync还需要真正运行的设备事件与算法，不会由Address Shadow自动提供Happens-Before。
 
@@ -1645,7 +1645,7 @@ K-F只为未具备的真实驱动状态契约计费。F基础预算已包含UMD�
 | [S27](#case-s27) Graph replay | 重放不能复活已失效的指针 | M5/A1 | 捕获对象身份与执行实例 |
 | [S28](#case-s28) 工具资源与终止 | 错误、覆盖不足与工具失败可区分 | 所有 checker 的可靠性 | 丢失计数、资源状态、abort 协议 |
 
-对跨页、负偏移、整数回绕、稀疏／非连续访问、peer／IPC 和多种特殊 opcode，应在对应场景下展开参数化变体。这 28 个实例覆盖本报告已经声明的主要场景类别，不构成任意 ISA 和全部语言错误的穷举。项目新增能力时，先增加场景及合法对照，再扩充支持矩阵。
+跨页、负偏移、整数回绕、稀疏访问、peer／IPC 及特殊 opcode 等变体归对应案例 README；28 例不是全部 ISA 与语言错误的穷举，扩展时先维护样例与 manifest，再更新本章索引。
 
 S01～S12除另行声明外，读入数据已初始化、输出对象独立有效，单个Kernel仅由指定线程执行目标访问。**所有检测能力必须来自B/C/D/E的真实GPU可执行检查代码或已存在的真实F类硬件。**
 
@@ -1653,743 +1653,243 @@ S01～S12除另行声明外，读入数据已初始化、输出对象独立有�
 
 ### 18.1 S01：Global 对象头部与尾部越界
 
-**建议先按厂商实施路径理解本例**：详见[S01：NVIDIA运行时与编译期Memcheck、AMD GPU ASan、其余方案的逐组件实施指南](S01-vendor-implementation-guide.md)。其中各路线分别说明为何检测本例、哪里可能漏检、五组件的代码与接口、核心伪代码和官方原文；本小节保留原来的错误代码、数学判断及验收描述。
+**关键判定：** 真实访问是否超出有效范围；需要的核心信息是地址、宽度、边界（M1/M2/M3）。本节仅保留索引摘要，不重复维护示例代码与验收细节。
 
-**前提与错误代码。** 受控夹具给 `a` 分配 64 B，即 16 个 `uint32_t`，首地址为 `0x1000`；前后各 16 B 是保留的不可访问区，不包含其他 live 对象。启动一个 32 线程 block，分别传入 `tail=false` 和 `tail=true`：
-
-~~~cpp
-__global__ void s01(uint32_t *a, bool tail) {
-    if (threadIdx.x == 0) {
-        int i = tail ? 16 : -1;
-        a[i] = 7;  // 错误：分别写 [0x1040,0x1044) 或 [0x0ffc,0x1000)
-    }
-}
-// 独立运行：s01<<<1,32>>>(a, false); s01<<<1,32>>>(a, true);
-~~~
-
-**哪里不对、怎样检。** 合法字节区间只有`[0x1000,0x1040)`；两次4B写分别落在尾后和头前。**真实GPU B方案**在应用store前查询已poison的Redzone，或**真实GPU C方案**使用已插桩的设备区间检查；两者都需UMD发布逻辑长度并检查完整访问范围，不能仅靠已映射GPU页。D1编译期设备检查器若保留原对象bounds也能检出。[L02][L05]
-
-**组件观测。** compiler 保留 store 的谓词、4 B 宽度和源位置；deviceRT 在执行写之前检查，不能让其他 31 个未执行线程产生报告；UMD 提供逻辑长度 64 B，而非把 allocator 的对齐补齐长度当对象长度。
-
-**合法反例、修复及报告。** 改为 `a[0]`、`a[15]` 应通过；循环边界应使用 `0 <= i && i < 16`。预期为 global 越界写，包含 M1／M3 对应保证、宽度 4、对象范围及偏移 `-4`／`+64`。若只有页级映射检查，两个地址仍位于已映射页时可能漏检；这不是对象检查已经通过。
-
-#### S01 不同检查机制的实体GPU修改和实卡验收
-
-实际对象只有64字节，GPUVA页命中不等于逻辑对象访问合法。必须在目标GPU执行的Global Store之前做相应检查。
-
-| 机制 | 参考与来源 | Compiler / UMD / KMD 修改 | 目标实体GPU验收 |
-|---|---|---|---|
-| B1 区间表 | LLVM访存识别与Live Alloc | GPU ISA设备检查；UMD发布区间；KMD映射 | 头尾4B错误与合法正反例 |
-| B2 Shadow | LLVM ASan、AMD GPU ASan | LLVM Pass/设备库，UMD Shadow/poison，KMD必要映射 | 同一GPU真实报告、byte宽度及poison排序 |
-| C Binary | NVIDIA Runtime Patch公开机制 | UMD独立decoder/encoder/patch和PC map，生产Compiler可零修改 | 实卡合法结果透明，错误PC还原 |
-| D1 Bounds | NVIDIA编译期Bounds、cuCatch | LLVM原对象来源；UMD参数sidecar；KMD复用 | A来源越界在B存活时仍检出 |
-| E Hybrid | LLVM设备检查和二进制fallback | UMD模块模式协商与统一报告 | 真机跨模块coverage等级明确 |
-| F硬件 | GPU Tag/Bounds | F1/F2需要实际硬件机制 | 缺少F1/F2芯片功能标为UNSUPPORTED |
-
-**第一交付工作包：** LLVM在真实Global Store前插入设备Shadow检查，UMD发布64B逻辑长度与redzone，KMD复用正规映射、提交及错误契约。直接在实体GPU运行 `a[0]`、`a[15]`、`a[-1]`、`a[16]`，核对PC、lane、byte宽度、报告和安全终止。完整代码见[逐组件伪代码](real-gpu-components-implementation.md)。
+**唯一详细案例及运行入口：** [S01 错误与合法对照、检测方法、组件职责及验收](../samples/S01/README.md) · [CUDA 完整源码](../samples/S01/cuda.cu) · [AMD HIP 完整源码](../samples/S01/amd.hip.cpp) · [三种厂商参考技术路径](S01-vendor-implementation-guide.md)。
 
 <a id="case-s02"></a>
 
 ### 18.2 S02：访问首地址合法，宽访问的末端越界
 
-**前提与错误代码。** `src` 是首地址按 16 B 对齐、逻辑长度恰为 30 B 的 global 对象，尾部已 poison；`dst` 是独立的 16 B 对齐、16 B 有效对象。下面的示意 intrinsic 明确对应一个要求 16 B 对齐、实际读取 16 B 的目标操作：
+**关键判定：** 首字节合法但末端非法；需要的核心信息是完整访问足迹（M2/M3）。本节仅保留索引摘要，不重复维护示例代码与验收细节。
 
-~~~cpp
-__global__ void s02(const uint8_t *src, uint8_t *dst) {
-    if (threadIdx.x == 0) {
-        u8x16 v = load16_req_align16(src + 16); // 错误：读偏移 [16,32)
-        store16_req_align16(dst, v);
-    }
-}
-// s02<<<1,32>>>(src, dst);  // src 的偏移 30、31 两字节无效
-~~~
-
-**哪里不对、怎样检。** 起点 `src+16` 合法且对齐正确，但 16 B 读取中只有前 14 B 属于对象。应检查完整访问范围，不能用“起始地址在对象内”代替范围条件。B设备检查器必须检查访问涉及的全部shadow granule并识别有效前缀；C的**真实GPU二进制补丁**也必须在设备上按最终ISA宽度逐有效字节检查。若只有 4 B 标量模板、只查首字节或错误忽略尾部，均会漏检。[L02][L05]
-
-**组件观测。** compiler 记录向量访存及后端拆分情况；deviceRT 的长度检查覆盖跨 granule 尾部；UMD 登记 30 B 逻辑长度，不能擅自扩大到 32 B。若最终被拆成多个标量指令，验收按实际指令集合核对，不要求日志仍声称执行了一条 16 B 指令。
-
-**合法反例、修复及报告。** `load16_req_align16(src)` 合法；尾部可用明确只读取 14 B 的操作，或在程序契约允许时将对象实际分配并初始化到 32 B。预期报告 global 越界读、原操作宽度 16、对象长度 30、首次非法偏移 30，以及执行线程。未覆盖的宽 opcode 必须标记部分覆盖，不能降成“未发现错误”。
+**唯一详细案例及运行入口：** [S02 错误与合法对照、检测方法、组件职责及验收](../samples/S02/README.md) · [CUDA 完整源码](../samples/S02/cuda.cu) · [AMD HIP 完整源码](../samples/S02/amd.hip.cpp)。
 
 <a id="case-s03"></a>
 
 ### 18.3 S03：范围正确但违背指令对齐约束
 
-**前提与错误代码。** `bytes` 是按 16 B 对齐的 64 B global 对象。测试 ISA 明确规定 `load_u32_req_align4` 必须按 4 B 对齐；其读出的 4 B 均在分配内，因而本例单独考察 M2：
+**关键判定：** 是否满足该指令的对齐要求；需要的核心信息是opcode 与对齐契约（M2）。本节仅保留索引摘要，不重复维护示例代码与验收细节。
 
-~~~cpp
-__global__ void s03(const uint8_t *bytes, uint32_t *out) {
-    if (threadIdx.x == 0)
-        out[0] = load_u32_req_align4(bytes + 1);
-        // 错误：地址低两位为 01，访问 [base+1,base+5) 本身没有越界
-}
-// s03<<<1,32>>>(bytes, out);
-~~~
-
-**哪里不对、怎样检。** 应验证的是该目标操作要求的对齐，即 `address % 4 == 0`，并另行验证范围。真实GPU上的B可在已声明对齐要求下插入设备对齐检查；C可以针对已准确解码的目标指令插入设备端模运算／位检查。两者均须使用指令契约，不能因为源码类型为 `uint32_t` 就断言任何机器访问都必须对齐。B 的普通可访问性 shadow 和 D1 的 bounds 查询会接受这四字节，只有额外插入对齐条件才具有本例能力。[L05][N02]
-
-**组件观测。** compiler 必须区分目标硬约束、IR 的 `align` 承诺和实际降级生成的操作；若向 IR 提供了错误的强对齐承诺，优化器可能先利用未定义行为，不能靠事后插桩恢复被删去的访问。deviceRT 输出要求值与实际余数；UMD 提供分配基址。
-
-**合法反例、修复及报告。** 改用 `bytes+4`，或使用目标明确允许非对齐的字节读取／拷贝路径，应通过。预期报告 `MISALIGNED_ADDRESS`、global、宽度 4、要求对齐 4、实际地址与 PC，而不是对象越界。若该 ISA 本来允许此操作非对齐，原错误前提就不成立，应换用确有对齐约束的 opcode。
+**唯一详细案例及运行入口：** [S03 错误与合法对照、检测方法、组件职责及验收](../samples/S03/README.md) · [CUDA 完整源码](../samples/S03/cuda.cu) · [AMD HIP 完整源码](../samples/S03/amd.hip.cpp)。
 
 <a id="case-s04"></a>
 
 ### 18.4 S04：从对象 A 越界，恰好落入仍存活的对象 B
 
-**前提与错误代码。** 受控 allocator 建立两个独立、相邻且已初始化的 live 对象：A 为 `[0x1000,0x1040)`，B 为 `[0x1040,0x1080)`。记录并核对实际布局，不能假定两次普通分配必然相邻。`a` 的来源身份是 A：
+**关键判定：** 地址有效但原对象越界；需要的核心信息是原对象身份与 bounds（M3）。本节仅保留索引摘要，不重复维护示例代码与验收细节。
 
-~~~cpp
-__global__ void s04(uint32_t *a, uint32_t *out) {
-    if (threadIdx.x == 0)
-        out[0] = a[18]; // 错误：A+72 = 0x1048，落在 live B 的偏移 8
-}
-// s04<<<1,32>>>(a, out);  // 读取宽度 4 B
-~~~
-
-**哪里不对、怎样检。** 目标四字节可访问，不代表从 A 推导的访问合法；应使用指针携带的 A 边界判断偏移 72。**真实GPU D1编译期来源插桩**沿`a`计算传播原对象A的base/size，再由设备检查器报偏移72超出64B。需要明确支持的参数/寄存器/指针传播闭包；只有当前地址有效性检查的B/C不能保证检出这个A→live B变体。[P01][N04]
-
-**组件观测。** compiler 为 `a` 保留 A 的身份，不能在最终地址上反查到 B 后覆盖它；deviceRT 查询预期对象 A；UMD 发布 A／B 两份不同描述符和参数 sidecar。若 E 的 fallback 仅剩裸地址，应降级保证并计数。
-
-**合法反例、修复及报告。** 若确实要读 B，应通过正确携带 B 身份的 `b[2]`；若要读 A，则索引应小于 16。预期报告 A 的越界读、偏移 72／宽度 4、A 的 64 B 边界，可补充实际落入 B。不能把“未发生硬件 fault”或“B 也存活”解释为通过；来源 unknown 时也不能伪造 A 级保证。
+**唯一详细案例及运行入口：** [S04 错误与合法对照、检测方法、组件职责及验收](../samples/S04/README.md) · [CUDA 完整源码](../samples/S04/cuda.cu) · [AMD HIP 完整源码](../samples/S04/amd.hip.cpp)。
 
 <a id="case-s05"></a>
 
 ### 18.5 S05：内存池子分配、granule 孔洞与 tensor view 边界
 
-**前提与错误代码。** 一个 128 B pool 全部可寻址；同一 8 B granule 中，子对象 A 占偏移 `[0,3)`、B 占 `[5,8)`，中间是未分配孔洞。另在 `pool+32` 注册 float view：2 行、3 列、行步长 4 元素。下列两个分支分别运行，`view_store` 的示意实现暂未检查索引：
+**关键判定：** 外层 allocation 合法，逻辑子边界非法；需要的核心信息是子对象、维度、stride（M4）。本节仅保留索引摘要，不重复维护示例代码与验收细节。
 
-~~~cpp
-uint8_t *a = register_suballocation(pool, 0, 3);
-uint8_t *b = register_suballocation(pool, 5, 3);
-View v = register_view(pool + 32, /*rows=*/2, /*cols=*/3,
-                       /*row_stride=*/4, /*element_bytes=*/4);
-__global__ void s05(uint8_t *a, View v, int which) {
-    if (threadIdx.x != 0) return;
-    if (which == 0) a[4] = 1;           // 错误：进入逻辑孔洞，仍在 pool 内
-    else view_store(v, 0, 3, 1.0f);     // 错误：列 3；写到行间无效区域
-}
-// 两次独立 launch：<<<1,32>>>，which 分别为 0、1。
-~~~
-
-**哪里不对、怎样检。** M4 需要子对象／view 契约。前一写超出 A 的 3 B；后一写位于 view 外包区间内，却不满足 `row<2 && col<3`。D1设备端检查可以为子对象收窄bounds，并把view形状、步长、坐标验证嵌入实际GPU指令；UMD/框架必须在运行时注册逻辑view。若降成裸指针且索引语义丢失，仅有外包范围不能还原任意 view 的逻辑约束。[P01][L05]
-
-**组件观测。** compiler 保留子对象身份与行列操作；deviceRT 查询对应逻辑描述符；UMD／框架登记 parent、子范围及生存期。B 可用更细位图表达特定孔洞，但经典 1:8 的单字节编码不能表示本例“有效三字节、无效两字节、有效三字节”。全局 poison 也不能区分同地址上的多个重叠 view 权限。[L02]
-
-**合法反例、修复及报告。** `a[2]` 与 `view_store(v,0,2,...)` 应通过；合法的 pool 管理操作可持有 parent 范围，不能因逻辑孔洞被永久误禁。预期报告 parent／子对象 ID、错误偏移，或 `(row=0,col=3)` 与形状、步长。未登记子分配时只能报告 pool 级覆盖，不能将“地址在 128 B 内”当作 tensor 索引安全。
+**唯一详细案例及运行入口：** [S05 错误与合法对照、检测方法、组件职责及验收](../samples/S05/README.md) · [CUDA 完整源码](../samples/S05/cuda.cu) · [AMD HIP 完整源码](../samples/S05/amd.hip.cpp)。
 
 <a id="case-s06"></a>
 
 ### 18.6 S06：静态／动态 shared 越界与 block 身份
 
-**前提与错误代码。** 静态数组 `s` 只有 8 个 32 位元素；动态 shared 的应用请求长度是 24 B。两个 kernel 分别启动两个 block、每个 32 个线程，并只由各 block 的 thread 0 写，排除本例中的数据竞争干扰：
+**关键判定：** block 的共享对象边界；需要的核心信息是launch/block 与共享布局（M2/M3）。本节仅保留索引摘要，不重复维护示例代码与验收细节。
 
-~~~cpp
-__global__ void s06_static() {
-    __shared__ uint32_t s[8];
-    if (threadIdx.x == 0) s[8] = 1; // 错误：静态对象偏移 32，写 4 B
-}
-__global__ void s06_dynamic() {
-    extern __shared__ uint32_t d[];
-    if (threadIdx.x == 0) d[6] = 2; // 错误：动态请求仅 24 B，偏移 24
-}
-s06_static<<<2,32>>>();
-s06_dynamic<<<2,32,24>>>();
-~~~
-
-**哪里不对、怎样检。** 检查必须分别知道静态对象大小和本次 launch 的动态长度。**真实GPU B/D插桩**需要Compiler输出与最终ISA一致的shared对象布局，并结合UMD动态shared请求，在设备端按`(launch,block,object)`检查；B可以为static layout增加Redzone、为动态区尾部Poison，但必须更新真实设备资源声明。只检查整个 shared backing，可能漏掉静态对象跨入邻变量；此时需原对象关联／D1 来源，只有地址布局表仍不够，也不能拿额外预留空间扩充应用合法范围。[L05][L06]
-
-**组件观测。** compiler 输出最终布局而非优化前偏移；deviceRT 为不同 block 选择独立 shadow／对象上下文；UMD 传递请求的 24 B 及 sanitizer 额外占用。不能让 block 0 的状态误用到 block 1，也不能把不同 block 的 `s[0]` 当作共享同一对象。
-
-**合法反例、修复及报告。** 分别改为 `s[7]`、`d[5]`，两个 block 均应通过。错误报告须区分 static／dynamic shared、block ID、4 B 宽度与偏移 32／24；可以合并重复报告，但保留观察到的 block／错误计数。若错误策略在首个 block 后终止 launch，未执行 block 不计漏检。仅完成 global 插桩的 B／C 不具有本例覆盖。
+**唯一详细案例及运行入口：** [S06 错误与合法对照、检测方法、组件职责及验收](../samples/S06/README.md) · [CUDA 完整源码](../samples/S06/cuda.cu) · [AMD HIP 完整源码](../samples/S06/amd.hip.cpp)。
 
 <a id="case-s07"></a>
 
 ### 18.7 S07：Private／stack 越界与返回后使用指针
 
-**前提与越界代码。** 第一段传入运行时索引 4；第二段的 `make_bad` 确实使用独立栈 frame 并返回。只对最终存在相应 private／stack 访存的产物验收；源码数组若被标量替换、函数被消除或悬垂路径改变，须另建目标夹具。
+**关键判定：** 栈对象边界与 frame 生命周期；需要的核心信息是线程、frame、对象身份（M3/M5）。本节仅保留索引摘要，不重复维护示例代码与验收细节。
 
-~~~cpp
-__device__ __noinline__ uint32_t read_local(int i) {
-    uint32_t a[4] = {10, 20, 30, 40};
-    return a[i]; // 错误：调用时 i=4，读取对象偏移 16 的 4 B
-}
-__global__ void s07_oob(uint32_t *out, int i) {
-    if (threadIdx.x == 0) out[0] = read_local(i);
-}
-// s07_oob<<<1,32>>>(out, 4);
-~~~
-
-**返回后指针的独立代码。** 返回地址本身不能延长局部对象生存期；错误访问发生在 caller 解引用时：
-
-~~~cpp
-__device__ __noinline__ uint32_t *make_bad() {
-    uint32_t a[4] = {10, 20, 30, 40};
-    return &a[0]; // 产生即将悬垂的指针；不保证真实编译器保留此表示
-}
-__global__ void s07_uar(uint32_t *out) {
-    if (threadIdx.x == 0) {
-        uint32_t *p = make_bad();
-        out[0] = p[0]; // 错误：被指向 frame 已返回，读取 4 B
-    }
-}
-// s07_uar<<<1,32>>>(out);
-~~~
-
-**哪里不对、怎样检。** 第一段属于 M3，D1 检查 `a` 的 16 B bounds；第二段属于 M5，D2 需保留指针预期的 thread／frame／epoch 并发现 frame 已结束。另一种真正可部署的方案是由B/D编译器在实际设备代码中生成frame对象bounds、frame生存期与call/return身份检查。B的stack Redzone可以检查第一段；返回后检查还须实现延迟复用的 frame／fake-stack 等机制，普通栈地址重新变为有效后，单纯 poison 不再保证检出。[L01][L05]
-
-**组件观测。** compiler 区分源级局部对象、spill 槽及真实 frame 生存期；deviceRT 按 logical thread 和 frame 管理状态；UMD 提供 launch／线程上下文，heap 分配表不能代替栈对象表。相同数值栈偏移属于不同线程时，必须保留不同身份。
-
-**合法反例、修复及报告。** 索引改为 3；返回值改为标量，或写入 caller 持有且仍存活的输出数组。分别报告 private 越界读与 stack-use-after-return，列出对象范围、thread、frame 和返回位置。scratch 物理地址仍在某块合法 global backing 内，不是两例合法的证据。
+**唯一详细案例及运行入口：** [S07 错误与合法对照、检测方法、组件职责及验收](../samples/S07/README.md) · [CUDA 完整源码](../samples/S07/cuda.cu) · [AMD HIP 完整源码](../samples/S07/amd.hip.cpp)。
 
 <a id="case-s08"></a>
 
 ### 18.8 S08：Free 已生效、地址尚未复用的 UAF
 
-**前提与错误代码。** 受控 allocator 分配 64 B，退休后保留底层映射并禁止复用到本例结束；`out` 事先分配。`wait_host` 确认该 queue 上的 free 已生效，故本例没有“free 尚在排队”的歧义：
+**关键判定：** free 生效后仍访问旧对象；需要的核心信息是生命周期与 poison 状态（M5）。本节仅保留索引摘要，不重复维护示例代码与验收细节。
 
-~~~cpp
-__global__ void read_first(uint32_t *old, uint32_t *out) {
-    if (threadIdx.x == 0) out[0] = old[0]; // 错误：已退休对象上的 4 B 读取
-}
-uint32_t *p = test_alloc(64);
-uint32_t *old = p;
-fill_async(p, 64, stream);
-free_async(p, stream);
-Event retired = record_event(stream);
-wait_host(retired);
-require(test_is_dead_and_not_reused(p));
-read_first<<<1,32,0,stream>>>(old, out);
-~~~
-
-**哪里不对、怎样检。** 地址可能仍映射，但对象生存期已结束。B 在退休命令真正生效后 poison，对旧范围读做检查；**真实GPU C的运行时补丁/UMD对象账本**可以保留已退休对象Tombstone，并将生命周期状态作为设备检查输入；C必须真的在访问前执行设备检查，而不能只在Host侧判断。这里尚无新对象占用该地址，因此“当前地址已 dead”足以判错；不能由此推导已具备 S09 的复用后时间安全。[L02]
-
-**组件观测。** compiler 保留旧指针的实际 load；deviceRT 保证 poison 与后续访问具有正确可见顺序；UMD 提供 free 请求、完成事件及禁止复用条件。测试启动前必须核对 dead 状态，不能靠一次 sleep 猜测。
-
-**合法反例、修复及报告。** 同 queue 中先提交读取、再提交 free，读取仍应合法，即使 Host 很快看见 free API 返回。修复是把释放排在所有合法使用之后，并补齐跨 queue 的依赖；“再等待一次已完成的 free”不会使旧指针恢复有效。预期报告 UAF、对象 ID、4 B 读取、allocation／free／访问位置与次序。若释放时删掉全部元数据而映射仍在，只有映射检查的实现可能漏检。
+**唯一详细案例及运行入口：** [S08 错误与合法对照、检测方法、组件职责及验收](../samples/S08/README.md) · [CUDA 完整源码](../samples/S08/cuda.cu) · [AMD HIP 完整源码](../samples/S08/amd.hip.cpp)。
 
 <a id="case-s09"></a>
 
 ### 18.9 S09：同一 GPUVA 被新对象复用后的旧指针
 
-**前提与错误代码。** `slot` 和 `out` 预先分配且不参与复用。先把 A 的指针存入设备 pointer slot，再退休 A，由受控 allocator 尝试让 B 复用同一个 64 B 槽位；必须核对实际 GPUVA 相等和 A dead／B live 两个生命周期事件。未观察到复用应标记夹具条件未满足，不得计为通过：
+**关键判定：** 新旧裸地址相同但身份不同；需要的核心信息是指针预期 epoch 与当前 epoch（M5）。本节仅保留索引摘要，不重复维护示例代码与验收细节。
 
-~~~cpp
-__global__ void save_ptr(uint32_t **slot, uint32_t *p) {
-    if (threadIdx.x == 0) *slot = p; // D2 还须保存 A 的旁路时间身份
-}
-__global__ void use_saved(uint32_t **slot, uint32_t *out) {
-    if (threadIdx.x == 0) out[0] = (*slot)[0]; // 错误：解引用旧 A 指针
-}
-uint32_t *a = test_alloc(64);
-GPUVA old_va = gpuva(a);
-AllocationID old_id = test_identity_at_allocation(a); // 分配时保存，不能事后反查
-save_ptr<<<1,32>>>(slot, a);
-wait_all();
-test_free_and_wait(a);
-uint32_t *b = test_alloc_reusing(old_va, 64);
-AllocationID new_id = test_identity_at_allocation(b);
-require(gpuva(b) == old_va && new_id != old_id);
-require(test_is_dead(old_id) && test_is_live(new_id));
-fill_and_wait(b, 64);  // B 全部已初始化；仍保留 slot 中的旧 A 指针
-use_saved<<<1,32>>>(slot, out);
-~~~
-
-**哪里不对、怎样检。** 访问范围仍是新 B 的合法前 4 B，但指针预期 A 的生存期已经结束。D2 要让 pointer store／reload 传递 `(A_ID,A_epoch)`，与当前对象身份比较；**D2的真实GPU检查指令与metadata传播**必须覆盖寄存器、内存槽及allocator事件的预期身份。普通分配表查询只得到 B 当前 generation，缺少指针预期值；B的Unpoison、D1的同尺寸bounds及仅依赖当前地址有效性的C因而不能保证识别旧指针。[P01][L02]
-
-**组件观测。** compiler 保留 slot 的 pointer metadata 配对；deviceRT 避免载入时把旧指针重新标记为 B；UMD 发布新身份，并保持检查所需的旧描述符。普通 `malloc` 是否复用不可假定；仅凭当前有效Allocation记录无法恢复旧指针身份。
-
-**合法反例、修复及报告。** 独立运行通过正确携带 B 身份的 `b[0]` 应通过；修复是清除旧引用并分发新指针及其身份。报告应同时给出相同 GPUVA、预期 A 和当前 B 的 ID／epoch、两次分配与 A 的释放位置。未知 writer、身份丢失、tag 碰撞或 epoch 回绕必须作为保证边界，不能静默退回地址查询后仍声称完整 M5。
+**唯一详细案例及运行入口：** [S09 错误与合法对照、检测方法、组件职责及验收](../samples/S09/README.md) · [CUDA 完整源码](../samples/S09/cuda.cu) · [AMD HIP 完整源码](../samples/S09/amd.hip.cpp)。
 
 <a id="case-s10"></a>
 
 ### 18.10 S10：Invalid free——内部指针与错误所有权
 
-**前提与错误代码。** allocator 契约要求使用拥有者和原始基址释放。A 上下文拥有一个 64 B 对象；B 只导入其非拥有映射，导入句柄必须通过 `close_import` 关闭。以下两种误用分别在独立夹具中运行：
+**关键判定：** 传给释放接口的身份／所有权合法；需要的核心信息是allocator、原始基址、owner（M6/A1）。本节仅保留索引摘要，不重复维护示例代码与验收细节。
 
-~~~cpp
-uint8_t *p = owner_alloc(context_A, 64);
-owner_free(context_A, p + 4); // 错误一：内部指针，不是 allocation base
-
-// 独立运行第二例：重新创建 p，并建立非拥有导入映射 q。
-uint8_t *q = import_nonowning(context_B, export_handle(p));
-owner_free(context_B, q);     // 错误二：B 无权调用拥有者释放接口
-~~~
-
-**哪里不对、怎样检。** M6必须验证原始基址、规范对象、allocator类型、所有权及当前状态；“地址属于某个live对象”不够。**真实UMD/设备allocator的runtime API拦截和状态机**在实际释放前使用对象登记信息报告/拒绝非法free。仅给load/store添加shadow不能检测没有后续访存的非法释放。[L01][N02]
-
-**组件观测。** compiler／loader 保留调用点；deviceRT 若支持设备堆，须把设备侧 free 接入相同事件；UMD 将导入别名归一到同一对象，但保留映射拥有权与资源拥有权的差别。API 和底层 driver 回调必须去重，不能把一次拒绝误记成一次成功释放。
-
-**合法反例、修复及报告。** 内部指针可用于范围内访问，但释放时应传回 `p`；B 应 `close_import(q)`，最后由 A 在使用完成后释放 `p`。预期分别报告内部偏移 `+4` 和所有权／释放接口不匹配，附原 allocation site 与错误 API site。若 API 自身返回错误也应记录误用，不能要求一定发生设备 fault。未登记的自定义 allocator 或导入句柄只能标记覆盖缺口。
+**唯一详细案例及运行入口：** [S10 错误与合法对照、检测方法、组件职责及验收](../samples/S10/README.md) · [CUDA 完整源码](../samples/S10/cuda.cu) · [AMD HIP 完整源码](../samples/S10/amd.hip.cpp)。
 
 <a id="case-s11"></a>
 
 ### 18.11 S11：同一分配实例被释放两次
 
-**前提与错误代码。** 分配 64 B，保存两个别名；第一次 free 成功且已经退休。到第二次调用前不允许新的分配或 GPUVA 复用，排除 S09 的时间身份歧义：
+**关键判定：** 同一生命周期被重复释放；需要的核心信息是对象状态和释放记录（M6）。本节仅保留索引摘要，不重复维护示例代码与验收细节。
 
-~~~cpp
-uint8_t *p = test_alloc(64);
-uint8_t *alias = p;
-test_free_and_wait(p);       // 第一次合法释放，状态变为 dead
-test_free_and_wait(alias);   // 错误：再次释放同一 allocation instance
-~~~
-
-**哪里不对、怎样检。** 第二次调用试图再次结束同一对象的生命周期。**真实UMD allocator/driver的状态机**维护allocation ID、成功释放事件与tombstone，在调用底层释放前检查并报告`dead -> free`非法转移；设备侧allocator应有对应设备运行库插桩。仅shadow poison不能检测没有后续访问的double free。[L01][N02]
-
-**组件观测。** compiler／deviceRT 为设备侧释放保留调用点并可靠发布状态，Host 释放则由 runtime 拦截；UMD 区分请求 ID、成功提交及退休完成，对嵌套回调去重。并发 free 还需在对象状态上执行一致的仲裁，不能让两个请求都基于旧 live 状态通过后才写 dead。
-
-**合法反例、修复及报告。** 使用单一明确拥有者，清除所有需要失效的别名；只把 `p` 赋空并不能修复仍存活的 `alias`。第一次释放请求失败且对象仍 live 时，之后一次合法成功释放不应被报 double free。预期报告对象 ID、64 B 大小、allocation site、首次成功释放与第二次调用位置。若同 GPUVA 已创建新对象，应允许新指针正常释放；要阻止旧指针误释放新对象则需要 S09 的 D2 身份，不能仅凭地址历史断言 double free。
+**唯一详细案例及运行入口：** [S11 错误与合法对照、检测方法、组件职责及验收](../samples/S11/README.md) · [CUDA 完整源码](../samples/S11/cuda.cu) · [AMD HIP 完整源码](../samples/S11/amd.hip.cpp)。
 
 <a id="case-s12"></a>
 
 ### 18.12 S12：在约定检查点仍未释放的显存对象
 
-**前提与错误代码。** 一个独立检查 scope 进行三次 256 B 拥有型分配；每次 kernel 只在 thread 0 写该对象前 4 B，且等待完成。scope 约定结束时无应保留业务对象，只有 `k==1` 的分配没有释放，也没有把指针交给其他拥有者：
+**关键判定：** 约定检查点仍有应释放对象；需要的核心信息是活跃账本与所有权策略（M6）。本节仅保留索引摘要，不重复维护示例代码与验收细节。
 
-~~~cpp
-begin_checked_scope(context);
-for (int k = 0; k < 3; ++k) {
-    uint8_t *p = owner_alloc(context, 256);
-    touch_first_u32<<<1,32>>>(p);  // 合法写 [p,p+4)
-    wait_all();
-    if (k != 1) owner_free_and_wait(context, p);
-    // 错误：k==1 时丢失最后一个业务引用，256 B 仍为 live。
-}
-report_leaks_before_context_teardown(context);
-~~~
-
-**哪里不对、怎样检。** 错误是拥有型对象在约定检查点仍未释放，不要求GPU非法访存。**真实UMD/Host runtime的allocation账本**在检查点扫描尚未成功free的对象，并由工具报告；它属于生产Host资源诊断，并不等于GPU内部访存检测。仅“账本未释放”不能在任意业务中自动证明对象已不可达；本例提供明确scope/引用丢失前提。[N02][L01]
-
-**组件观测。** compiler／loader 提供分配调用栈与模块定位；deviceRT 补充设备堆分配、失败结果及释放事件；UMD 等待相关命令完成，在 context 自动回收前取快照。工具自身Shadow元数据及报告缓冲须与应用账本分开。
-
-**合法反例、修复及报告。** 无条件释放每次 `p` 即可；若确实要跨 scope 保留，则把拥有权显式移交并按约定报告。合法 allocator 缓存、仍由调用者持有的对象及非拥有导入映射，不能一律报成应用泄漏。预期为 1 个、256 B 未释放拥有型对象，指出 `k==1` 对应分配位置与检查点。异常退出前未形成快照、漏接设备堆事件或只观察驱动大 pool，都会使该结论不完整。
+**唯一详细案例及运行入口：** [S12 错误与合法对照、检测方法、组件职责及验收](../samples/S12/README.md) · [CUDA 完整源码](../samples/S12/cuda.cu) · [AMD HIP 完整源码](../samples/S12/amd.hip.cpp)。
 
 <a id="case-s13"></a>
 
 ### 18.13 S13：未初始化读取、部分字节写入与copy传播
 
-**前提与错误。** `src/dst`来自真实分配，初始定义性位均为0；两者8字节均可寻址且满足4字节读取对齐。所有命令在同一stream，排除顺序错误。`fixed=false/true`两版独立运行，不依赖错误后继续执行。`read32`实际消费偏移0的4字节并写入有效输出；它不能被优化掉。按byte复制含未定义字节的对象表示，本身不一概构成程序错误；copy应传播定义性，是否同时报告copy源未定义属于工具策略。错误断言落在随后消费未定义byte 3的读取。
+**关键判定：** 被读的每个 byte 已有定义性来源；需要的核心信息是初始化位图与复制传播（I1）。本节仅保留索引摘要，不重复维护示例代码与验收细节。
 
-~~~c
-cudaMalloc(&src, 8);                      // I(src[0..7]) = 0
-cudaMalloc(&dst, 8);                      // I(dst[0..7]) = 0
-cudaMemsetAsync(src, 0, 3, s);            // 只定义src[0..2]
-if (fixed) cudaMemsetAsync(src + 3, 0, 5, s); // 独立修复版补齐真实写入
-cudaMemcpyAsync(dst, src, 8, D2D, s);     // 传播源定义性，不能把dst全标已定义
-read32<<<1, 1, 0, s>>>(dst, out);         // BAD：fixed=false时消费未定义byte 3
-cudaStreamSynchronize(s);
-~~~
-
-**实现路线与观测点。** GPU设备Initcheck维护定义性bitmap，按实际byte enable更新store/memset，copy按源位图传播；B额外建设独立初始化bitmap，由Compiler插入load/store检查，Device runtime原子合并共享metadata word。E接入runtime/UMD及copy engine的提交、完成、依赖事件，不能在Host提交copy时提前定义目的端。H2D若只采用“Host来源已定义”假设，须明确其覆盖边界；这属于第15章I1设计，不是普通地址ASan的附赠能力。[N03][L05]
-
-**修复、报告与边界。** 独立运行`fixed=true`版本，完整有序memset后的读取应无报；另测仅补写byte 3后读取4字节合法、读取8字节仍非法。报告至少给出`dst+3`、读取宽度、未定义byte mask、源allocation和copy链。不得把“向内存store一个来源未定义的寄存器”当作值级定义性已正确实现；完整MSan传播另立能力。若copy engine不可见、只按word标记初始化、未跟踪Host来源或实际指令被消除，均需单列漏检边界。
+**唯一详细案例及运行入口：** [S13 错误与合法对照、检测方法、组件职责及验收](../samples/S13/README.md) · [CUDA 完整源码](../samples/S13/cuda.cu) · [AMD HIP 完整源码](../samples/S13/amd.hip.cpp)。
 
 <a id="case-s14"></a>
 
 ### 18.14 S14：shared RAW、WAR与WAW竞争
 
-**前提与错误。** 一个block至少2个线程；`mode`为全block一致的测试选择。先由线程0写入常量，再由完整block barrier发布，保证后续读取有已定义的旧值。三组分别覆盖写→读、读→写、写→写冲突；箭头表示待观测的访问顺序，不构成跨线程HB，运行时RAW/WAR标签可随观测次序变化。
+**关键判定：** 冲突访问之间存在合法顺序；需要的核心信息是访问身份、HB、barrier（R1）。本节仅保留索引摘要，不重复维护示例代码与验收细节。
 
-~~~c
-__shared__ volatile int x;               // volatile只用于保留访问，不提供同步
-if (tid == 0) x = 7;
-__syncthreads();                         // 初始化已完成
-if (mode == RAW) {
-    if (tid == 0) x = 1;                 // BAD①：T0 W(x)
-    if (tid == 1) out[1] = x;            // BAD①：T1 R(x)，无中间同步
-} else if (mode == WAR) {
-    if (tid == 0) out[0] = x;            // BAD②：T0 R(x)
-    if (tid == 1) x = 2;                 // BAD②：T1 W(x)
-} else { if (tid == 0) x = 1; if (tid == 1) x = 2; } // BAD③：W/W
-__syncthreads();
-if (tid == 0) out[2] = x;                // 末尾barrier不能倒推消除先前冲突
-~~~
-
-**实现路线与观测点。** GPU设备Racecheck按`launch/block/shared对象/byte`记录两端PC、线程及barrier epoch，检查重叠字节、至少一写、原子属性和HB。E由Compiler或C补齐实际shared访存与barrier事件，Device runtime使用HB历史或适用同步子集内的层次FSM；状态更新原子不能为应用制造HB。[P02][P03] 以线程32替换线程1、block设64，可扩展为跨warp测试；不同block相同shared偏移必须分离身份。
-
-**修复、报告与边界。** 将完整block同步放在两段访问之间；WAW可明确先后或令各线程写独立位置。同warp也须按目标规则建立有效同步。报告两个访问位置、R/W类型、字节交集及缺失的HB，不能报成未初始化读取。NVIDIA racecheck的shared范围可作对照，但不推出global覆盖。[N02] 重复读、随机延迟或碰撞方案可能漏同值写、ABA或未命中窗口，应与HB/FSM的适用模型保证分栏。[P08]
-
-验收同时加入同一word内不同byte的独立并发写，确认检测依据是实际字节交集，而非仅因共用metadata单元就误报冲突。
+**唯一详细案例及运行入口：** [S14 错误与合法对照、检测方法、组件职责及验收](../samples/S14/README.md) · [CUDA 完整源码](../samples/S14/cuda.cu) · [AMD HIP 完整源码](../samples/S14/amd.hip.cpp)。
 
 <a id="case-s15"></a>
 
 ### 18.15 S15：global同block、跨block竞争与合法atomic
 
-**前提与错误。** `x`是已置0并完成发布的有效global `int`；两次错误测试分别重置并等待，互不叠加。普通`x++`包含读和写，多个线程的访问没有HB，即使最终计数偶尔正确也不合法。跨block原子反例限定同一device和适用的memory synchronization domain。[N08]
+**关键判定：** 跨线程／block 的读写与原子语义；需要的核心信息是规范地址、order/scope（R1）。本节仅保留索引摘要，不重复维护示例代码与验收细节。
 
-~~~c
-__global__ void bad_increment(int *x) {
-    int old = *x;                        // BAD：另一线程可能并发写
-    *x = old + 1;                        // BAD：R/W及W/W冲突
-}
-reset_to_zero_and_wait(x);
-bad_increment<<<1, 2>>>(x);              // 独立用例①：同block
-wait_reset_to_zero_and_wait(x);
-bad_increment<<<2, 1>>>(x);              // 独立用例②：跨block
-__global__ void good_increment(int *x) {
-    cuda::atomic_ref<int, cuda::thread_scope_device> a(*x);
-    a.fetch_add(1, cuda::memory_order_relaxed); // OK：只要求计数更新原子性
-}
-wait_reset_to_zero_and_wait(x);
-good_increment<<<2, 1>>>(x);              // 独立合法反例：完成后计数应为2
-~~~
-
-**实现路线与观测点。** GPU Racecheck设备库使用global规范对象和全grid线程身份维护冲突历史，消费真实同步scope、ordering和barrier事件；block barrier只向同block参与者提供同步。C可在可解码指令处提取load/store/atomic宽度及scope，再经runtime汇总HB；E结合编译器语义、缺失模块补丁和UMD launch事件。两者都必须另建设Racecheck，B的可寻址位和D1/D2对象检查只能确认访问对象，不能判定竞争。[P02][P03]
-
-**修复、报告与边界。** `good_increment`用相同适用scope的原子操作访问同一计数器，不应报race；用block-scope原子跨block通信仍不足。relaxed仅保护该计数器：若用flag发布普通payload，仍须建立合适scope的release/acquire关系，且acquire读到对应发布值。[N08] 报告两端PC/block/thread、对象内字节、atomic属性和未成立的HB。未建模锁、跨domain同步、历史溢出或未插桩模块应降级；概率重复访问未报错不能作无竞争证明。[P08]
-
-另保留普通读与原子写并发的混合访问错误，避免检查器只见到一端为atomic，就把同址的全部访问放行。
+**唯一详细案例及运行入口：** [S15 错误与合法对照、检测方法、组件职责及验收](../samples/S15/README.md) · [CUDA 完整源码](../samples/S15/cuda.cu) · [AMD HIP 完整源码](../samples/S15/amd.hip.cpp)。
 
 <a id="case-s16"></a>
 
 ### 18.16 S16：跨kernel／queue竞争与event正确反例
 
-**前提与错误。** `q0/q1`为不同的nonblocking stream，`x`已初始化并完成发布；`write_x`写`x[0]`，`read_x`读取相同4字节。排除legacy默认stream等隐式依赖。Host先提交writer再提交reader不建立跨queue顺序；最后一次全设备等待只等两者结束，不在二者之间补出HB。[N08]
+**关键判定：** launch 间依赖是否覆盖冲突；需要的核心信息是queue/event 依赖图（R1/A1）。本节仅保留索引摘要，不重复维护示例代码与验收细节。
 
-~~~c
-write_x<<<1, 1, 0, q0>>>(x, 7);
-read_x<<<1, 1, 0, q1>>>(x, out);         // BAD：两次kernel访问无HB
-cudaDeviceSynchronize();                 // 不追溯修复已发生的冲突
-// 下方是独立合法反例，e已创建
-write_x<<<1, 1, 0, q0>>>(x, 9);
-cudaEventRecord(e, q0);                  // event覆盖writer完成
-cudaStreamWaitEvent(q1, e, 0);            // wait必须位于reader之前
-read_x<<<1, 1, 0, q1>>>(x, out);         // OK：writer -> event -> reader
-cudaDeviceSynchronize();
-~~~
-
-**实现路线与观测点。** GPU Racecheck记录真实设备访存时钟；UMD将launch/queue/event命令依赖关联到同一执行记录，按实际scope/order建立HB。E由Host runtime/UMD记录event版本、record/wait、launch与完成事件，再将B所承载的额外race插桩或C采集的地址历史接入HB引擎；不能在每个kernel结束时无条件清空global历史。只有Host API回调而没有设备访问事件或可信访问范围声明，无法确定两个kernel是否碰同一字节。[N03][P02]
-
-**修复、报告与边界。** 上述event链及同一queue有序执行都是合法反例。设备内flag协议还须核对atomic scope与发布／获取，普通fence不能代替对端协议。报告应包含两个kernel、launch ID、queue、对象偏移及缺少的依赖边。驱动偶然串行、工具强制串行、默认stream配置改变或未执行目标路径，会影响实验覆盖；不能据此声称检查通过。基于随机延迟和值差异的发现仍是概率证据，须保留HB检测的独立口径。[P08]
-
-event被重复record时必须按记录版本建边，不能把前一轮已完成的同名event错误套用到新一轮读写。
+**唯一详细案例及运行入口：** [S16 错误与合法对照、检测方法、组件职责及验收](../samples/S16/README.md) · [CUDA 完整源码](../samples/S16/cuda.cu) · [AMD HIP 完整源码](../samples/S16/amd.hip.cpp)。
 
 <a id="case-s17"></a>
 
 ### 18.17 S17：block barrier缺失live参与者与phase错配
 
-**前提与错误。** 用例①启动64线程，`go`为已置0的block-scope原子，且只有等待barrier之后的线程0能置1；后半block持续存活并等待`go`，不会退出，因而缺失参与明确成立。用例②独立启动一个线程，`b`为正确分配的shared barrier；使用可保存整数token的低层primitive，避免混入C++移动后token的另一种误用。[N08]
+**关键判定：** 参与集合、到达代次符合约定；需要的核心信息是barrier ID、phase、线程集合（S1）。本节仅保留索引摘要，不重复维护示例代码与验收细节。
 
-~~~c
-// 用例①：64线程；go在launch前已初始化为0
-if (tid < 32) {
-    __syncthreads();                     // BAD①：另一live warp永不参与
-    if (tid == 0) go.store(1, relaxed);
-} else { while (go.load(relaxed) == 0) {} }
-// 用例②：独立的1线程block
-__mbarrier_init(&b, 1);
-auto t0 = __mbarrier_arrive(&b);          // 完成phase 0
-while (!__mbarrier_test_wait(&b, t0)) {}
-auto t1 = __mbarrier_arrive(&b);          // 完成phase 1，当前为phase 2
-while (!__mbarrier_test_wait(&b, t1)) {}
-__mbarrier_test_wait(&b, t0);             // BAD②：token早于立即前一phase
-~~~
-
-**实现路线与观测点。** 真实GPU Synccheck在同步指令执行处维护barrier身份、期望计数、live参与者、到达集合和完整phase；同时建等待依赖，区分循环等待证据与单纯超时。E由Compiler/C记录初始化、arrive/wait/drop、mask和退出事件，Device runtime维护同步状态，UMD提供block维度；F若能导出硬件barrier状态，可补充缺失参与证据，但仍需软件归因。
-
-**修复、报告与边界。** 用例①把完整block barrier移到全员必经位置，或采用语义匹配的子组同步；用例②只使用当前或立即前一phase的有效token。报告barrier PC/ID、期望／实际参与集合、等待链或token/current phase。[N08] 不将普通barrier之前的任意return一概判错，退出线程必须按目标规范处理。NVIDIA当前synccheck的错误类、架构适用范围和barrier跟踪容量只是产品对照；自研“完整参与集合及phase验证”是目标能力。仅超时或缺失退出观测时，结论必须保留为疑似阻塞／覆盖不足。[N02]
-
-若目标token仅编码phase parity，phase 0与phase 2可能具有相同值，纯token值或当前硬件状态不能保证识别这种ABA。GPU设备Synccheck须额外保留token来源phase；E要保证旧token识别，须传播barrier身份和完整phase代数等sidecar。缺少该来源／epoch信息时，只能声明部分错配检测，不能宣称完整phase覆盖。
+**唯一详细案例及运行入口：** [S17 错误与合法对照、检测方法、组件职责及验收](../samples/S17/README.md) · [CUDA 完整源码](../samples/S17/cuda.cu) · [AMD HIP 完整源码](../samples/S17/amd.hip.cpp)。
 
 <a id="case-s18"></a>
 
 ### 18.18 S18：warp／subgroup无效mask
 
-**前提与错误。** 以下限定32-lane CUDA warp、完整32线程启动、`mode`全warp一致，`go`为已置0的合法原子。mode 0中lane 16调用同步却未把自身写进mask；mode 1中低16个lane声明全warp，但其余lane保持live，等待只有同步后才会发生的写入。退出lane与仍live但缺席lane必须区分。[N08]
+**关键判定：** 调用者与命名参与者满足同步规则；需要的核心信息是lane ID、mask、目标语义（S1）。本节仅保留索引摘要，不重复维护示例代码与验收细节。
 
-~~~c
-unsigned lane = tid % 32;
-if (mode == 0) {
-    if (lane <= 16)
-        __syncwarp(0x0000ffff);          // BAD①：lane 16的self bit为0
-} else {
-    if (lane < 16) {
-        __syncwarp(0xffffffff);          // BAD②：named live lanes 16..31未到达
-        if (lane == 0) go.store(1, relaxed);
-    } else { while (go.load(relaxed) == 0) {} }
-}
-~~~
-
-**实现路线与观测点。** GPU设备Synccheck按动态warp、同步PC/实例记录每lane的mask、live/exit和到达状态：先检查self bit，再检查同组被点名且未退出的lane是否执行匹配调用。E由Compiler或C保存每lane原始mask与实际执行mask，Device runtime核对相交mask的一致性和等待关系；F只能在确有mask/到达状态观测接口时补充。不能把访存谓词mask直接当同步参与mask。
-
-**修复、报告与边界。** 独立合法反例是仅lane 0–15调用`__syncwarp(0x0000ffff)`，其他lane不被点名；相互不重叠且满足目标规范的子组mask也不能误报。报告调用lane、self bit、声明mask、实际到达／已退出／仍待到达集合。CUDA要求被点名且尚未退出的参与线程以相同mask完成相应调用；具体收敛约束、wave宽度及退出语义须按目标ISA核验，不能照搬到其他GPU。[N08][L06] NVIDIA手册明确：synccheck可报self-mask错误，但不检测所有被点名线程未到达的情况；后者是自研目标，不可标成现产品保证。[N02]
-
-合法mask应在参与者关系明确的程序点构造，不能把分支内瞬时执行mask直接当作算法预定的完整协作集合。
+**唯一详细案例及运行入口：** [S18 错误与合法对照、检测方法、组件职责及验收](../samples/S18/README.md) · [CUDA 完整源码](../samples/S18/cuda.cu) · [AMD HIP 完整源码](../samples/S18/amd.hip.cpp)。
 
 <a id="case-s19"></a>
 
 ### 18.19 S19：async copy缺wait、等待了错误批次或phase
 
-**前提与错误。** 单线程block、支持所示pipeline primitive的目标，global源32字节已经完整初始化，源／shared目的满足16字节对齐。先把shared写为0，排除未初始化读取。mode 0在传输完成前读目的；mode 1等待的只保证较早批次，不能保护随后读取的最新批次。[N08]
+**关键判定：** 消费前完成对应复制及同步；需要的核心信息是copy group、完成、phase（S1/I1/R1）。本节仅保留索引摘要，不重复维护示例代码与验收细节。
 
-~~~c
-__shared__ alignas(16) unsigned char sm[32];
-for (int i = 0; i < 32; ++i) sm[i] = 0;
-__pipeline_memcpy_async(sm, src, 16);
-__pipeline_commit();                     // batch 0
-if (mode == 0) consume(sm[0]);            // BAD①：没有wait
-else {
-    __pipeline_memcpy_async(sm + 16, src + 16, 16);
-    __pipeline_commit();                 // batch 1
-    __pipeline_wait_prior(1);            // 仅保证batch 0完成
-    consume(sm[16]);                     // BAD②：batch 1仍可能在途
-}
-__pipeline_wait_prior(0);                // 收尾等待不追溯修复过早读
-~~~
-
-**实现路线与观测点。** 真实GPU Synccheck把异步传输作为独立访问主体，追踪源读／目的写、commit组号、完成及消费者可见性；指令发出不等于目的已经可读。C拦截实际async opcode与wait，或E结合Compiler高层pipeline信息、runtime completion和Device checker；必须关联到同一个传输组／barrier phase，不能把任意wait当作全局完成。[N02][N03]
-
-**修复、报告与边界。** 读取前`__pipeline_wait_prior(0)`保护本线程已提交批次；其他线程读取时，还需规定的参与同步与可见性。barrier版本要等绑定当前copy的phase：上一phase的token可能仍是合法参数，但成功等待它不证明当前传输已完成；比立即前一phase更旧的token则另属S17。报告copy发起PC、范围、组号／phase、等待实际覆盖范围及过早访问PC。预置0仍可发生传输竞争，不能只依赖I1位图。未观测copy engine、未支持bulk/tensor异步指令、仅观察一次幸运完成顺序均可能漏检；NVIDIA现有shared async-copy检查不能外推为全部引擎覆盖。[N02]
-
-测试最终仍等待所有在途操作完成，以把过早读取与退出时资源生存期错误分开验证。
+**唯一详细案例及运行入口：** [S19 错误与合法对照、检测方法、组件职责及验收](../samples/S19/README.md) · [CUDA 完整源码](../samples/S19/cuda.cu) · [AMD HIP 完整源码](../samples/S19/amd.hip.cpp)。
 
 <a id="case-s20"></a>
 
 ### 18.20 S20：async free跨queue缺依赖与释放生效边界
 
-**前提与错误。** 两个独立queue；`read_only`只读取有效、已初始化的分配，从而隔离生命周期竞争。allocation发布已通过`ready`正确排序，唯一缺失的是q1最后一次使用到q0释放的依赖。`fixed`是Host端测试选择，两种版本分开运行。
+**关键判定：** 所有使用都先于释放生效；需要的核心信息是提交、free 开始与回收证据（M5/A1）。本节仅保留索引摘要，不重复维护示例代码与验收细节。
 
-~~~c
-cudaMallocAsync(&p, N, q0);
-cudaMemsetAsync(p, 0, N, q0);
-cudaEventRecord(ready, q0);
-cudaStreamWaitEvent(q1, ready, 0);        // allocation和初始化均已发布
-read_only<<<1, 32, 0, q1>>>(p, out);
-if (fixed) {
-    cudaEventRecord(done, q1);
-    cudaStreamWaitEvent(q0, done, 0);     // 修复：最后使用先于free
-}
-cudaFreeAsync(p, q0);                    // BAD：fixed=false时无使用->free依赖
-cudaDeviceSynchronize();
-~~~
-
-**实现路线与观测点。** UMD与真实GPU检查器联合记录对象epoch、命令DAG、free请求、生效与完成；访问和free无序时报生命周期竞争，free生效后执行的访问报UAF。E由runtime/UMD将free命令及依赖下发，B按设备顺序poison；D2再传播旧指针身份，以覆盖随后同VA复用。free提交不能立即全局poison，同queue排在free之前的合法访问应放行。[N02][N03]
-
-**修复、报告与边界。** `fixed=true`建立合法链；同queue中“使用→free”也是合法反例。CUDA规定free操作开始后不能继续使用；`retire complete`是确认退休、回收描述符及后续复用的证据，不应把非法访问边界拖到完成，更不能用Host API返回代替设备时刻。[N08] 报告对象/epoch、最后使用queue与launch、free提交点及缺失依赖；有完成证据时补报实际退休节点。仅监控API调用顺序会误报或漏报；B遇同VA新分配重新unpoison可能漏旧指针，D2仍需完整身份传播；隐藏free、外部queue或不可见依赖必须输出unknown。
-
-内存池若插入真实设备依赖，须纳入命令图；工具为诊断插入的同步不得伪造应用原本有序。
+**唯一详细案例及运行入口：** [S20 错误与合法对照、检测方法、组件职责及验收](../samples/S20/README.md) · [CUDA 完整源码](../samples/S20/cuda.cu) · [AMD HIP 完整源码](../samples/S20/amd.hip.cpp)。
 
 <a id="case-s21"></a>
 
 ### 18.21 S21：原子指令访问越界——原子性不保证地址有效
 
-**场景与例子。** 对应能力 M2/M3。`bins` 是已清零的 64 个 `uint32_t`，共 256 B；只有线程 0 执行下列原子操作，因此没有其他线程竞争，也没有未初始化读取干扰。为确定验收真实GPU B/C设备检查器，夹具保证 `[base+256,base+260)` 位于已 poison 的尾部 redzone 或不可访问范围；落入另一存活对象的变体另用于验收 D1／具有对象来源信息的检查。
+**关键判定：** 原子性不能替代空间合法性；需要的核心信息是原子实际宽度和范围（M2/M3）。本节仅保留索引摘要，不重复维护示例代码与验收细节。
 
-~~~cpp
-// Host：bins = alloc(64 * sizeof(uint32_t)); memset_zero(bins, 256);
-kernel void bad_bin(uint32_t* bins) {
-    if (thread_id() == 0) {
-        atomic_add_u32(&bins[64], 1);  // 错误：有效下标只有 0..63
-    }
-}
-~~~
-
-**哪里不对、应检测什么。** 原子操作触及 `[base+256, base+260)`，不在分配范围内；“多个线程更新不会丢失”与“地址合法”是不同条件。检查必须覆盖 atomic RMW、CAS 及目标特殊原子，而不能只匹配普通 load/store。CAS 即使比较失败，也执行了读取；其范围仍须检查，是否产生写事件则需按实际结果处理。访问宽度、对齐和作用域依据目标指令定义。[L05][N09]
-
-**实现方案与组件。** B对真实GPU的LLVM atomic/目标intrinsic插入完整范围检查，设备运行库查询shadow；UMD提供真实逻辑对象范围。C/E在机器码atomic前插入真实GPU检查指令并保留返回值、谓词和scope/order。D1若保存原对象bounds还可检测地址落入另一live对象。 所有插桩都不得把应用原子拆成非原子读写。
-
-**修复、合法反例与预期报告。** 将下标限制在 `[0,64)`；多个线程合法执行 `atomic_add_u32(&bins[0],1)`，在该原子作用域覆盖这些线程且无混合非原子访问的前提下，不应报本例的空间错误或把同类原子冲突直接报成数据竞争。错误报告应为 `atomic out-of-bounds`，给出 4 B、偏移 256、对象大小 256 和 PC；仅报告“发生竞争”没有指出本例根因。
+**唯一详细案例及运行入口：** [S21 错误与合法对照、检测方法、组件职责及验收](../samples/S21/README.md) · [CUDA 完整源码](../samples/S21/cuda.cu) · [AMD HIP 完整源码](../samples/S21/amd.hip.cpp)。
 
 <a id="case-s22"></a>
 
 ### 18.22 S22：尾部 mask／EVL——被屏蔽的非法地址不得产生误报
 
-**场景与例子。** 对应 M1–M3 的合法反例及插桩语义验收。分配 10 个 `float`，使用宽度 8 的示意执行组处理第二批元素；基准实例中 8 个逻辑 lane 均活跃，只有边界谓词关闭 i=10…15。下列地址计算采用 ISA 风格整数地址，避免把超出源级数组的指针构造规则混入这个用例。错误变体的尾后 4 B 保持 poison，以验证基础 shadow 的确定检出。
+**关键判定：** 关闭的元素不产生虚构访存；需要的核心信息是lane、predicate、元素 mask、EVL（合法反例；M/R/I 插桩正确性）。本节仅保留索引摘要，不重复维护示例代码与验收细节。
 
-~~~cpp
-// out 只有 40 B；本执行组 lane = 0..7，对应 i = 8..15。
-i = 8 + lane;
-addr = out_base_integer + 4 * i;
-active = logical_lane_active && (i < 10);
-masked_store_f32(addr, 1.0f, active);  // 合法：实际只有 i=8、9 写内存
-// 错误变体：把 i < 10 改成 i <= 10，i=10 就成为真实越界访问。
-~~~
-
-**哪里不对、应检测什么。** 原例程序没有空间错误；若检查器对所有 8 个地址无条件访问 shadow 并报警，是检查器引入的错误。LLVM masked memory 的关闭元素不执行对应访存，VP 操作还要结合显式向量长度 EVL；不能用“访问完整向量后 select”替代原语义。[L05] 若一个 GPU lane 内还有向量元素，实际检查集合应同时考虑逻辑 lane、指令谓词、元素 mask 和 `element_index < EVL`，不能把硬件 EXEC 当成全部逻辑条件。
-
-**实现方案与组件。** B在LLVM IR中保留mask/EVL，按真实GPU活动元素插入检查；C/E从目标机器码谓词和执行模式恢复同一集合。D及真正存在的F硬件同样必须服从mask，不能无条件检查被屏蔽元素。**GPU设备检查行为必须有真实执行证据**；未受检查的访问不能标记为已覆盖。被关闭lane的非法地址不应触发额外设备metadata访问或错误报告。
-
-**修复、合法反例与预期报告。** 原例预期零错误、有效访问数为 2；`<=` 变体应只把 i=10 对应的 4 B 访问报告为 OOB。同时验证全零 mask、部分 mask 及 gather/scatter。EVL 合法对照可选“起始下标 8、向量长度 8、元素 mask 全真、EVL=2”，同样只能访问两个元素。此例也检验 race/init 插桩不能为关闭元素制造虚构的读写事件。
+**唯一详细案例及运行入口：** [S22 错误与合法对照、检测方法、组件职责及验收](../samples/S22/README.md) · [CUDA 完整源码](../samples/S22/cuda.cu) · [AMD HIP 完整源码](../samples/S22/amd.hip.cpp)。
 
 <a id="case-s23"></a>
 
 ### 18.23 S23：只读对象与 image／surface——检查权限、坐标及寻址模式
 
-**场景与例子。** 对应 M1/M2/M3/A1。两个子例分别针对只读权限和资源坐标；资源均已创建且仍存活，排除无效 handle 的干扰。
+**关键判定：** 只读属性、维度及寻址模式；需要的核心信息是资源描述符和访问模式（M1/M2/M3/A1）。本节仅保留索引摘要，不重复维护示例代码与验收细节。
 
-~~~cpp
-// 子例 A：模块登记 coef 为设备只读对象。
-addr = address_of_module_constant("coef");
-store_u32(addr, 7);  // 错误：示意 ISA 写入只读对象，不是合法的 Host 初始化
-
-// 子例 B：64×32、每像素4 B的可写 surface，边界模式为 TRAP。
-surface_store_u32(surface, x_byte=64*4, y=0, value=7, mode=TRAP);
-// 错误：最后一个有效像素的 x_byte 为 63*4；这里已超出行宽。
-~~~
-
-**哪里不对、应检测什么。** A 的地址可能已映射且在 allocation 内，但写权限不允许。B 不能只检查底层 pitch allocation：行尾空白区域 即使在物理分配内，也未必是合法像素。检查应理解维度、格式、坐标单位、mip/layer 和边界模式。PTX 对 surface 的边界处理提供明确模式；目标 ISA 的合法 clamp/zero 等行为必须按其语义处理，不能把所有超出原始坐标范围的操作都报为非法访存。[N09]
-
-**实现方案与组件。** 真实GPU Device Runtime在资源访问ISA前，依据资源描述符和权限执行检查。Compiler＋UMD＋device runtime 可提供资源类插桩：加载时登记只读符号，创建资源时登记格式、维度与权限，在 texture/surface intrinsic 前检查参数。C/E 若覆盖资源 opcode，可查询同一描述符；只实现线性地址 shadow 的 B 不能自动获得这项能力。D 可以为显式资源 view 保留逻辑边界；F 的权限或坐标 fault 可作为硬件信号，但报告工具仍需关联资源 ID 和源码。
-
-**修复、合法反例与预期报告。** A 应写可写对象或使用允许的 Host 更新接口；B 改为合法像素坐标。另设采用规定 clamp 模式的越界采样作为合法反例：它可以返回边界像素，不应报告通用 OOB；如果应用要求更严格的逻辑坐标，需作为独立约束声明。预期报告分别为 `write-to-read-only` 与 `surface-coordinate-out-of-range`，包含资源格式、坐标、单位和模式。资源 opcode 不受支持时必须显示覆盖缺口。
+**唯一详细案例及运行入口：** [S23 错误与合法对照、检测方法、组件职责及验收](../samples/S23/README.md) · [CUDA 完整源码](../samples/S23/cuda.cu) · [AMD HIP 完整源码](../samples/S23/amd.hip.cpp)。
 
 <a id="case-s24"></a>
 
 ### 18.24 S24：CPU/GPU共享、peer／IPC别名的身份与同步
 
-**前提与错误。** CPU/GPU分支只在已确认允许该内存类型被两端并发访问、且目标定义相应一致性的系统运行；不能因调用`cudaMallocManaged`就默认满足。Host-mapped内存须另核平台规则。peer/IPC分支使用另一块已合法导入、授予读写权限的device分配，不能把managed分配直接当作传统CUDA IPC可导出对象。[N08]
+**关键判定：** 可访问性、一致性和跨处理器顺序；需要的核心信息是系统 scope、规范对象、映射（R1/A1/M5）。本节仅保留索引摘要，不重复维护示例代码与验收细节。
 
-~~~c
-cudaMallocManaged(&p, sizeof(int));
-*p = 0;                                 // launch前真实初始化
-write_x<<<1, 1, 0, s>>>(p, 1);
-*p = 2;                                 // BAD①：CPU写与GPU写无HB
-cudaStreamSynchronize(s);                // 将此等待移到CPU写之前可修复
-// 独立用例②：a为可导出的device对象；导入/映射/授权过程均成功
-handle = export_device_allocation(a);    // 伪API：导出共享对象
-b = import_and_map_rw(handle, peer);     // a、b可有不同VA，规范对象相同
-write_on_device(owner, a, q0, 3);
-write_on_device(peer,  b, q1, 4);         // BAD②：同对象写写，无跨device依赖
-~~~
-
-**实现路线与观测点。** CPU/GPU跨端Racecheck需要真实Host访问记录、GPU设备访存记录、peer映射和实际命令同步事件。E将CPU checker的访问/HB事件、GPU Compiler/C访存事件与UMD的map/import/alias/权限事件归并，以规范对象ID＋偏移匹配；导入产生映射身份，不凭空创建独立所有权。D2能保存身份但仍须另加HB引擎。[N03]
-
-**修复、报告与边界。** CPU写前等待GPU完成；peer/IPC使用目标支持的跨设备／进程事件或完成协议，并遵守别名一致性规则。system-scope release/acquire只在该内存、地址宽度、对齐及互连支持相互原子性时成为合法反例，device-scope不能同步CPU；驻留、prefetch或映射成功都不建立HB。[N08] 报告CPU/两GPU端PC、device/context、两VA到同对象的关系及缺失同步。若peer未授权，应报权限/不可访问错误，不能以此代称数据race。不可见CPU访问、IPC另一进程、别名漏登记或概率观测窗口未命中均限制覆盖。
+**唯一详细案例及运行入口：** [S24 错误与合法对照、检测方法、组件职责及验收](../samples/S24/README.md) · [CUDA 完整源码](../samples/S24/cuda.cu) · [AMD HIP 完整源码](../samples/S24/amd.hip.cpp)。
 
 <a id="case-s25"></a>
 
 ### 18.25 S25：atomic pointer 的值与身份不一致——合法程序也可能被错误插桩误报
 
-**场景与例子。** 这是 D2 的正确性验收场景，关联 M5。A、B 的初始化在并发执行前对双方可见，此后对象持续存活且数据不再修改；slot 的原子作用域覆盖发布者和读取者。发布者只更换一个原子指针，读取者读取被选对象的不可变数据。
+**关键判定：** 指针值与身份来自同次发布；需要的核心信息是原子配对、发布序号、epoch（合法反例；D2 正确性）。本节仅保留索引摘要，不重复维护示例代码与验收细节。
 
-~~~cpp
-atomic_pointer slot = &A;
-// 发布者：
-slot.store(&B, release);
-// 读取者：
-p = slot.load(acquire);
-consume(p->immutable_value);  // A、B都live，读到任一合法值都不应被误报
-
-// 错误插桩示意：两次独立取值可能跨过一次发布。
-v = atomic_load(slot);       // 取到旧值 &A
-id = atomic_load_pointer_shadow(slot); // 却取到新身份 B；writer也独立原子写此字段
-check_temporal(v, id);       // 工具错误：把不属于同一次发布的二者组合
-~~~
-
-**哪里不对、应检测什么。** 上半段不是应用缺陷；下半段是检查器的元数据一致性缺陷。同类不一致在地址复用场景中，还可能把旧裸指针附上新 allocation 身份，从而漏掉 UAF。分别原子读取 value 和 metadata 不保证它们来自同一次写入，单纯“再读一次指针值”也不能排除 ABA。这里要求的是检查器维护发布身份的一致协议，不能靠一次地址表查找重建历史。[L05] 该结论由原子接口语义与身份模型推导，属于工程设计要求。
-
-**实现方案与组件。** 可选一：在目标支持合适宽度且 ABI 受控时原子发布 `{value, identity}`。可选二：所有 writer/reader 都遵守经过证明的版本化 side metadata 协议，携带发布序号、正确的内存顺序和失败重试策略。Compiler 负责完整识别 store/exchange/CAS 与跨函数传播，device runtime 实现协议；UMD 只提供 allocation epoch，不能代替指针发布身份。使用真实GPU并发压力测试及值-身份发布一致性用例核对协议；单纯地址有效性查询不具备D2历史身份保证。C/E 只有在全部相关 writer 可纳入协议时才能给同等保证；SIMT 内自旋锁和无界重试还需要单独证明前进性。
-
-**修复、合法反例与预期报告。** 修复检查器，原合法程序应零误报。另设“保存旧指针→释放A→同地址新对象”的受控变体：旧身份应报 M5，新发布身份应通过。未知 writer 或无法证明成对一致时应报告 `provenance-unavailable`／覆盖不足，不能伪造当前 epoch 后宣布时间安全。
+**唯一详细案例及运行入口：** [S25 错误与合法对照、检测方法、组件职责及验收](../samples/S25/README.md) · [CUDA 完整源码](../samples/S25/cuda.cu) · [AMD HIP 完整源码](../samples/S25/amd.hip.cpp)。
 
 <a id="case-s26"></a>
 
 ### 18.26 S26：未插桩库与 JIT——没有观测到访问不能当作检查通过
 
-**场景与例子。** 对应 M1/M3 的覆盖边界和模块契约。应用能够重编译，第三方 kernel 暂时只有预编译代码；`p` 分配 64 个 `int32_t`，末尾有已登记的 poison 检查区域。
+**关键判定：** 真实访问是否进入检查范围；需要的核心信息是模块 manifest、opcode 与 ABI（覆盖完整性）。本节仅保留索引摘要，不重复维护示例代码与验收细节。
 
-~~~cpp
-// 应用模块启用编译插桩。
-p = alloc(64 * sizeof(int32_t));
-launch(prebuilt_library_kernel, p, 64);
-
-// 库内真实执行的逻辑；该模块没有编译期插桩。
-kernel void prebuilt_library_kernel(int32_t* p, int n) {
-    if (thread_id() == 0) p[n] = 1;  // 错误：p[64]越界
-}
-~~~
-
-**哪里不对、应检测什么。** 应用确实有一次非法访问，但只在调用方插桩，无法观察库内每次访存。没有报告只能说明检查器没有看到错误，不能说明库安全。模块 manifest 至少应声明检查器、地址空间、指令覆盖及 ABI 版本；JIT 产物同样必须登记。NVIDIA 的 hybrid 也有编译单元／module 内函数粒度限制，不能据其名字假定任意未插桩函数都会自动补齐。[N05]
-
-**实现方案与组件。** 首选重编译库并使用兼容B/D设备插桩；无法重编译时C/E在模块加载/JIT后重写受支持的目标GPU opcode并共享UMD对象表。**库模块必须在实体GPU上实际插桩并核对最终ISA，未检查的访问必须报告覆盖缺口。** UMD必须记录实际模块覆盖，区分成功加载与检查生效；工具显示未覆盖模块，Binary Fallback不能恢复原对象/时间身份时必须降级。
-
-**修复、合法反例与预期报告。** 库中改用 `p[n-1]` 是合法反例。对可插桩的错误版，应报告库内 PC、模块名和 4 B 越界；对暂不支持的二进制，应明确 `unsupported-module` 或拒绝该检查模式，不能输出无条件 clean。验收同时运行“已插桩→未插桩→已插桩”的指针返回链，确认 unknown 身份不会被包装成强保证。
+**唯一详细案例及运行入口：** [S26 错误与合法对照、检测方法、组件职责及验收](../samples/S26/README.md) · [CUDA 完整源码](../samples/S26/cuda.cu) · [AMD HIP 完整源码](../samples/S26/amd.hip.cpp)。
 
 <a id="case-s27"></a>
 
 ### 18.27 S27：graph replay捕获已释放对象与执行ID／allocation epoch
 
-**前提与错误。** `write_x`只写`p[0]`，避免引入初始化问题；p是graph外分配，capture只保存访问它的kernel节点，不含allocation节点。第一次replay完成后释放p，再重放原graph：节点仍持有旧指针。地址复用变体由测试allocator确保q取得同VA；普通malloc恰巧复用不能作为确定触发前提。
+**关键判定：** 重放不能复活已失效的指针；需要的核心信息是捕获对象身份与执行实例（M5/A1）。本节仅保留索引摘要，不重复维护示例代码与验收细节。
 
-~~~c
-cudaMalloc(&p, N);
-cudaStreamBeginCapture(s, cudaStreamCaptureModeGlobal);
-write_x<<<1, 1, 0, s>>>(p, 1);            // capture保存p的参数与原身份
-cudaStreamEndCapture(s, &graph);
-cudaGraphInstantiate(&exec, graph, 0);
-cudaGraphLaunch(exec, s);                 // replay 1：p仍live，OK
-cudaStreamSynchronize(s);
-cudaFree(p);
-cudaMalloc(&q, N);                       // 可选变体：专用夹具确保q与旧p同VA
-cudaGraphLaunch(exec, s);                 // BAD：replay 2仍访问旧p
-cudaStreamSynchronize(s);
-~~~
-
-**实现路线与观测点。** UMD记录capture节点、每次执行实例、对象创建/释放；GPU设备检查器记录每次实际访存；只依据当前VA表仍会漏同VA复用，因此必须保留被捕获参数的原身份。E＋D2由runtime为节点参数建立identity sidecar，replay生成新的execution/launch ID，Compiler传播对象ID/epoch至使用点；不能在每次launch按当前VA表重新“认领”新对象。C可补充设备访问，但裸地址补丁无法自行恢复丢失来源。[N03]
-
-**修复、报告与边界。** 让p存活至所有replay完成，或在受支持更新入口同时替换节点指针和身份。连续合法replay应具有不同执行ID、相同仍live对象epoch；graph内alloc/free节点每次建立新的分配生存期时，才生成相应新allocation epoch，不能机械地按replay全量换epoch。[N08] 报告graph/exec/replay/node ID、旧对象与free位置、若复用则给当前对象身份。B在地址仍poison时可报UAF，复用unpoison后可能漏；未跟踪节点参数更新、间接指针或device-side graph launch时须降级，不能假定每个设备发起replay都有Host回调。[N03]
+**唯一详细案例及运行入口：** [S27 错误与合法对照、检测方法、组件职责及验收](../samples/S27/README.md) · [CUDA 完整源码](../samples/S27/cuda.cu) · [AMD HIP 完整源码](../samples/S27/amd.hip.cpp)。
 
 <a id="case-s28"></a>
 
 ### 18.28 S28：日志满、metadata 不足与错误终止——检查器必须说明检查是否完成
 
-**场景与例子。** 这是工具可靠性场景，而非新增的应用错误类别；它决定所有能力的结果是否可信。p 指向恰好 n 个 `int32_t` 的有效分配，n≥1，尾部已 poison；block 至少两个线程，全部属于 barrier 的参与集合。下例只有线程 0 触发越界，其余线程会执行 barrier；本例选择固定到达计数且不会自动退订退出线程的目标同步原语。若目标会按规定调整参与集合，必须另按其规则验收，不能把所有提前 return 一概视为非法。
+**关键判定：** 错误、覆盖不足与工具失败可区分；需要的核心信息是丢失计数、资源状态、abort 协议（所有 checker 的可靠性）。本节仅保留索引摘要，不重复维护示例代码与验收细节。
 
-~~~cpp
-kernel void error_then_barrier(int32_t* p, int n) {
-    if (thread_id() == 0) p[n] = 1;  // 原始应用错误
-    counted_barrier(expected_arrivals=block_size());
-    // 如果检查器只让线程0 return，其余线程可能永远等不到正确参与集合。
-}
-// 日志故障注入：容量=1且预填未消费记录，再触发本例；或直接注入“已满”。
-// 另用至少两个独立诊断事件核对丢失计数。
-// shadow分配失败、clock耗尽分别独立运行，不要求同时触发。
-~~~
-
-**哪里不对、应检测什么。** sanitizer 发现错误后的动作也是工具语义的一部分。只退出一个参与线程、静默丢掉唯一错误或把 metadata 分配失败当作“所有地址可访问”，都会使结果失真；单纯等待超时也无法说明是应用 barrier 误用还是工具引入死锁。
-
-**实现方案与组件。** Compiler/device runtime 设置统一错误状态，采用目标可保证前进性的报告协议；UMD 与已有 KMD/固件取消能力配合执行受控 dispatch/context abort，并保留完成状态。没有安全恢复但有可靠 abort 时，终止受影响执行；连可靠终止能力也缺失时，应将依赖该能力的模式标为不支持，并在启动前拒绝相应配置，不能承诺任意 lane 局部恢复。真实生产路径必须处理队列、报告缓冲与生命周期资源失败；C/E补充路径必须遵守同一错误处理ABI。报告可聚合重复事件，但应保留“已经检测到错误”的持久标志及记录丢失计数；shadow/clock 不足则标记检查不完整，按配置拒绝启动或安全终止。具体错误动作需要结合目标能力设计。[N02]
-
-**修复、合法反例与预期报告。** 修复应用下标后，在工具资源充足时应正常完成；保持应用合法但注入 metadata 失败时，应报告 `tool-resource-exhausted`，不能伪装成应用 OOB。错误程序即使日志满，也应保留失败状态并报告记录丢失；触发 abort 后确认其他任务的影响范围符合声明。验收分别检查资源耗尽、日志丢失和 barrier 终止，不能只用“进程退出了”作为通过证据。
+**唯一详细案例及运行入口：** [S28 错误与合法对照、检测方法、组件职责及验收](../samples/S28/README.md) · [CUDA 完整源码](../samples/S28/cuda.cu) · [AMD HIP 完整源码](../samples/S28/amd.hip.cpp)。
 
 <a id="scenario-platforms"></a>
 
 ### 18.29 28个场景的真实GPU生产职责与验收映射
 
-以下**28个场景全部以实体GPU上的检查代码或已具备的硬件机制为验收对象**。Compiler/Device Runtime负责真实访存/同步判定（Host API错误由实际UMD/设备allocator判断），UMD提供对象/queue/module真值，KMD仅承担自己的特权资源契约；任何状态不能仅由CPU静态检查替代设备真实运行。
+本表只说明**跨案例的检查类别与组件责任**，不是第二份逐场景技术规范。各 Sxx 的具体前提、Compiler/Device Runtime/UMD/KMD 需求和错误报告以独立 [案例 README](../samples/README.md) 为准；通用代码接口见[组件实施指南](real-gpu-components-implementation.md)。
 
-| 场景 | 真实GPU检查与验收关键点 | UMD / Host Runtime关键数据 | KMD实际契约 |
-|---|---|---|---|
-| [S01](#case-s01) | B Shadow/原对象Bounds检查头尾4B访问 | 64B逻辑长度、redzone、分配事件 | 有效映射与权限；页／BO边界不能代替逻辑对象长度 |
-| [S02](#case-s02) | B检查宽访问完整有效字节集 | 真实30B长度，不按对齐扩大 | 映射与fault访问范围；不只依赖一次页命中 |
-| [S03](#case-s03) | LLVM最后opcode对齐保证与设备报告 | 映射与资源对齐 | 转交已发生的对齐fault及上下文；若硬件不报则依赖检查器 |
-| [S04](#case-s04) | D1从A来的ptr不得进入活对象B | A/B原对象sidecar | BO/GPUVA映射；通常不知道该指针原本来自A |
-| [S05](#case-s05) | D1子对象/view Bounds | 子分配与stride注册 | 支撑父映射；同一BO中的tensor边界由上层登记 |
-| [S06](#case-s06) | GPU shared分区与block独立边界 | launch布局/动态shared长度 | 调度资源配置；无法从外部DMA自动观察每个shared访问 |
-| [S07](#case-s07) | private/frame真实设备检查 | 栈帧实例与scratch生命周期 | backing映射及资源管理；scratch BO有效不证明栈对象有效 |
-| [S08](#case-s08) | B在free生效后poison并检出UAF | 事件依赖、退役前保持失效状态 | 完成／故障与映射生命周期；不以Host调用时间判失效 |
-| [S09](#case-s09) | D2保存旧指针epoch并识别复用 | 分配身份代次与参数sidecar | 当前BO句柄或GPUVA不能重建旧指针身份 |
-| [S10](#case-s10) | 真实UMD或设备allocator拒绝非法free | allocator/owner/基址 | 校验内核句柄和权限；逻辑子分配错误可能在UMD已被拦截 |
-| [S11](#case-s11) | UMD或设备allocator一致状态机禁止重复free | 释放状态去重 | 内核资源引用计数与拒绝非法句柄；不混同不同allocator的逻辑ID |
-| [S12](#case-s12) | API/设备堆逻辑账本在指定点报告泄漏 | 真实context自动回收前快照 | 实际BO/context清理；OS自动回收不抹去程序检查点的逻辑泄漏 |
-| [S13](#case-s13) | GPU设备定义性bitmap检未初始化字节 | copy/memset与完成依赖 | DMA/copy完成和失败；不凭分配成功认定内容已定义 |
-| [S14](#case-s14) | GPU真实shared访问/HB或声明的FSM | launch与barrier关系 | 不提供GPU内部逐线程HB；驱动job按序也不消除kernel内部race |
-| [S15](#case-s15) | GPU global冲突访问和order/scope | 跨队列同步关联 | context/映射与外部同步；不能用每次DMA发生先后代替语言HB |
-| [S16](#case-s16) | 跨kernel真实GPU事件与HB分析 | queue/event依赖图 | 真实依赖与完成fence；不得把Host提交先后补成依赖 |
-| [S17](#case-s17) | GPU同步参与者/phase实际诊断 | 错误完成与资源状态 | 有效终止／reset和错误通知；超时不等于证明phase错误 |
-| [S18](#case-s18) | subgroup active lane/mask规则设备检查 | subgroup模式及launch上下文 | 故障传播；看不到mask时不能自行补造诊断 |
-| [S19](#case-s19) | GPU async copy group、wait与消费事件 | 异步拷贝依赖发布 | 外部copy引擎完成只说明该引擎，不代替kernel内部wait语义 |
-| [S20](#case-s20) | GPU访问与free-effective窗口检查 | 跨queue释放与回收次序 | 提交完成、回收与错误证据；不擅自将free提交等同于全部访问失效 |
-| [S21](#case-s21) | GPU原子实际宽度、访问范围和权限检查 | 指令类型及对象范围 | 原子故障及映射；不能用原子指令本身证明地址正确 |
-| [S22](#case-s22) | masked-off元素绝不访问/check错误地址 | 真实EVL/谓词和参数 | 无需逐元素新接口；通常不拥有向量EVL语义 |
-| [S23](#case-s23) | 真实ISA image/surface权限与合法寻址 | 资源维度和format | 映射权限与资源授权；行步长空白区域与合法坐标需上层/ISA信息 |
-| [S24](#case-s24) | 跨CPU/GPU别名与系统HB声明检查 | IPC/peer/backing对象归一化 | 共享BO、导入映射、权限及外部同步；不能单凭同址推断所有权 |
-| [S25](#case-s25) | D2原子指针值和身份配对发布 | epoch/发布序号一致性 | 只提供分配生命周期和映射，不能替代原子发布身份 |
-| [S26](#case-s26) | JIT/闭源模块设备检查覆盖显式列明 | load/patch能力与拒绝原因 | 正规代码加载、可执行映射与资源校验；不默认允许任意patch |
-| [S27](#case-s27) | graph每次replay独立launch身份检验 | 捕获对象id与运行时epoch | 提交和资源生存期；每轮launch不自动产生新allocation身份 |
-| [S28](#case-s28) | 实际设备错误标志、报告丢失和可靠abort | metadata资源与失败状态 | 可靠的终止范围和完成语义；只有queued-job cancel不够 |
+| 场景组 | 覆盖案例（本章锚点） | 生产组件核心职责 |
+|---|---|---|
+| 地址、指令宽度、Mask 与访问权限 | [S01](#case-s01)、[S02](#case-s02)、[S03](#case-s03)、[S06](#case-s06)、[S07](#case-s07)、[S21](#case-s21)、[S22](#case-s22)、[S23](#case-s23) | Compiler/设备Checker按真实访存宽度、地址空间、谓词与资源权限检查；UMD登记边界，KMD保证映射与故障语义 |
+| 对象来源、UAF、指针身份和重放 | [S04](#case-s04)、[S05](#case-s05)、[S08](#case-s08)、[S09](#case-s09)、[S20](#case-s20)、[S25](#case-s25)、[S27](#case-s27) | D1/D2保留原对象Bounds/epoch；UMD保障分配、异步释放、原子发布及Graph生命周期 |
+| 分配器API与泄漏 | [S10](#case-s10)、[S11](#case-s11)、[S12](#case-s12) | UMD/设备Allocator管理free和所有权并在约定时间快照；Host API错误不计GPU Kernel设备检出 |
+| 定义性检测 | [S13](#case-s13) | 设备读写更新定义性；UMD发布Memcpy/Memset及完成依赖 |
+| Race与跨处理器Happens-Before | [S14](#case-s14)、[S15](#case-s15)、[S16](#case-s16)、[S24](#case-s24) | GPU真实访存与HB事件，加上UMD/Host Queue、Event、Peer/IPC别名信息 |
+| Barrier/Subgroup/Async Copy | [S17](#case-s17)、[S18](#case-s18)、[S19](#case-s19) | GPU真实参与集合、phase、mask、copy group/wait；不能以超时当作精确检测证据 |
+| 模块覆盖与工具自身可靠性 | [S26](#case-s26)、[S28](#case-s28) | 未插桩、报表丢失、资源故障和abort要明确标记，不能记为CLEAN |
 
-每一项均应同时执行错误实例和合法对照，在原始报告中核对设备型号、已加载二进制、PC/线程/byte宽度、对象/版本、失败策略与覆盖；无实卡结果时标记GPU_NOT_RUN。
-
+仅在**真实设备检查指令或硬件机制**执行后方可登记 GPU 检测结论；Host API/分配器错误须另行分类。未知覆盖为 `PARTIAL_COVERAGE`、不支持为 `UNSUPPORTED`，未运行目标 GPU 为 `GPU_NOT_RUN`；任何状态不得自动转为 `CLEAN`。
 
 ---
 
@@ -2397,48 +1897,18 @@ kernel void error_then_barrier(int32_t* p, int n) {
 
 <a id="sample-execution"></a>
 
-### 18.30 真实GPU工具样例与完整源代码索引（CUDA/AMD）
+### 18.30 CUDA/AMD HIP 真实设备样例与运行入口
 
-**源码已提交，不等于全部成功检出。** 每个S01～S28单独包含CUDA/AMD HIP的完整`__global__` kernel与`main`、中文详细注释、`--good/--bad`模式及专属README，公共[样例README](../samples/README.md)包含两种Docker编译环境和一键运行命令。**受GPU硬件、编译器、厂商checker覆盖和真实执行路径限制，不能保证28项在两厂商全检出。**
+**详尽场景、各厂商预期与源代码的唯一维护入口：** [S01～S28 样例导航](../samples/README.md)、[机器可读工具及预期矩阵](../samples/manifest.json)。每个案例 README 均提供 CUDA/HIP 完整源文件和 `--good` / `--bad` 对照；并非所有 `--bad` 都能被两个厂商工具检测，危险路径及不受支持路径由 Runner 按 manifest 控制。
 
-| 场景 | CUDA完整源码 | AMD HIP完整源码 | NVIDIA预期（未验证） | AMD预期（未验证） |
-|---|---|---|---|---|
-| [S01](../samples/S01/README.md) | [CUDA](../samples/S01/cuda.cu) | [AMD HIP](../samples/S01/amd.hip.cpp) | detect（memcheck） | detect（GPU ASan） |
-| [S02](../samples/S02/README.md) | [CUDA](../samples/S02/cuda.cu) | [AMD HIP](../samples/S02/amd.hip.cpp) | detect（memcheck） | detect（GPU ASan） |
-| [S03](../samples/S03/README.md) | [CUDA](../samples/S03/cuda.cu) | [AMD HIP](../samples/S03/amd.hip.cpp) | conditional（memcheck） | conditional（GPU ASan） |
-| [S04](../samples/S04/README.md) | [CUDA](../samples/S04/cuda.cu) | [AMD HIP](../samples/S04/amd.hip.cpp) | unsupported（memcheck） | unsupported（GPU ASan） |
-| [S05](../samples/S05/README.md) | [CUDA](../samples/S05/cuda.cu) | [AMD HIP](../samples/S05/amd.hip.cpp) | unsupported（memcheck） | unsupported（GPU ASan） |
-| [S06](../samples/S06/README.md) | [CUDA](../samples/S06/cuda.cu) | [AMD HIP](../samples/S06/amd.hip.cpp) | conditional（memcheck） | conditional（GPU ASan） |
-| [S07](../samples/S07/README.md) | [CUDA](../samples/S07/cuda.cu) | [AMD HIP](../samples/S07/amd.hip.cpp) | conditional（memcheck） | unsupported（GPU ASan） |
-| [S08](../samples/S08/README.md) | [CUDA](../samples/S08/cuda.cu) | [AMD HIP](../samples/S08/amd.hip.cpp) | conditional（memcheck） | conditional（GPU ASan） |
-| [S09](../samples/S09/README.md) | [CUDA](../samples/S09/cuda.cu) | [AMD HIP](../samples/S09/amd.hip.cpp) | unsupported（memcheck） | unsupported（GPU ASan） |
-| [S10](../samples/S10/README.md) | [CUDA](../samples/S10/cuda.cu) | [AMD HIP](../samples/S10/amd.hip.cpp) | api（memcheck） | api（GPU ASan） |
-| [S11](../samples/S11/README.md) | [CUDA](../samples/S11/cuda.cu) | [AMD HIP](../samples/S11/amd.hip.cpp) | api（memcheck） | api（GPU ASan） |
-| [S12](../samples/S12/README.md) | [CUDA](../samples/S12/cuda.cu) | [AMD HIP](../samples/S12/amd.hip.cpp) | conditional（memcheck） | unsupported（GPU ASan） |
-| [S13](../samples/S13/README.md) | [CUDA](../samples/S13/cuda.cu) | [AMD HIP](../samples/S13/amd.hip.cpp) | detect（initcheck） | unsupported（GPU ASan） |
-| [S14](../samples/S14/README.md) | [CUDA](../samples/S14/cuda.cu) | [AMD HIP](../samples/S14/amd.hip.cpp) | detect（racecheck） | unsupported（GPU ASan） |
-| [S15](../samples/S15/README.md) | [CUDA](../samples/S15/cuda.cu) | [AMD HIP](../samples/S15/amd.hip.cpp) | unsupported（racecheck） | unsupported（GPU ASan） |
-| [S16](../samples/S16/README.md) | [CUDA](../samples/S16/cuda.cu) | [AMD HIP](../samples/S16/amd.hip.cpp) | unsupported（racecheck） | unsupported（GPU ASan） |
-| [S17](../samples/S17/README.md) | [CUDA](../samples/S17/cuda.cu) | [AMD HIP](../samples/S17/amd.hip.cpp) | conditional（synccheck） | unsupported（GPU ASan） |
-| [S18](../samples/S18/README.md) | [CUDA](../samples/S18/cuda.cu) | [AMD HIP](../samples/S18/amd.hip.cpp) | conditional（synccheck） | unsupported（GPU ASan） |
-| [S19](../samples/S19/README.md) | [CUDA](../samples/S19/cuda.cu) | [AMD HIP](../samples/S19/amd.hip.cpp) | conditional（synccheck） | unsupported（GPU ASan） |
-| [S20](../samples/S20/README.md) | [CUDA](../samples/S20/cuda.cu) | [AMD HIP](../samples/S20/amd.hip.cpp) | conditional（memcheck） | unsupported（GPU ASan） |
-| [S21](../samples/S21/README.md) | [CUDA](../samples/S21/cuda.cu) | [AMD HIP](../samples/S21/amd.hip.cpp) | detect（memcheck） | conditional（GPU ASan） |
-| [S22](../samples/S22/README.md) | [CUDA](../samples/S22/cuda.cu) | [AMD HIP](../samples/S22/amd.hip.cpp) | clean（memcheck） | clean（GPU ASan） |
-| [S23](../samples/S23/README.md) | [CUDA](../samples/S23/cuda.cu) | [AMD HIP](../samples/S23/amd.hip.cpp) | conditional（memcheck） | unsupported（GPU ASan） |
-| [S24](../samples/S24/README.md) | [CUDA](../samples/S24/cuda.cu) | [AMD HIP](../samples/S24/amd.hip.cpp) | unsupported（memcheck） | unsupported（GPU ASan） |
-| [S25](../samples/S25/README.md) | [CUDA](../samples/S25/cuda.cu) | [AMD HIP](../samples/S25/amd.hip.cpp) | unsupported（memcheck） | unsupported（GPU ASan） |
-| [S26](../samples/S26/README.md) | [CUDA](../samples/S26/cuda.cu) | [AMD HIP](../samples/S26/amd.hip.cpp) | conditional（memcheck） | unsupported（GPU ASan） |
-| [S27](../samples/S27/README.md) | [CUDA](../samples/S27/cuda.cu) | [AMD HIP](../samples/S27/amd.hip.cpp) | conditional（memcheck） | unsupported（GPU ASan） |
-| [S28](../samples/S28/README.md) | [CUDA](../samples/S28/cuda.cu) | [AMD HIP](../samples/S28/amd.hip.cpp) | conditional（memcheck） | conditional（GPU ASan） |
+~~~bash
+# 仅能在具备对应编译工具、厂商Sanitizer及真实GPU时执行
+python3 scripts/run_samples.py --backend cuda --case S01 --mode both --strict
+python3 scripts/run_samples.py --backend rocm --case S01 --mode both --strict
+./scripts/run-all.sh cuda  # 或 rocm；按manifest控制适用/危险的bad
+~~~
 
-**类别：** `detect`＝基于厂商公开能力预计可以检出，实际尚无GPU日志；`conditional`＝需要目标opcode、时序或特定硬件支持；`unsupported`＝当前选定厂家工具不保证这种检查；`api`＝GPU Runtime API错误而非kernel指令Sanitizer；`clean`＝S22 Masked-off合法路径必须没有越界报告。S19 HIP源码是功能对照，不是与CUDA `cp.async`等价的指令级检测；S23只覆盖常量符号子情况，S26只给单编译单元示意，S28未实现Sanitizer内部OOM故障注入。这些缺口是明确标记的待实现验收范围，不应该隐藏。
-
-**一键运行：** 根目录`./scripts/setup-docker.sh cuda` 或在有受支持AMD GPU且`ROCM_ARCH=gfx...:xnack+`、`HSA_XNACK=1`时`./scripts/setup-docker.sh rocm`；进入容器后运行`./scripts/run-all.sh cuda`或`./scripts/run-all.sh rocm`。底层Python脚本可用`--case S01 --mode both --strict`只执行单例并强制校验预期；产生`results/{backend}/summary.json`和逐case原始日志。
-
-**结果不能作假：** NVIDIA需要Compute Sanitizer设备违规/竞争/初始化/同步/漏显存报告；AMD必须由设备ASan产生含`on amdgpu device N`标志的报告。AMDGPU ASan依赖 `-fsanitize=address -shared-libsan`、受支持`xnack+`目标及`/asan/libamdhip64.so`，只有Host ASan输出不算设备检出。构建/运行不满足条件时应明确返回失败或UNSUPPORTED，而不是自动降为CPU ASan。源码和Runner只完成结构与代码审查，**尚未在用户硬件执行；无真实GPU检测率或性能数据**。[N02][A01][N05]
-
-**危险故障**：S17/S18/S20/S27的bad默认被跳过，须额外`--allow-dangerous`并在隔离GPU环境运行；`--attempt-unsupported`仅用于观察工具没有承诺的错误，不得据此宣布检测支持。
+S19、S23、S26、S28 等**当前可执行程序小于完整概念场景**的限制，均见对应案例 README。真实设备尚未执行自研 GPU Checker，CPU 静态测试通过不能作为其检测证据。
 
 ## 19. 验证基准与验收标准
 
