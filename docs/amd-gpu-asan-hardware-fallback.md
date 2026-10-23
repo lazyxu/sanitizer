@@ -62,6 +62,12 @@
 
 **归纳：** ①主要付出物理显存，②可能在未映射 Shadow 上直接 Fault，③通常增加显式索引开销。已驻留 Shadow 若在 Kernel 仍可能访问时被透明换出，也不能再依赖 XNACK 缺页重试；要么保持驻留，要么在后续使用前显式迁回。三种方式均可用于不具备 XNACK/HMM 的自研 B2，但都不等于能够直接运行 AMD 官方 GPU ASan。
 
+### 2.3 无 XNACK 下的 Shadow 页有效性前置检查
+
+关键顺序是 **先证明 Shadow 页可读，再执行 Shadow Load**：软件两级 Directory 或始终有效的 Present 元数据区可预先判定是否映射；GPU MMU 稀疏映射本身不能自动处理未映射的任意野指针。示意 `safeShadowLookupNoFault` 与结果区分只在[通用组件指南 §3](real-gpu-components-implementation.md)维护；这里规定硬件前提与错误归属。
+
+**显式映射的发布顺序：** `alloc backing → 建立 PTE/访问权限 → 初始化 Shadow/Poison → GPU fence 可见 → publish Ready/Present → launch`；Unmap/复用必须先结束可能读取旧映射的 GPU 操作，再撤销 Present 与物理页。若页大小大于逻辑 Shadow 字节，多个细小 Allocation 应尽量共用 Shadow 页，不能把每次 64B `gpuMalloc` 直接等同于 64KiB Shadow 物理分配。按页共享和 TLB 的真实性能必须实测。
+
 ## 3. Clang/Driver与构建系统
 
 **AMD 官方与自研 Target 不能混为同一配置：** ROCm GPU ASan 的受支持路径使用 `xnack+` 目标、HMM 和配套 ASan Runtime；自研 LLVM 后端不必照搬 `:xnack+` 编译门槛，但必须声明实际设备能否 Load 元数据、映射 Shadow、发布 Queue Fence、可靠处理错误。若当前模式不满足这些契约，Compiler/Loader 必须标明 `UNSUPPORTED`，不能生成“只检查 CPU”的假成功。
@@ -69,12 +75,6 @@
 **唯一通用实现位置：** [组件指南 §2](real-gpu-components-implementation.md) 的 LLVM Pass、Target 最终 ISA 覆盖清单；[§6.1](real-gpu-components-implementation.md) 的 `B2_SHADOW` / `B1_CURRENT_LIVE_INTERVAL` / `D1_ORIGINAL_OBJECT_BOUNDS` 能力协商及 `metadata_ready`。本专题只保留**缺 XNACK/HMM 时的硬件选择条件**，不再复制独立 `chooseSanitizer` 代码。
 
 
-
-### 3.1 无 XNACK 下的 Shadow 页有效性前置检查
-
-关键顺序是 **先证明 Shadow 页可读，再执行 Shadow Load**：软件两级 Directory 或始终有效的 Present 元数据区可预先判定是否映射；GPU MMU 稀疏映射本身不能自动处理未映射的任意野指针。示意 `safeShadowLookupNoFault` 与结果区分只在[通用组件指南 §3](real-gpu-components-implementation.md)维护；这里规定硬件前提与错误归属。
-
-**显式映射的发布顺序：** `alloc backing → 建立 PTE/访问权限 → 初始化 Shadow/Poison → GPU fence 可见 → publish Ready/Present → launch`；Unmap/复用必须先结束可能读取旧映射的 GPU 操作，再撤销 Present 与物理页。若页大小大于逻辑 Shadow 字节，多个细小 Allocation 应尽量共用 Shadow 页，不能把每次 64B `gpuMalloc` 直接等同于 64KiB Shadow 物理分配。按页共享和 TLB 的真实性能必须实测。
 
 ## 4. LLVM IR Pass：访存前检查（Compiler，方案B）
 
