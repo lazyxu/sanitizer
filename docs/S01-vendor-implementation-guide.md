@@ -195,127 +195,31 @@ Runtime/Reporter：设备错误PC/workgroup/lane、错误对象与源位置
 
 ### 2.2 1:8 Shadow 如何检查64 B对象？
 
-经典Google/LLVM ASan算法以8 B用户数据映射1 B Shadow。这是**借鉴的经典算法**，自研目标可选择不同比例、稀疏表或分区映射，不应直接复用CPU的固定Offset。[AddressSanitizerAlgorithm](https://github.com/google/sanitizers/wiki/AddressSanitizerAlgorithm)官方算法原文：
+经典 [AddressSanitizerAlgorithm](https://github.com/google/sanitizers/wiki/AddressSanitizerAlgorithm) 采用**每 8 B 应用数据映射 1 B Shadow**：0 表示完整 Granule 有效，1～7 表示有效前缀的字节数，Poison 表示不可访问。对完整有效的 64 B 对象，基础 Shadow 为 8 B；对象前后 Redzone 另需映射并设置 Poison。跨 Granule 的宽访存必须检查全部有效访问字节。
 
-> AddressSanitizer maps 8 bytes of the application memory into 1 byte of the shadow memory.
+**一个 Shadow Byte 不能表达同 Granule 内任意不连续的合法子区域。** 因而 S05 的子对象问题与一般指针来源检查不能单凭 1:8 Shadow 自动解决。
 
-以 0x1000 为用户Base、64 B逻辑范围、两边各16 B redzone为例：
-
-| 应用 GPUVA | Shadow 状态 |
-|---|---|
-| [0x0ff0,0x1000) 前Redzone | Poison |
-| [0x1000,0x1040) 用户64B | 8个0 Shadow，全部可访问 |
-| [0x1040,0x1050) 后Redzone | Poison |
-
-经典单Shadow字节：0表示整个8B有效；1..7表示只有前k字节有效；poison sentinel表示全部无效。一个granule内部同时存在多个不连续有效岛时，经典前缀编码不足以表示，需要改变对象布局或选择更细粒度元数据方案（S05）。
-
-~~~cpp
-// 目标无关GPU设备检查算法。lookup必须验证GPUVA->shadow存在/驻留；
-SanVerdict check_shadow(const SanContext& ctx,
-                        uint64_t gpuva, uint64_t access_bytes) {
-    if (access_bytes == 0 || access_bytes - 1 > UINT64_MAX - gpuva)
-        return SanVerdict::OOB; // 实际访存指令宽度应非零
-    uint64_t cursor = gpuva, remaining = access_bytes;
-    while (remaining > 0) {
-        uint32_t offset = uint32_t(cursor & 7);
-        uint64_t n = min<uint64_t>(remaining, 8 - offset);
-        ShadowResult shadow = ctx.safe_lookup(cursor >> 3);
-        if (shadow.untracked) return SanVerdict::UNKNOWN_OBJECT;
-        if (!shadow.mapped) return SanVerdict::TOOL_FAILURE;
-        bool valid = shadow.value == 0
-                  || (shadow.value >= 1 && shadow.value <= 7
-                      && offset + n <= shadow.value);
-        if (!valid) return SanVerdict::OOB;
-        cursor += n; remaining -= n;
-    }
-    return SanVerdict::VALID;
-}
-~~~
-
-这是设计伪代码，正式GPU版必须解决Shadow索引合法范围、跨地址空间、GPUVA减法/加法溢出、Device Runtime自身访存不被再插桩、并发Shadow更新和SIMT访问mask。**Shadow映射失败或查不到对象不能默认为Valid**。
+具体 64 B 地址、合法反例和实际可执行程序在 [S01 唯一案例 README](../samples/S01/README.md)；通用按访问宽度检查与安全元数据访问代码在 [组件指南 §3](real-gpu-components-implementation.md)，而无 XNACK 的三种物理映射取舍在 [AMD 硬件专题 §2](amd-gpu-asan-hardware-fallback.md)。Shadow 缺失或未就绪不允许被默认为 VALID。
 
 ### 2.3 如果模仿 AMD，需要怎样修改每个组件？
 
-| 组件 | 必须新增或确认复用的代码 | 具体要测试 |
-|---|---|---|
-| **Compiler（主要）** | LLVM Pass `GlobalLoad/Store/Atomic → check`；`TargetASInfo`确定Global地址空间；`ShadowMapping`、Device Helper ABI与site_id；后端最终访存指令coverage audit | 4B首/末/头/尾，宽访存跨granule，masked-off不误报，原Shadow helper不递归插桩，部分IR操作在后端产生访存不能静默缺口 |
-| **UMD（主要）** | `SanDebugAllocator`给GPU对象做Redzone；`SanShadowManager`负责映射/poison/unpoison；`SanLaunchContext`传Shadow Root/Report Ring；`SanReportDecoder`符号化；在实际queue依赖中发布更新 | 用户requested_size≠BO页级size，poison可见性、不同context隔离、async free有效时刻和error工具OOM |
-| **KMD（按需）** | 复用已有GPUVM/BO/map/fence/fault/错误完成；缺少shadow VA预留/映射或终止路径时补正当接口 | Shadow和Report Buffer映射权限、提交/完成顺序、多context清理；不用要求KMD遍历每条Kernel访存 |
+与 NV-R 不同，**AMD-B2 由 LLVM 在设备访存前插入 Shadow 检查**，而不是 UMD 在装载 Binary 时重写指令。Compiler 必须正确识别 GPU 地址空间、宽度和活动 Lane；Device Runtime 在实体 GPU 读取设备可见 Shadow；UMD 管理 Redzone、Poison 与异步生命周期；KMD 负责必要映射与完成/fault 契约。已有系统接口满足时 KMD 可零改。
 
 #### 可从 LLVM Pass 真正着手的最小入口
 
-这份示例刻意把**目标选择**、**插桩调用**与**CFG改造**分开。只是API风格的工程骨架，不是可以直接放入LLVM树编译通过的完整Pass；具体API签名需以你采用的LLVM版本为准。重要的是实际Load/Store**只有检查成功时**才能执行，不能只在它之前调用一个void报告helper却放行原访存。
+先选实际最终 ISA 中的普通 Global Load/Store 1/2/4/8 B，保证检查结果**控制原访存是否执行**，而非调用一个报告 Helper 后继续无条件写入。然后扩展 Atomic、Vector、Masked、Async，逐个记录最终机器访存的覆盖结果。
 
-~~~cpp
-// 工程骨架：在Function内部收集待修改指令，避免遍历期间改CFG失效。
-SmallVector<Instruction*> sites;
-for (Instruction& I : instructions(F)) {
-    if (is_device_sanitizer_helper(F) || is_internal_shadow_instruction(I))
-        continue;
-    if (isa<LoadInst>(I) || isa<StoreInst>(I)) sites.push_back(&I);
-}
-for (Instruction* I : sites) {
-    Value* ptr = get_memory_pointer_operand(*I);
-    Type* value_ty = get_memory_value_type(*I);
-    unsigned addr_space = cast<PointerType>(ptr->getType())->getAddressSpace();
-    if (!target_is_global_address_space(addr_space)) continue;
-
-    TypeSize bytes = DL.getTypeStoreSize(value_ty);
-    if (bytes.isScalable() || !supported_scalar_memory_access(*I)) {
-        emit_coverage_gap(*I); // 不支持的指令不能静默标记“已检查”
-        continue;
-    }
-    // 应把check编成真实的GPU设备端helper/inline检查。
-    Value* verdict = insert_device_check(*I, ptr, bytes.getFixedValue(),
-                                         get_original_pc_site_id(*I));
-    // 改写CFG，让旧访存只出现在verdict==VALID的路径。
-    // 不能让非法store在报告之后继续执行；合法lane必须保持原有barrier语义。
-    split_and_guard_memory_access(*I, verdict);
-}
-~~~
-
-建议首版只承诺普通非原子的Global Load/Store 1/2/4/8B，后续扩到宽向量、masked、atomic、memcpy/async与后端新增的ISA访存。结合目标反汇编审核最终 opcode 列表；LLVM IR已插桩不代表lowering后所有访存都在覆盖范围内。
-
-**UMD 必要职责：** 为每个逻辑对象记录实际requested size、分配身份、设备端Poison可见性及发布顺序；Kernel启动前检查设备元数据确已就绪。具体接口与目标LLVM设备ABI同步定义。
-
-**最关键的错误：** 不可把物理映射4KiB当作应用请求64B。也不能让poison操作还没有完成，下一条用户Kernel就开始加载Shadow；GPU Host调用返回时间不等于设备事件生效时间。
+完整 IR/CFG 插桩及最终 ISA 审计只在 [组件指南 §2](real-gpu-components-implementation.md) 维护；Shadow/Allocator、可见性 Fence 和错误终止统一在 [§3～4](real-gpu-components-implementation.md)。不能以 BO 页大小代替 S01 的逻辑对象大小。
 
 ### 2.4 无 XNACK 时，AMD 式 GPU ASan 还能实现吗？
 
-**先回答是与否**：
+**官方 AMD ROCm 7.2.4 GPU ASan：** 公布的运行路径要求受支持的 xnack+、Linux HMM 与适配的插桩 HIP/HSA Runtime。xnack- 目标可能警告并跳过设备插桩；只设置 HSA_XNACK=1 不能给不支持的硬件增加可恢复缺页能力。
 
-- **直接使用 AMD ROCm 7.2.4 官方 GPU ASan：没有受支持的 `xnack+` / HMM 环境时，不能按官方流程获得设备插桩。** 官方[编译与运行要求](https://rocm.docs.amd.com/projects/llvm-project/en/docs-7.2.4/conceptual/using-gpu-sanitizer.html)明确说明，`xnack-` 目标可能警告并忽略设备 `-fsanitize=address` 插桩，程序能运行不意味着GPU访存受检查；只写 `HSA_XNACK=1` 也不会让不支持XNACK的芯片获得硬件功能。
-- **借鉴AMD Shadow算法，在自研LLVM GPU后端重新实现：可以不依赖XNACK。** 真实必需条件是最终GPU ISA能执行检查（或受控原对象Bounds比较），所用metadata/Report在设备GPUVA中合法可达，UMD/KMD能够在dispatch前建立映射、驻留和fence顺序，且有安全的错误报告/访存屏蔽或终止协议。必须自研Pass、设备库与运行时，而不是修改一个ROCm环境变量。
+**自研 GPU 借鉴 AMD/LLVM Shadow 算法：可以不依赖 XNACK/HMM。** 但必须在设备访存前映射、初始化并发布全部需要读取的 Shadow/Report。XNACK 负责可恢复 GPU Page Fault 后重试访存，**不负责**为任意野指针生成 Poison。
 
-**XNACK的准确功能及B2显存取舍：** XNACK支持可恢复GPU缺页后的访存重试，不是自动为任意野指针分配带正确Poison的Shadow；HMM属于Linux地址空间镜像及迁移机制。没有等效缺页重试时，Shadow主要有三类映射取舍：**全量物理Shadow预分配（显存浪费）**、**随`gpuMalloc`分配且直接寻址（野指针可能触发未映射Shadow Fault）**、**按需物理Shadow加安全两级索引（更多查询开销）**。大范围GPUVA虚拟预留不等于物理显存全量分配，硬件稀疏映射也可替代部分软件索引；详细限定、示例和官方引用统一放在[AMD指南第2节](amd-gpu-asan-hardware-fallback.md)。
+无 XNACK 的三种核心取舍——全量物理预分配、随 gpuMalloc 分配且直接寻址、按需物理 Shadow 加安全索引——及虚拟 GPUVA/物理显存区别，仅在 [AMD 无硬件依赖专题 §2.1～2.2](amd-gpu-asan-hardware-fallback.md) 维护，此处不复制比较表。
 
-| 无XNACK时的实现选择 | 必要的GPU/软件能力 | 可以提供的保证 | 代价与明确缺口 |
-|---|---|---|---|
-| **B2：预映射GPU Shadow（推荐）** | GPU能读取预驻留的Shadow BO；LLVM设备Load/Store插桩；UMD Poison/发布fence | 声明支持的字节范围地址检查、Poison期UAF | 显存/带宽开销；A→存活B可能漏；与官方ROCm运行库不同 |
-| **B1：GPU Live Allocation区间表（下文原I）** | GPU能读不可变有序live对象descriptor；LLVM插GPU端区间查询 | 当前地址所在live allocation的范围有效性 | 无Shadow；有序查找较贵，仍可能漏A→B及复用旧裸指针 |
-| **D1：原对象Bounds软件比较** | LLVM保留可证明的original base/size并在设备寄存器/参数或GPU sidecar传播 | 在来源闭合范围内发现A→存活B | 不支持的指针来源/跨ABI段降级，非完整D2 |
-| **C：UMD机器码重写器** | 目标ISA可合法decode/patch/relocate，GPU stub/metadata可执行 | 可为不能重编译模块补特定设备访存检查 | 编译器可零改，但UMD重写成本高，不能凭裸地址恢复D1 |
-| **F1/F2：硬件Tag/Bounds** | 真实芯片具有对应ISA/RTL/metadata/fault | 只在硬件实际声明的粒度/保证内有效 | 不存在这些功能时不能软件配置打开；转B/D软件方案 |
-
-~~~cpp
-// 无XNACK目标的能力协商：真实GPU运行的自研Device Checker，非官方ROCm开关。
-Mode choose_gpu_checker(TargetGPU gpu, ObjectRegistry registry, Module manifest) {
-    if (!gpu.can_execute_checked_isa) return UNSUPPORTED;
-    if (gpu.can_read_device_metadata && registry.shadow_pre_mapped
-        && registry.shadow_ready_fence) return B2_SHADOW;
-    if (gpu.can_read_device_metadata && registry.intervals_pre_mapped)
-        return B1_CURRENT_LIVE_INTERVAL;
-    if (manifest.provenance_complete && manifest.original_bounds_in_args_or_registers)
-        return D1_ORIGINAL_OBJECT_BOUNDS;
-    return UNSUPPORTED; // Host API拦截不能伪装成GPU内部访存检查。
-}
-~~~
-
-**组件级落地**：Compiler在实际GPU Load/Store前插入完整byte-footprint检查、保留active lane/mask、生成覆盖manifest并审核最终ISA；Device Runtime读取预映射Shadow/Descriptor或D1参数并写设备报告；UMD登记逻辑对象并提交GPU metadata BO、在queue/fence上排序Poison状态及async free；KMD保证GPUVA映射、权限、实际完成/fault；Firmware/RTL仅按真实abort或新硬件要求修改。无GPU按需缺页时，**不得执行过程中临时期望Shadow由CPU补页**，未驻留直接TOOL_FAILURE或拒绝launch。
-
-**最窄的进一步退路**：即使没有一般的GPU动态元数据查表能力，若D1已经能将已知的original base/limit作为寄存器或Kernel实参送进GPU，仍可比较这些访问；但动态live对象、复杂指针load/store/alias和时间身份无法因此完整覆盖。没有GPU可执行检查指令或可靠失败协议则UNSUPPORTED。
-
-**怎么验证而不自欺**：在真实目标GPU执行S01合法`a[0]`/`a[15]`和非法`a[-1]`/`a[16]`，另测A→live B、shadow缺页、metadata OOM、report满、masked-off、跨queue更新和非法访问后的SIMT前进性。保留GPU最终ISA、模块build ID、PC/lane/宽度、原始report及无插桩/NOP/完整检查性能对照。无实际芯片执行=GPU_NOT_RUN。进一步逐组件实现见[AMD无硬件依赖实施指南](amd-gpu-asan-hardware-fallback.md)。
+当 GPU 设备元数据预映射且 Poison 已发布时使用 B2_SHADOW；若 Shadow 不可用但能够安全查询 Live 区间表，可以考虑 B1_CURRENT_LIVE_INTERVAL；来源已知时可增加 D1_ORIGINAL_OBJECT_BOUNDS。统一模式协商、元数据 Ready Fence、TOOL_FAILURE、UNSUPPORTED 与部分覆盖的通用 ABI 见 [组件指南](real-gpu-components-implementation.md)。不能把 Host 模拟检查或仅有 CPU ASan 的成功当成设备 Sanitizer 结果。
 
 ### 2.5 AMD 官方GPU ASan验证命令与条件
 
