@@ -255,108 +255,34 @@ AMD官方文档明确要求 `--offload-arch=gfx...:xnack+`，并指出在 `xnack
 
 ### 3.1 B1（原I）：编译期当前Live区间表，只作①NV-R地址检查语义的实现变体
 
-**当前设计到底是什么？明确是B1，不是D1。** 为每一条声明支持的GPU Load/Store插入真实设备 `check_current_live_interval`。该Helper按访问后的实际**当前GPUVA**查找仍然LIVE的逻辑allocation，判定此次访问的整个字节范围是否包含于选中的live区间。**不保留产生这个指针的原对象身份**，也不传原始A的base/size。因此这种算法与NVIDIA传统运行时地址有效性判断属于相似的检查等级（不是宣称NVIDIA真实实现使用相同表）：只是插入时机改到编译期，不能因此自动获得NVIDIA新编译期Base-and-Bounds能力。
+B1 是由 Compiler 为目标 GPU 访存插入检查，GPU 在运行时查询**当前存活 Allocation 区间**。它的判断语义是当前 GPUVA 对应的完整字节范围是否有效，而不是指针最早来源的对象。即使 B1 使用 LLVM 编译期插桩，也不能因此获得 NV-C/D1 的 Original-Object Bounds。
 
-~~~cpp
-SanVerdict check_current_live_interval(GPUVA addr, uint64_t n,
-                                       DeviceLiveIntervals snapshot) {
-    if (!n || n - 1 > GPUVA_MAX - addr) return OOB;
-    if (!snapshot.gpu_mapped || !snapshot.published_for_launch) return TOOL_FAILURE;
-    auto object = snapshot.floor_by_base(addr);  // 实体GPU执行的区间定位
-    if (!object || !object->live) return UNKNOWN_OBJECT;
-    if (addr < object->base || n > object->requested_bytes) return OOB;
-    uint64_t delta = addr - object->base;
-    return delta <= object->requested_bytes - n ? VALID : OOB;
-}
-~~~
-
-- **Compiler**：插桩并审计mask/byte width/地址空间及最终GPU ISA；不携带original provenance时coverage仅为CURRENT_LIVE_ADDRESS。
-- **Device Runtime**：GPU访问已映射的snapshot/descriptor，不在CPU端查表替代；unknown/缺表要输出UNSUPPORTED或TOOL_FAILURE，不能默认为合法。
-- **UMD**：维护requested bytes、对象注册与free生效顺序、不可变device快照及跨queue fence；不允许GPU使用中原地无同步修改表。
-- **KMD**：现有GPUVA/BO映射、提交、完成和fault契约满足则新增代码可以为0。
-
-**边界示例**：指针源对象A为`[0x1000,0x1040)`，相邻对象B为`[0x1040,0x1080)`。若`a[16]`产生GPUVA `0x1040`，B仍LIVE，B1可能查到B并放行4B访问。**D1**必须携带`(expected_A_base, expected_A_size)`到访问点，再比较才可拒绝A→live B；**D2**需要旧指针自己的对象id/epoch才能区别同VA复用后的旧A和新B。B1也不能保证任意未登记地址或硬件特殊访存均能处理。
-
-**为什么不单列方案I**：它是B的**无Shadow实现选项**，与B2经典1:8 Shadow/Redzone在数据表示和性能上不同；两者本质上都只判断当前GPU地址可访问性，不能凭“编译期”提升语义。第一版默认仍以B2 Shadow为主；目标缺少合适的Shadow GPUVA但能GPU查询预映射Live表时才选B1。每访存有序查表成本可能比Shadow高，必须同条件实卡测量。
+在 S04 的 A→Live B 情形，B1 可能查到 B 并放行；地址复用后的历史指针又需要 D2 Allocation ID/Epoch。区间查询和发布同步是 [设备 Runtime、UMD 组件指南 §3～4](real-gpu-components-implementation.md) 的通用实现问题，不在 S01 厂商指南中重写第二段同义代码。B1 是**无 Shadow 的 B 实现变体，不是第四种独立基础算法**；其性能取舍需 GPU 实测。
 
 ### 3.2 条件性芯片能力：F1／F2
 
-**F1 硬件Tag（原T；条件性能力）：**
+**F1 硬件 Tag：** 需要实体 GPU 的 Tag/访存比较机制，软件 Tag 属于设备插桩或 D2 身份表示。硬件 Tag 仍可能出现碰撞、Granule 内小幅越界漏检。[LLVM HWASan](https://clang.llvm.org/docs/HardwareAssistedAddressSanitizerDesign.html) 是机制参照，不能作为目标 GPU 已存在硬件的证明。
 
-参考[LLVM HWASan设计](https://clang.llvm.org/docs/HardwareAssistedAddressSanitizerDesign.html)：将pointer tag与对象/内存granule tag比较。若真实GPU已有硬件Tag/访问检查，Compiler/UMD/KMD/Firmware需接入实际ISA、分配/释放Tag失效、context状态及真实fault；可以交付**其声明粒度内**的F1硬件检查。**Tag碰撞、同一granule内的小幅越界、未标记指针等并不必然可检出，不能宣称等价完整字节级S01。**
-
-如果硬件没有Tag，软件Tag需要GPU端插桩、device sidecar和报告；这种表示应归D2的指针身份或相关软件检查算法，**不是给不存在的F1硬件开一个软件选项**。仅修改UMD allocator标签而没有GPU访存前的比较也不构成Sanitizer。
-
-**F2 专用硬件Bounds/Metadata（原H；条件性未来交付）：**
-
-如果目标GPU已经有GPU端Bounds指令/比较器、真实对象descriptor接口、异常/终止及metadata失效，则Compiler选择指令，UMD维护对象及版本，KMD/Firmware接通context和fault；可以作为具备该能力的硬件路线交付。**当前芯片没有就必须另立ISA/RTL/DV/Firmware/硅片工作包，不能当作可直接选择的现有产品方案。**
-
-即使硬件查得快，如果只检查“当前GPUVA落入哪个live对象”，仍不能发现A→live B；想要更强的D1原对象界限，必须把expected object来源传至检查指令。没有硬件时用GPU普通指令实现B1/B2/D1软件检查，不得把软件Bounds称为F2。
+**F2 硬件 Bounds：** 只有已有 ISA/RTL/对象元数据/异常与失效协议，或另行完成硬件研发，才是硬件方案；普通 GPU 指令算 Bounds 属于软件 D1。如果硬件只检查当前 Live 地址，也不会凭空获得指针原始来源。Firmware/RTL/KMD 的唯一实施代码及真实芯片验收在 [组件指南 §8～9](real-gpu-components-implementation.md)。
 
 ### 3.3 E：Hybrid模块覆盖与能力协商，不是第4种基础检查算法
 
-借鉴NVIDIA Hybrid机制：有B/D编译期插桩的模块直接加载，未插桩但ISA可重写的模块由C进行Runtime Binary Rewriter补充，未知/未覆盖模块声明PARTIAL_COVERAGE或按严格策略拒绝。UMD统一metadata、module manifest、debug PC和检查器ABI：
+E是混合交付策略：已经由 B/D 编译期插桩且检查 ABI 兼容的模块直接加载；未插桩但 ISA 可合法重写的模块由 UMD 的 C Runtime Binary Rewriter 补充；其余拒绝或显式报告 PARTIAL_COVERAGE。NVIDIA 2026.3 的同一模块混合限制不允许推断任意未插桩函数都自动补齐。
 
-~~~cpp
-if (module.compiler_instrumented && module.san_abi_compatible) load_checked();
-else if (module.binary_patchable) load(rewrite_and_verify_real_gpu_isa());
-else reject_or_mark_partial_coverage();
-~~~
-
-**E是有独立工程投入的完整产品集成形式，但自身不引入新的访问合法性定义**：B1当前区间查询不会因Hybrid自动具备D1来源，Binary补丁也不会从裸地址恢复旧指针epoch。Init/Race/Sync不随Hybrid自动获得。
+统一 Module Manifest、Kernel Launch/Graph、原 PC 映射和严格失败状态由 [组件指南 §5～6](real-gpu-components-implementation.md) 负责。E 不改变空间检查谓词，也不能自动把当前地址检查升级为 D1/D2 或覆盖 Init/Race/Sync。
 
 ## 4. 针对S01的最终选型与任务拆分
 
-**交付条件：** P0必须产出目标实体GPU可执行的检查ISA及UMD/KMD资源协议；只有S01的错误/合法对照真机执行且报告正确，才能标记GPU_DETECTED。
+**首版推荐 AMD-B2 的设备 Shadow 检查**：目标已有可修改的 LLVM GPU 后端，先实现真实 Global Store 的设备检查，再增加 NV-C/D1 原对象 Bounds；只有不可重编译 Binary 存在实际缺口时再考虑 NV-R/C。
 
-| 交付阶段 | 具体实现 | 真实证据 | 是否优先 |
-|---|---|---|---|
-| S01-0 **真实GPU设备代码原型** | **先**实现LLVM Global Store设备插桩＋UMD 64B逻辑对象及**预映射Shadow/Redzone**，不要求自研GPU具备XNACK；KMD复用有效映射/完成，生成可在实体GPU运行的Binary | 目标GPU ISA确实包含Checker；在实体GPU可运行时记录原PC、lane、错误与合法对照 | **P0** |
-| S01-1 **实体GPU设备检查闭环** | 实卡加载S01-0生成的插桩Binary，UMD发布Shadow/Report，KMD提交实际kernel并返回报告 | `a[0]/a[15]`通过、`a[-1]/a[16]`设备报错；PC/lane/访问宽度与实际ISA匹配 | **P0** |
-| S01-2 优化与边界 | 跨Shadow granule、1/2/4/8/16 B、mask、atomic、异步poison顺序 | 扩展用例通过、工具资源不足显示不完整、三性能基线 | P1 |
-| S01-3 NVIDIA编译期Bounds融合 | 直接Kernel指针参数base/size sidecar，GEP/phi/select传播；未知来源明确降级 | A越界落入B仍检出，合法B来源访问通过（S04） | P1/P2 |
-| S01-4 NVIDIA运行期fallback | 仅当存在不可重编译Kernel且有成熟rewriter时建设 | patch前后合法行为、PC/资源重定位、覆盖manifest | 按需 |
-| S01-5 条件性硬件研发 | F1/F2仅在实体Tag/Bounds硬件具备或另行交付后成立 | 没有真正ISA/RTL/芯片能力不能宣布完成硬件检查 | 可选条件性 |
+| 阶段 | S01 特定的可验证产物 | 正确状态 |
+|---|---|---|
+| S01-0 **真实GPU设备代码原型** | 最终 GPU ISA 在 Global Store 前执行检查，UMD 准备逻辑 64 B 对象、Redzone 与映射/发布好的 Shadow | 无实体目标 GPU 运行时仍为 GPU_NOT_RUN |
+| S01-1 设备正反例闭环 | 与 [S01 唯一案例 README](../samples/S01/README.md) 的合法/非法输入对照，核对 PC、Lane、Byte Width、原始设备报告与终止策略 | 有可核验报告才记 GPU_DETECTED |
+| S01-2 覆盖与故障扩展 | 宽访问、Masked/Atomic、Shadow 未映射、元数据不足和报告丢失的失败分类 | PARTIAL_COVERAGE / TOOL_FAILURE 不能当 CLEAN |
+| S01-3 按需追加 D1/C/E | S04 A→Live B 检查来源、重写后的 Binary 等价性、跨模块覆盖清单 | 未知指针与未支持 Opcode 明确降级 |
 
-**第一版真正需要交付到实体GPU的Checker与UMD ABI建议：**
-
-~~~cpp
-struct SanAccessEvent {
-    uint64_t context_id, launch_id, gpu_pc, gpuva;
-    uint32_t block_id, lane_id, bytes, kind, space, byte_enable;
-    uint32_t site_id;
-};
-struct SanObject {
-    uint64_t allocation_id, base_gpuva, requested_size;
-    uint64_t generation;
-    uint32_t state, owner_context;
-};
-struct SanReport {
-    uint32_t checker_id, error_kind, coverage_status, dropped_count;
-    SanAccessEvent access;
-    uint64_t expected_object_id, object_base, object_size;
-};
-~~~
-
-不要依赖裸PC作为唯一键（不同模块/重放可能冲突），实际报告应保留module build ID、原PC/patch PC转换和异步生命周期语义；生产ABI还要对齐与版本化、确保报告缓冲写入和完成次序、OOM/未支持时可观察。
-
-**失败策略：** 若目标KMD/固件能可靠终止dispatch/context，可在设备报告完成后fail-fast；否则要明确选择可恢复的、不会破坏barrier前进性的语义或者拒绝不支持的模式。不能仅在非法lane本地return让其他lane永远等在barrier，也不能把shadow表未映射当作合法用户地址。
-
-### S01最小验收矩阵
-
-| 用例 | **实体GPU设备检查器**期望 |
-|---|---|
-| `a[0]`、`a[15]` | 正常、无报错 |
-| `a[-1]`、`a[16]` | 在明确无效redzone/受控布局下报告Underflow/Overflow |
-| 仅thread 0实际store，另外31 lane inactive | 只记录实际生效访问，不因其他lane计算地址而误报 |
-| 访问起点合法，但16 B访问跨过尾部 | **S02延伸**：所有真实触及字节都检查，不能只查首地址 |
-| A来源指针越界进入live B | 基础地址有效性可能漏；D1有来源时必须检出 |
-| Shadow未映射或metadata不足 | TOOL_FAILURE/PARTIAL_COVERAGE，不能当CLEAN |
-| 编译器IR已插桩但最终新ISA访存未覆盖 | 明确列为UNSUPPORTED/部分覆盖 |
-| 目标实卡无法启动或设备上没有检查指令 | UNSUPPORTED / GPU_NOT_RUN，不能伪装成已检出 |
-| 合法程序与报错程序的资源/性能差异 | 记录无检查、插桩空壳、完整检查三基线及reg/scratch/显存 |
-
----
+**通用对象 ABI、SanAccessEvent/SanObject/SanReport 结构、错误终止和完整版组件职责仅在** [真实 GPU 组件实施指南 §1.1～§10](real-gpu-components-implementation.md) 维护。本文件不重复维护第二份 S01 测试矩阵；报告、合法反例、厂商预期只以 [S01 README](../samples/S01/README.md) 与 [manifest](../samples/manifest.json) 为准。
 
 ## 5. 现在仓库里的真实示例与这份设计怎样对应？
 
@@ -377,4 +303,4 @@ struct SanReport {
 | LLVM实现 | [AddressSanitizer.cpp](https://llvm.org/doxygen/AddressSanitizer_8cpp_source.html) / [AMDGPU SwLowerLDS](https://github.com/llvm/llvm-project/blob/main/llvm/lib/Target/AMDGPU/AMDGPUSwLowerLDS.cpp) | LLVM现有Pass和AMDGPU降级源码的复用位置 | 目标地址空间/ISA与AMDGPU必然一致 |
 | Google ASan原始算法 | [AddressSanitizerAlgorithm](https://github.com/google/sanitizers/wiki/AddressSanitizerAlgorithm) | 1:8 Shadow、Redzone和Poison的基本数学关系 | 经典编码能表达同granule内任意非连续子对象 |
 
-**本文的落实结论（与[核心三参考配置](core-design-comparison.md)一致）：** I是B1 GPU端当前Live Allocation表，并非D1 Original-Object Bounds；F1软件Tag和F2缺硅片新硬件都不应成为独立现成路线；E是混合交付策略，不改变检查语义。没有XNACK时官方ROCm GPU ASan不能直接宣称设备插桩，但自研GPU可用预驻留设备Shadow/descriptor实现B2/B1/D1，并明确资源与覆盖缺口。S01首选借鉴AMD/LLVM的真实GPU Shadow检查：LLVM Pass生成目标GPU可执行ISA，UMD管理对象/Shadow和报告，KMD提供真实映射、提交、完成与故障契约。目标实卡直接对S01正反例进行验证；随后按实际需求加入D1原对象Bounds与UMD Binary Rewriter。若实体GPU没有Tag/Bounds硬件，则只将F1/F2视为待研发芯片机制。完整逐组件代码及矩阵见[实施指南](real-gpu-components-implementation.md)。
+**本文落实结论：** I是B1 当前 Live 区间查询，NV-C/D1 保留原对象 Bounds；E是混合交付策略，软件 Tag 与缺少实体能力的 F1/F2 都不应另列新成熟算法。S01 细节归 [唯一案例](../samples/S01/README.md)，通用设备及驱动实现归 [组件指南](real-gpu-components-implementation.md)。
