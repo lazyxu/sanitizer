@@ -289,6 +289,162 @@
       "caution": "Do not infer identical device/adapter support from the UR specification and the Intel 2026.0 compiler guide."
     }
   ],
-  "archive_note": "Research working notes, not the final specification. May contain early candidate conclusions. Refer to docs/llvm-gpu-sanitizer-research.md for final judgments. Internal retrieval identifiers were removed; no third-party full text is included.",
-  "intel_rechecked_at": "2026-10-23"
+  "archive_note": "Per-source raw evidence remains historical; vendor_profiles provide the canonical version-scoped vendor evidence fields. Detailed product mechanisms and implementation designs belong to linked specialized docs. No vendor capability row is a test result for the target self-developed GPU.",
+  "intel_rechecked_at": "2026-10-23",
+  "schema_version": 2,
+  "vendor_profiles": [
+    {
+      "profile_id": "nvidia-compute-sanitizer",
+      "vendor": "NVIDIA",
+      "product": "Compute Sanitizer (memcheck / initcheck / racecheck / synccheck)",
+      "version_baseline": "Compute Sanitizer release notes 2026.3; NVCC online documentation CUDA Toolkit 13.4; compiler memcheck introduced with CUDA 13.1",
+      "evidence_checked_at": "2026-10-20",
+      "hardware_requirements": [
+        "Compatible NVIDIA CUDA device and matching CUDA Toolkit / Compute Sanitizer versions",
+        "Instruction and architecture coverage depends on device capabilities and exact tool release; do not assume all older SMs are supported"
+      ],
+      "instrumentation": [
+        "Default memcheck uses runtime binary instrumentation",
+        "Compile-time memcheck optionally performs original-object base-and-bounds analysis; unknown provenance falls back to current-allocation bounds"
+      ],
+      "runtime_requirements": [
+        "Use the corresponding Compute Sanitizer memcheck runtime for compiler-instrumented modules",
+        "Device modules/JIT/hybrid coverage and launch/resource bookkeeping must be checked against the selected toolkit version"
+      ],
+      "detector_scope": [
+        "memcheck global/local/shared device memory and supported allocation diagnostics",
+        "initcheck default global; shared/all selectable in documented versions",
+        "racecheck shared-memory data hazards, and synccheck supported synchronization misuse"
+      ],
+      "known_limitations": [
+        "Only memcheck is documented for compile-time instrumentation; other checker types are separate",
+        "Same-module function-level hybrid coverage cannot be assumed; supported granularity must be verified",
+        "Runtime-mode/current-address checks do not guarantee detection when an A-derived pointer lands in a distinct live B",
+        "No comprehensive device global/cross-kernel race checker is implied by racecheck"
+      ],
+      "reference_configurations": [
+        "NV-R",
+        "NV-C"
+      ],
+      "source_ids": [
+        "NV-MANUAL",
+        "NV-RELEASE",
+        "NV-NVCC",
+        "NV-BLOG",
+        "NV-API"
+      ],
+      "canonical_detail": "docs/S01-vendor-implementation-guide.md",
+      "verification_status": "VENDOR_DOCS_VERIFIED; USER_TARGET_GPU_NOT_RUN"
+    },
+    {
+      "profile_id": "amd-rocm-gpu-asan",
+      "vendor": "AMD",
+      "product": "ROCm GPU AddressSanitizer",
+      "version_baseline": "ROCm LLVM GPU ASan documentation docs-7.2.4; LLNL 7.0.0 examples and 7.13.0 preview are separate evidence, not equivalent baselines",
+      "evidence_checked_at": "2026-10-20",
+      "hardware_requirements": [
+        "Official documented GPU ASan deployment requires supported xnack+ GPU configuration and Linux HMM",
+        "Illustrative gfx90a:xnack+ offload architecture is not a universal target GPU setting"
+      ],
+      "instrumentation": [
+        "LLVM/Clang device memory instrumentation with GPU-visible Shadow/Poison/Redzone metadata",
+        "Software Shadow checks use GPU instructions; absence of a special Shadow ISA instruction does not invalidate an independently implemented checker"
+      ],
+      "runtime_requirements": [
+        "-fsanitize=address -shared-libsan with version-matched ASan-enabled HIP/HSA runtime libraries",
+        "HSA_XNACK=1 applies only where hardware and kernel support retryable faults; validate real device reports"
+      ],
+      "detector_scope": [
+        "Supported GPU device addressability and memory-error reports for instrumented accesses",
+        "Lifetime/poison checks within published Shadow state and officially supported memory spaces"
+      ],
+      "known_limitations": [
+        "xnack- offload targets may produce runnable but uninstrumented device code",
+        "Private/stack accesses are not generally instrumented in the cited implementation; LDS may be modeled as global",
+        "Finite Redzones and missing/uninitialized Shadow mapping can create missed detections or tool faults",
+        "XNACK fault retry does not automatically allocate valid Poison metadata for arbitrary wild pointers"
+      ],
+      "reference_configurations": [
+        "AMD-B2"
+      ],
+      "source_ids": [
+        "AMD-ASAN-724",
+        "AMD-LLNL",
+        "AMD-PREVIEW-713"
+      ],
+      "canonical_detail": "docs/amd-gpu-asan-hardware-fallback.md",
+      "verification_status": "VENDOR_DOCS_VERIFIED; USER_TARGET_GPU_NOT_RUN"
+    },
+    {
+      "profile_id": "intel-oneapi-device-sanitizers",
+      "vendor": "Intel",
+      "product": "oneAPI DPC++/C++ Device-Side Compiler Sanitizers",
+      "version_baseline": "Intel DPC++/C++ compiler 2026.0 documentation; independent Unified Runtime specification not assumed to share identical implementation status",
+      "evidence_checked_at": "2026-10-23",
+      "hardware_requirements": [
+        "Official 2026.0 GPU configuration documents Linux with one Intel Ponte Vecchio GPU card",
+        "Level Zero GPU device selection and SYCL versus OpenMP runtime setup must follow their distinct instructions"
+      ],
+      "instrumentation": [
+        "-Xarch_device -fsanitize=address|memory|thread with compiler-side device instrumentation",
+        "Unified Runtime / device backend collaborates on allocations and diagnostic metadata"
+      ],
+      "runtime_requirements": [
+        "SYCL Level Zero device selection or OpenMP unified_runtime plugin plus appropriate UR_ENABLE_LAYERS",
+        "Compatible Intel compiler / Unified Runtime / driver / GPU configuration"
+      ],
+      "detector_scope": [
+        "ASan supports documented global/USM/local/private memory errors and SYCL-specific buffer/context/free checks",
+        "MSan device uninitialized-use checks; TSan documented device USM race detection"
+      ],
+      "known_limitations": [
+        "Device ASan forces kernel execution into sequential mode, changing concurrency semantics",
+        "Large workgroup counts may lead to skipped ASan local/private and MSan local/private checks",
+        "Device private-memory overhead may reduce permitted workgroup size",
+        "Generic UR specification status for MSan/TSan cannot be treated as universal backend support"
+      ],
+      "reference_configurations": [],
+      "source_ids": [
+        "INTEL-DEVICE",
+        "INTEL-LIMITS",
+        "INTEL-UR"
+      ],
+      "canonical_detail": "docs/intel-oneapi-device-sanitizers.md",
+      "verification_status": "VENDOR_DOCS_VERIFIED; USER_TARGET_GPU_NOT_RUN"
+    },
+    {
+      "profile_id": "moore-threads-musa-compute-sanitizer",
+      "vendor": "Moore Threads",
+      "product": "MUSA Compute Sanitizer",
+      "version_baseline": "MUSA published v1.1.1 guide/release note; undated portions not assigned an invented release date",
+      "evidence_checked_at": "2026-10-20",
+      "hardware_requirements": [
+        "Follow explicit version-specific MUSA and driver hardware support tables; do not generalize an MTT S5000 example to all devices"
+      ],
+      "instrumentation": [
+        "Public documentation describes a GPU runtime debugging tool; internal machine-code/Shadow/provenance algorithm remains undisclosed"
+      ],
+      "runtime_requirements": [
+        "Matching mt-compute-sanitizer and supported MUSA runtime/driver environment"
+      ],
+      "detector_scope": [
+        "Publicly documented device global out-of-bounds and API-return-error checks",
+        "Memory leak detection requires the separately enabled leak-check mode"
+      ],
+      "known_limitations": [
+        "Current published descriptions do not establish complete private/shared/local/host-pinned coverage",
+        "Some atomic/special LSU paths are not established as supported in the cited guide",
+        "No evidence establishes equivalence to NV-R binary rewriting, AMD-B2 Shadow or NV-C original-object analysis"
+      ],
+      "reference_configurations": [],
+      "source_ids": [
+        "MUSA-USER",
+        "MUSA-111",
+        "MUSA-110",
+        "MUSA-INTRO"
+      ],
+      "canonical_detail": "docs/research-notes/vendors.md",
+      "verification_status": "VENDOR_DOCS_VERIFIED; INTERNAL_MECHANISM_UNKNOWN; USER_TARGET_GPU_NOT_RUN"
+    }
+  ]
 }
