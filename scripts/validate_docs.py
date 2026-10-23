@@ -189,7 +189,8 @@ check("### 3.1 B1（原I）" in guide
       and "### 3.2 条件性芯片能力" in guide
       and "### 3.3 E：" in guide,
       "S01只允许B1实现、真实Tag/Bounds条件和E集成")
-check("D1 original" in guide or "D1原对象" in guide,
+check("### 3.1 B1（原I）" in guide and "原对象" in guide
+      and "当前 GPUVA" in guide and "NV-C/D1" in guide,
       "B1地址表必须区别于D1原对象Bounds")
 check("I是B1" in guide and "E是混合交付策略" in guide,
       "旧I与E的归属不能回退")
@@ -248,7 +249,8 @@ for required in (
 ):
     check(required in amd_guide,
           "AMD缺XNACK指南遗漏关键功能或三项Shadow映射取舍: " + required)
-check("三类映射取舍" in guide and "可恢复GPU缺页" in guide,
+check("三种核心取舍" in guide and "可恢复 GPU Page Fault" in guide
+      and "gpuMalloc" in guide and "amd-gpu-asan-hardware-fallback.md" in guide,
       "S01指南需引用XNACK含义及三项Shadow映射取舍")
 check("不新增第四种" in canonical,
       "核心分类不能把XNACK Shadow映射策略另算新算法")
