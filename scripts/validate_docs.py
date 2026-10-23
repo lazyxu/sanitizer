@@ -490,6 +490,79 @@ check("GPU_NOT_RUN" in audit and "UNSUPPORTED" in audit,
 check("real-gpu-components-implementation.md" in root_readme,
       "README必须链接逐组件修改代码")
 
+# v2.7：12章历史笔记是R1-R9取证/勘误，不再重复预算和通用实现。
+architecture_note = read("docs/research-notes/architecture.md")
+arch_headings = [int(x) for x in re.findall(r"^## (\d+)\. ", architecture_note, re.M)]
+check(arch_headings == list(range(1, 13)),
+      "架构历史笔记必须保留原12节与稳定导航")
+for n in range(1, 10):
+    check(f"| R{n} |" in architecture_note, f"架构资料遗漏R{n}一手来源")
+check(len(architecture_note) < 8500
+      and "| P：Compiler |" not in architecture_note
+      and "| E构成 |" not in architecture_note
+      and "struct SanContext {" not in architecture_note,
+      "历史架构资料不得恢复第二份完整预算或Device ABI")
+for required in (
+    "### C路线职责纠正", "### B：", "### C：", "### D：",
+    "### E：", "### F：", "### 4.1 两级 mask", "### 4.2 atomic",
+    "GPU_NOT_RUN", "real-gpu-components-implementation.md",
+    "llvm-gpu-sanitizer-research.md", "estimates-v1.8.json",
+):
+    check(required in architecture_note, "历史勘误缺失: " + required)
+for required in (
+    "### 8.1 三组件协作架构", "### 8.2 对象描述符",
+    "### 8.7 编译器、KMD、UMD的支持契约",
+    "### 8.8 各生产组件的真实GPU可执行修改代码",
+    "### 10.4 编译器、KMD、UMD支持与修改",
+    "### 11.2 编译器、KMD、UMD支持与修改",
+    "### 12.5 编译器、KMD、UMD支持与修改",
+    "### 13.4 编译器、KMD、UMD支持与修改",
+    "### 14.2 编译器、KMD、UMD及硬件支持",
+    "### 16.9 只统计真实GPU产品组件与条件KMD缺口",
+    "### 17.5 推荐的性能报告模板",
+    '<a id="component-contracts"></a>',
+    '<a id="hardware-deployment-gate"></a>',
+    '<a id="route-e-platforms"></a>',
+    '<a id="route-f-platforms"></a>',
+    "guest CPU虚拟地址", "guest GPU虚拟地址",
+    "### 8.4 异步分配／释放是实际关键路径",
+):
+    check(required in main, "第8～17章必须保留原锚点与独特合同: " + required)
+for start, end in (
+    ("### 8.2 对象描述符：示意协议", "### 8.3 统一事件集"),
+    ("### 8.8 各生产组件的真实GPU可执行修改代码",
+     '<a id="hardware-deployment-gate"></a>'),
+    ("### 10.4 编译器、KMD、UMD支持与修改", "### 10.5 能力边界与退出条件"),
+    ("### 11.2 编译器、KMD、UMD支持与修改", "### 11.3 必须单独预算的工程风险"),
+    ("### 12.5 编译器、KMD、UMD支持与修改", "### 12.6 子对象和 tensor view"),
+    ("### 13.4 编译器、KMD、UMD支持与修改", '<a id="route-e-platforms"></a>'),
+    ("### 14.2 编译器、KMD、UMD及硬件支持", "### 14.3 选择 F 的证据门槛"),
+):
+    st = main.find(start)
+    en = main.find(end, st + len(start)) if st >= 0 else -1
+    subsection = main[st:en] if en > st >= 0 else ""
+    check(bool(subsection) and len(subsection) <= 1800
+          and "real-gpu-components-implementation.md" in subsection,
+          "主报告通用组件重复表未收敛或缺少唯一源码引用: " + start)
+summary_start = main.find("### 16.9 只统计真实GPU产品组件与条件KMD缺口")
+summary_end = main.find("### 16.10 将区间转为项目预算与算术校验",
+                        summary_start)
+summary_part = main[summary_start:summary_end] if summary_end > summary_start >= 0 else ""
+check(len(summary_part) < 1800 and "estimates-v1.8.json" in summary_part
+      and "| P＋B |" not in summary_part,
+      "§16.9不可恢复与§16.5重复的预算表")
+check("struct ObjectDesc {" not in main
+      and "| 路线 | 组件 | 必须支持的契约／交付物 |" not in main,
+      "主研究不能重复第二份具体对象ABI与组件交付表")
+check(all("research-notes/architecture.md" in text for text in
+          (root_readme, docs_index, implant)),
+      "导航/组件指南必须关联历史架构取证说明")
+check(report.get("architecture_dedup", {}).get("version") == "v2.7"
+      and report.get("architecture_dedup", {}).get("historical_chapters") == 12
+      and report.get("architecture_dedup", {}).get("execution_status") == "GPU_NOT_RUN",
+      "v2.7报告需记录架构资料精简及未执行真机状态")
+
+
 # 第18章只保留稳定摘要，S01～S28 独立README是唯一详细规范。
 # 不允许将原来的28份完整伪代码和厂商结果矩阵重新复制到主稿。
 headings = re.findall(r"^### 18\.(\d+)\s+S(\d{2})[：:]", main, re.M)
