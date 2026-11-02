@@ -83,3 +83,8 @@
 5. 先有软件真机性能与硬件契约证据，再考虑F1/F2条件性芯片研发。
 
 **验收状态**：本仓库是研究文档、示意代码和28组CUDA/HIP厂商工具对照样例。没有目标GPU Compiler/UMD/KMD产品补丁、实卡报告或真实性能；GPU_NOT_RUN。工程预算保持[v1.8估算](estimates-v1.8.json)历史兼容，但**五个预算包不是五种独立算法**。
+
+
+## 7. 六方案软件实现的全维度技术对照（研究增补）
+
+本页始终是**三种成熟核心参考配置与两层基础空间语义的唯一分类总表**，不另立厂商或算法计数。针对 **NV-R、B1、B2、NV-C/D1、cuCatch、CuSafe** 的逐方案原理、检测能力/反例、限制、性能数据可比性、CModel/全系统仿真条件、Compiler/Device Runtime/UMD/KMD 修改，以及有来源的预算范围，请看[GPU Memcheck 六种软件路线的完整对照](software-memcheck-alternatives.md)。Intel oneAPI Device ASan 仍只作为 B2 家族的产品参考；Vulkan GPU-AV、GPUArmor、CHERI-SIMT 不在该专题范围。**沿用 v1.8 数字预算，来源论文原型行数不等于自研 GPU 工程量，自研设备仍为 GPU_NOT_RUN。**
