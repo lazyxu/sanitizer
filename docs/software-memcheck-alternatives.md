@@ -214,6 +214,22 @@ v1.8 **没有 cuCatch 单独 kLOC 预算**，不得将 D 包直接贴给它，�
 | cuCatch | 未估算 | 未估算 | 现有 v1.8 无正式单独预算 |
 | CuSafe | 未估算 | 未估算 | 论文 2,964 行原型 ≠ 完整自研 GPU 产品成本 |
 
+### 13.1 现有正式预算可追溯的组件归属
+
+为避免只给“整条路线”的总数而无法判断 Compiler 与 UMD 改动，把 v1.8 **已有的**公共 P 加路线增量拆到实际交付子项。表中格式为 **核心 / 手写测试**，单位 kLOC；这里是旧数字的责任重分类，**不是对 B1、B2、D1 的新估算**：
+
+| 责任组件 | NV-R（P+C） | B1 或 B2（P+B，同一包） | NV-C 的参考 D 总包（P+D，仍含 D2） |
+|---|---:|---:|---:|
+| 生产 Compiler Pass/Backend | 0 / 0 | 8–15 / 7–13 | 19–36 / 16–31 |
+| GPU Device Checker / Patch | 8–17 / 7–15（归 UMD） | 6–11 / 5–9（归 Compiler） | 11–22 / 9–18（归 Compiler） |
+| UMD/SDK/Host Runtime/Loader | 18–33 / 15–28 | 8–15 / 6–11 | 11–21 / 9–17 |
+| CLI / Host Reporter / Symbolizer | 5–10 / 5–8 | 3–7 / 3–6 | 5–10 / 5–8 |
+| KMD（已有契约满足） | 0 / 0 | 0 / 0 | 0 / 0 |
+| **核心代码总计** | **31–60** | **25–48** | **46–89** |
+| **测试代码总计** | **27–51** | **21–39** | **39–74** |
+
+上述“GPU Device Checker/Patch”是**实际 GPU 设备端运行代码**，只是交付预算归属不同：纯 NV-R 属 Runtime/UMD，B1/B2/D 属 Compiler 工具链。CLI 与 Host Reporter 均属 UMD；Device Error Writer 已包括在设备库，不再次计费。**NV-C/D1 没有独立数字、B1/B2 没有拆分数字，cuCatch/CuSafe 没有正式组件报价**，不能把这个表拆成未经审计的六份精确预算。
+
 上表不含既有系统中确实缺失的 KMD/固件契约；对应项目的条件包详见[主研究 §16.8](llvm-gpu-sanitizer-research.md#168-kmd-条件增强与其他前提缺口)。也不含新建完整 GPU ISA/Compiler/KMD、芯片 RTL/DV 或硬件制造。
 
 **若要真正比较六种的研发成本，仍须代码审计后单独拆出**：B1 索引 Backend、B2 Shadow Backend、NV-C/D1 不含 D2 的独立增量、cuCatch 的 BST/Tag、CuSafe 的 VA/In-band；再加上各自的 Compiler Pass、Device Runtime、UMD 和测试成本。不可未经拆分把 P+D 整包替换为 NV-C，或者将 P+B 的数值重复计算两次。行数只是规划辅助指标，实际复杂度还受目标 ISA、设备内存模型、Pointer ABI、同步和工具链成熟程度影响。
