@@ -24,6 +24,7 @@
 
 - [Intel oneAPI 设备端 ASan/MSan/TSan 专题](docs/intel-oneapi-device-sanitizers.md)：官方 C/C++ 2026.0 设备能力、SYCL/OpenMP 编译运行示例、Unified Runtime 协作及限制，定位为成熟辅助参考。
 - **[核心方案与能力比较](docs/core-design-comparison.md)**：现行计数、来源、是否完全一致、三种参考配置能力表、D2/E/F与Intel/MUSA定位。
+- **[六种软件 Memcheck 路线详细对照](docs/software-memcheck-alternatives.md)**：NV-R、B1、B2、NV-C/D1、cuCatch、CuSafe 的原理、效果/盲区、前提、性能数据口径、组件修改和工作量；Intel oneAPI ASan 作为 B2 产品对照，**不变更现行三种基础参考分类与 v1.8 预算**。
 - [S01厂商实施指南](docs/S01-vendor-implementation-guide.md)：NVIDIA运行时与编译期、AMD Shadow、B1/E及无XNACK支持边界，**只保留厂商机制与选型**。
 - [完整技术研究（23章、28场景）](docs/llvm-gpu-sanitizer-research.md)：目标 ISA /内存语义、元数据、实现与性能；§4 保留厂商机制对比，版本清单和运行命令由证据登记及专题维护。
 - [各组件唯一实现 ABI 与关键伪代码](docs/real-gpu-components-implementation.md)：Compiler、Device Runtime（含 safe Shadow Lookup、对象/Pointer 元数据及 Atomic 发布）、UMD、KMD、Firmware/RTL及CLI。
