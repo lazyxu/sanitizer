@@ -1,23 +1,23 @@
 # AMD GPU AddressSanitizer：XNACK/HMM 硬件依赖、Shadow 映射取舍与软件替代
 
-**版本：v2.5 · 2026-10-23 · 目标：在自研实体GPU上实现真实可执行的Address Sanitizer；不是移植仅限于某一厂商的GPU配置，也不是已有产线实现。**
+**版本：v2.6 · 2026-11-02 · 目标：明确AMD官方部署条件，以及自研实体GPU在缺少XNACK/HMM时实现B2软件检查所需的条件。**
 
-本指南区分两件事：(1) AMD ROCm 7.2.4 当前官方 GPU ASan 的已支持环境；(2) 自研LLVM GPU后端可以采取的等效软件检查架构。两者不能互相推导硬件支持。产品检查的执行点始终是真实GPU上的load/store/atomic之前的设备指令或真实MMU硬件，绝非仅有Host API拦截。
+本指南分别使用**ROCm 7.2.4机制文档**与**10.1.0发行/安装文档**，不把不同版本拼成一个支持矩阵。自研LLVM后端借鉴B2时，检查由真实GPU指令读取Shadow并判断；Host分配拦截、GPU页表已映射都不能单独证明字节级访存合法。**无XNACK可设计独立B2实现，但不能据此声称AMD官方GPU ASan支持该环境。**
 
 **定位**：这是三种基础空间参考配置中的**② AMD-B2**硬件部署与软件后备专题；其余配置及能力比较在[核心统一分类](core-design-comparison.md)。本指南的 B1 是当前 Live 区间的实现变体，不等于 NV-C/D1 原对象 Bounds；D2 是时间身份增强，E 是集成策略。官方 ROCm `xnack+` 支持范围与自研 Shadow 的无 XNACK 方案必须分开。**版本化证据仅在** [`amd-rocm-gpu-asan` Profile](research-notes/vendors_sources.json) 及其 AMD/LLNL/预览来源中维护。
 
 ## 1. AMD当前实现的可核实事实
 
-以 https://rocm.docs.amd.com/projects/llvm-project/en/docs-7.2.4/conceptual/using-gpu-sanitizer.html 为版本固定依据（不同版本不能合并声称同一支持矩阵）：
+**2026-11-02版本复核：** [官方发布历史](https://rocm.docs.amd.com/en/docs-10.1.0/release/versions.html)列出ROCm **10.1.0于2026-10-05发布**；其[ASAN安装说明](https://rocm.docs.amd.com/en/docs-10.1.0/install/asan.html)限定预构建包为`gfx942`、`gfx950`及包含二者的`all`版本，独立安装于`/opt/rocm/core-asan-10.1`。这是一项**发行包约束**，不能用7.2.4中的`gfx90a:xnack+`示例推导10.1也提供对应包。10.1仍要求HMM、`HSA_XNACK=1`、编译插桩和插桩Runtime。
 
-- AMD通过LLVM ASan插桩和compiler-rt Host/设备报告、带Redzone的allocator及GPU可读Shadow配合完成访存检查。GPU Load/Store/Atomic之前查询Shadow；经典1:8编码有尾部前缀表达边界，约12.5% Shadow字节额外空间；Redzone、设备库、映射和错误日志还增加额外开销。
-- 官方GPU ASan要求适配的xnack+设备目标；带xnack-的示例会警告GPU端插桩被忽略，应用可以继续运行但没有设备检查能力。HSA_XNACK=1只是启用真正具备该能力的设备配置，不会给不支持的GPU制造XNACK。Linux HMM、受支持GPU和ASan版HIP/HSA运行库也是该官方运行路径条件。
-- 使用带插桩的HIP/HSA组件，核验运行期依赖例如libclang_rt.asan-x86_64.so以及/asan/libamdhip64.so，不能只看编译成功。官方GPU错误报告带 on amdgpu device、GPU PC、workgroup/lane和访问大小；普通CPU ASan或GPU API错误不属于设备访存检出。
-- 目前文档列出private/stack访问未插桩的缺口；HIP Shared/LDS可以建模到Global内存中、并可能以Global类报告，因此不是完整精度的原生LDS对象诊断。宽访问、子对象、来源边界、redzone以外的跳越仍要按实际检查算法判断。
-- 上游LLVM AddressSanitizer.cpp对AMDGPU有地址空间及generic指针动态分类路径；不能把通用CPU Pass启用视为自研Target所有global/LDS/private/texture/async opcode都已覆盖。
-- AMD的性能、报告和兼容性结论仅代表官方已测试目标及版本；自研GPU不沿用这些数值作为实测结果。
+机制与具体缺口仍以[固定的7.2.4 GPU ASan文档](https://rocm.docs.amd.com/projects/llvm-project/en/docs-7.2.4/conceptual/using-gpu-sanitizer.html)为依据：
 
-参考：ROCm GPU ASan 7.2.4（上方URL）；https://llvm.org/doxygen/AddressSanitizer_8cpp_source.html ；https://rocm.docs.amd.com/projects/HIP/en/latest/how-to/hip_runtime_api/memory_management/virtual_memory.html 。
+- **执行机制：** 编译器在Load/Store/Atomic前插入Shadow读取和Poison判断，Runtime维护Redzone/Shadow并报告错误。经典1:8编码的裸Shadow比例为12.5%；页粒度、Redzone和其他元数据使总开销更高，不能用12.5%充当整套工具显存预算。[Runtime overhead](https://rocm.docs.amd.com/projects/llvm-project/en/docs-7.2.4/conceptual/using-gpu-sanitizer.html#runtime-overhead)
+- **启用条件：** 该文档要求显式受支持的`xnack+`目标；其他目标会警告且不插桩设备代码。运行时还需HMM及匹配的ASan库，尤其是插桩HIP/HSA组件；编译成功不代表设备检查生效。[编译和运行要求](https://rocm.docs.amd.com/projects/llvm-project/en/docs-7.2.4/conceptual/using-gpu-sanitizer.html#compiling-for-asan)
+- **报告识别：** GPU报告含`on amdgpu device`、PC、访问宽度、Workgroup及Lane地址，文档中的设备调用栈仅有一层。CPU ASan堆栈或API返回错误应另行分类。[Runtime reporting](https://rocm.docs.amd.com/projects/llvm-project/en/docs-7.2.4/conceptual/using-gpu-sanitizer.html#runtime-reporting)
+- **已知缺口：** 有限Redzone可能被跳过；Private/Stack访问未插桩；HIP Shared/LDS通过Global建模并按Global报告；极野地址可能先在Shadow Load上Fault，NULL的Shadow也未被Poison。[Known issues](https://rocm.docs.amd.com/projects/llvm-project/en/docs-7.2.4/conceptual/using-gpu-sanitizer.html#known-issues-with-using-gpu-sanitizer)
+
+[LLVM AddressSanitizer.cpp](https://llvm.org/doxygen/AddressSanitizer_8cpp_source.html)提供AMDGPU目标与地址空间处理入口，但其上游当前源码不等同于某个ROCm发行版的完整实现，更不能证明自研Target已覆盖所有访存。LLNL 7.0.0现场指南及7.13.0预览材料保留为[历史证据](research-notes/vendors_sources.json)，其问题不能自动归入10.1的已知缺陷。
 
 ## 2. 硬件依赖总表：缺失后的真实GPU替代方案
 
@@ -28,21 +28,16 @@
 | GPU能Load有效元数据 | GPU Device Runtime必需的基本能力 | **是** | 用global/constant/设备本地内存中映射的表查询，或可信硬件metadata通路 | 若GPU完全不能从合法设备内存读到元数据，软件Shadow无法部署；UNSUPPORTED |
 | 专用 Shadow 检查硬件指令 | AMD GPU ASan 的基础 Shadow 检查由编译器插桩生成普通设备读取与判断，不要求专门指令 | **不是必需** | 使用现有 GPU Global Load、整数运算、比较和控制流 | 额外指令、寄存器与缓存开销，AMD 软件路径也有；不能把缺少专用指令视为相对 AMD 的独有缺陷 |
 | 完整GPUVA预留 / Sparse VMM | 有助于大地址空间的 Shadow 布局 | 不是必需 | 根据已登记区域建立映射；可用软件 Radix/两级索引或硬件稀疏 GPUVA 映射 | 软件额外索引通常增加查询工作，Cache/TLB 和整体性能必须实测；未登记的合法来源应标 PARTIAL，不得误判为应用越界 |
-| GPU硬件Tag比较指令 | 普通AMD Shadow方案不以专用Tag为前提 | 不是B/D必需 | D1传原对象base/limit；D2显式(pointer identity,epoch)及元数据查询 | RAW指针未知来源只能降级；不能宣称有硬件Tag隔离 |
-| GPU硬件Bounds单元 | 普通AMD Shadow不要求 | 不是B/D必需 | 每条实际访存前插入设备Bounds/Shadow helper | 额外指令/寄存器/带宽，不能保证未插桩代码安全 |
-| Device atomics和内存发布语义 | report ring/并发Shadow元数据需要同步原语 | 至少需要**一种可证明的并发协议** | 每lane或每block的独立固定报告槽、Host在完成后合并；shadow写更新使用有序命令 | 少量报告/高内存开销；缺少可证明发布语义时无法可靠报告 |
-| SIMT级可靠trap/dispatch abort | 影响错误后停止 | 若模式要求阻止非法访问，则必须有可靠策略 | 条件谓词屏蔽无效访存+sticky fatal标记+统一dispatch完成策略，或受支持的硬件trap/context abort | 一lane提前return可能使barrier死锁；不能证明安全时拒绝该运行模式 |
-| Private/Stack/LDS对象大小和生命周期 | 当前AMD覆盖不足或归类粗糙 | 要实现各空间对象级检测则必需 | Compiler记录frame/LDS布局；设备端使用(block,thread,frame,object)局部Bounds；可使用Global metadata backing | 未获得真实布局就只能声明未覆盖，不能把完整backing视为所有子对象有效 |
-| 精确硬件fault PC | 用于硬件fault归因 | B软件报告不要求硬件精确PC | 插桩时放site_id、module hash、设备报告里写site和lane | 可定位受插桩访问，无法归因未插桩硬件Fault到每个lane |
-| 足够设备显存 | Shadow、Redzone和报表都要资源 | 必须有可满足最小方案的存储 | 对象区间检查、紧凑descriptor、分配级Shadow、限量报告；限制支持集合 | 若资源不足则TOOL_FAILURE，不得静默回退成CLEAN |
+| 同步、报告与可靠终止 | Runtime、设备代码和驱动共同提供 | **必须满足选定模式的契约** | 使用目标已有发布/完成Fence、报告协议和Abort或安全抑制机制 | Metadata未就绪、报告丢失和Barrier死锁不能记作成功；通用设计见[组件指南](real-gpu-components-implementation.md) |
+| 硬件Tag / Bounds | 普通AMD Shadow不以此为前提 | 不是B2必需 | 软件原对象Bounds属于D1，时间身份属于D2；F1/F2另需真实硬件 | 不改变Shadow的当前地址语义，不自动覆盖未知来源或未插桩代码 |
 
-**需要强调：**“没有XNACK”与“GPU没有访存能力”不是一回事。对自研目标，正常GPU global load能读取预映射设备Shadow就可以实现B软件检测；若既无法建立合法设备地址映射，也无设备load或可调用helper，则无法靠Host模拟替代实体GPU检查。
+表中自研列为**工程设计选择**。GPU能读取预映射Shadow是部署软件B2的基本条件；还必须满足访存覆盖、元数据生命周期和可靠报告契约。没有这些条件时只能声明`UNSUPPORTED`，不能把Host侧结果记为实体GPU检测。
 
 ### 2.1 XNACK 的具体功能及其与 HMM 的区别
 
-**XNACK 是 AMD GPU 的可恢复缺页重试能力（retryable page fault）**：当 GPU 执行一条访存指令，遇到**可由驱动/系统恢复**的缺页（例如有效页面暂时不驻留、需要建立映射或迁移）时，相关系统组件处理故障，然后 GPU 可以重试原来的访存。**Page Fault 不代表每次都新分配物理内存**；处理动作也可能是映射已有物理页或将已有页面从 CPU 内存迁移至设备。参考 [AMD HIP 统一内存/XNACK说明](https://rocm.docs.amd.com/projects/HIP/en/docs-6.3.3/how-to/hip_runtime_api/memory_management/unified_memory.html) 和 [ROCm GPU Memory](https://rocm.docs.amd.com/en/docs-6.1.5/conceptual/gpu-memory.html)。
+**XNACK提供GPU访存重放，可用于可恢复缺页后的重试、按需分页和页面迁移。** 当缺页可由驱动/系统处理时，建立或恢复所需映射后重试访存；**Page Fault 不代表每次都新分配物理内存**，也可能只是映射已有页或迁移页面。[AMDGPU XNACK代码对象约定](https://rocm.docs.amd.com/projects/llvm-project/en/latest/LLVM/llvm/html/AMDGPUUsage.html#target-features)、[HIP统一内存说明](https://rocm.docs.amd.com/projects/HIP/en/docs-10.0.0/how-to/hip_runtime_api/memory_management/unified_memory.html)。
 
-**HMM（Linux Heterogeneous Memory Management）不是 XNACK 硬件，也不是 Shadow 分配器**。HMM 为设备镜像 CPU 进程地址空间、追踪 CPU 页表变化及内存迁移提供内核机制；它与支持可恢复缺页的 GPU 硬件和具体设备驱动协同使用。详见 [Linux 内核 HMM 文档](https://kernel.org/doc/html/latest/mm/hmm.html)。`HSA_XNACK=1` 只能在硬件和运行配置本来支持的前提下启用对应能力，不能为没有 XNACK 的芯片创造重试功能。
+**HMM（Linux Heterogeneous Memory Management）不是 XNACK 硬件，也不是 Shadow 分配器**。它提供设备内存管理、CPU页表镜像与迁移辅助机制，与实际驱动/设备能力协作。[Linux内核HMM文档](https://docs.kernel.org/mm/hmm.html)。`HSA_XNACK=1`还受运行环境限制；例如[HIP文档](https://rocm.docs.amd.com/projects/HIP/en/docs-10.0.0/how-to/hip_runtime_api/memory_management/unified_memory.html)明确CDNA2的SR-IOV配置不支持XNACK，不能只看芯片系列就判定环境可用。
 
 **XNACK 也不能自动判断 Shadow 的合法性。** 如果非法指针映射到一个没有受管理的 Shadow 地址，GPU 即使具有重试能力，也不一定存在可恢复的页面；驱动更不会自动知道应当写入 `0x00`、`0x05` 还是 Poison。ROCm 官方 GPU ASan 依赖支持的 `xnack+`/HMM 环境，是**官方实现的部署要求**，不能推出每个 Shadow 物理页都必然通过第一次 GPU Page Fault 才分配。没有 XNACK 的自研 GPU 可以在访问前显式准备 Shadow，但不能依赖执行中的故障补页、透明换入或自动重试。
 
@@ -66,7 +61,7 @@
 
 关键顺序是 **先证明 Shadow 页可读，再执行 Shadow Load**：软件两级 Directory 或始终有效的 Present 元数据区可预先判定是否映射；GPU MMU 稀疏映射本身不能自动处理未映射的任意野指针。示意 `safeShadowLookupNoFault` 与结果区分只在[通用组件指南 §3](real-gpu-components-implementation.md)维护；这里规定硬件前提与错误归属。
 
-**显式映射的发布顺序：** `alloc backing → 建立 PTE/访问权限 → 初始化 Shadow/Poison → GPU fence 可见 → publish Ready/Present → launch`；Unmap/复用必须先结束可能读取旧映射的 GPU 操作，再撤销 Present 与物理页。若页大小大于逻辑 Shadow 字节，多个细小 Allocation 应尽量共用 Shadow 页，不能把每次 64B `gpuMalloc` 直接等同于 64KiB Shadow 物理分配。按页共享和 TLB 的真实性能必须实测。
+**自研映射契约：** Backing/PTE和权限就绪后初始化Poison，以设备可见的Fence发布Ready，最后才允许读取；撤销映射/复用须先阻止新的使用，并等待所有旧读者完成。页大小大于逻辑Shadow字节时，可合并小对象的Shadow物理页，但须维护页内Poison及引用生命周期；一次64B分配不等于必须增加一个64KiB物理页。按页共享和TLB开销须实测。
 
 ## 3. Clang/Driver与构建系统
 
@@ -120,7 +115,7 @@ Firmware/KMD 和设备 Checker 的通用错误执行代码、Report 可见性和
 
 ## 11. Reporter、CLI与失败分类
 
-**判定优先级必须清楚：** 没有真实目标 GPU 执行证据时为 `GPU_NOT_RUN`；Metadata/Report OOM 或日志丢失时为 `TOOL_FAILURE`；所需指令或模块未插桩则为 `PARTIAL_COVERAGE/UNSUPPORTED`；仅在确有对应设备报告时才可归类 `GPU_DETECTED`，完成执行但未发现错误不代表超出声明范围的 `CLEAN`。
+**判定优先级必须清楚：** 没有真实目标 GPU 执行证据时为 `GPU_NOT_RUN`；Metadata/Report OOM 等资源失败记为 `TOOL_FAILURE`；日志丢失时保留已有命中证据，并将不完整结果标为 `PARTIAL_COVERAGE`；所需指令或模块未插桩则为 `PARTIAL_COVERAGE/UNSUPPORTED`。仅在确有对应设备报告时才可归类 `GPU_DETECTED`，日志丢失或覆盖不完整不能记为 `CLEAN`；完成执行但未发现错误也不证明声明范围之外的能力。
 
 报告中的设备型号、PC/Module Build ID、访问宽度、Lane、对象/Generation、Meta Ready 状态和 Context/Queue 应由统一 `SanReport` ABI 承载；Host API、CPU ASan、GPU Fault、GPU AddressSanitizer 的设备报告须分别归类。通用 Reporter/CLI 的唯一代码在 [组件指南 §1.1、§10](real-gpu-components-implementation.md)。
 
@@ -128,18 +123,23 @@ Firmware/KMD 和设备 Checker 的通用错误执行代码、Report 可见性和
 
 ### AMD官方环境对照（只适用于实际受支持的AMD设备）
 
+以下保留**7.2.4机制文档对应的构建范式**，假设已选中匹配版本的Compiler和ASan运行库。`gfx90a`只是该版示例；10.1用户须先按[10.1 ASAN安装说明](https://rocm.docs.amd.com/en/docs-10.1.0/install/asan.html)选择`gfx942/gfx950`发行包并完成其环境设置，不可直接复用旧版路径/设备列表。这里的命令是待执行操作，尚无本仓库实卡结果。
+
 ~~~bash
 # GPU真实支持xnack+、内核HMM以及对应/asan运行库时，才使用这一路径
 export HSA_XNACK=1
 export ROCM_ARCH=gfx90a:xnack+ # 示例，必须替换成真实目标架构
+hipcc --version
+rocminfo
 hipcc -x hip -O1 -g -fsanitize=address -shared-libsan \
   --offload-arch="$ROCM_ARCH" samples/S01/amd.hip.cpp -o /tmp/s01_gpu_asan
 ldd /tmp/s01_gpu_asan   # 检查ASan Host runtime和/asan/下的HIP库
+readelf -d /tmp/s01_gpu_asan | rg NEEDED
 /tmp/s01_gpu_asan --good
 /tmp/s01_gpu_asan --bad
 ~~~
 
-如果设备不能提供该官方配置，记录UNSUPPORTED_OFFICIAL_ROCM_DEVICE_ASAN，不要简单设置环境变量绕过工具预检，也不能将CPU ASan作为设备检出。
+必须核对`libclang_rt.asan-x86_64.so`和插桩HIP/HSA库的实际加载位置；缺失时先修正环境再运行，不能把缺少设备报告解释成无错。`ASAN_OPTIONS`不代表设备端支持全部Host选项。[7.2.4运行要求](https://rocm.docs.amd.com/projects/llvm-project/en/docs-7.2.4/conceptual/using-gpu-sanitizer.html#preparing-to-run-an-instrumented-application)。设备不能满足该配置时记录`UNSUPPORTED_OFFICIAL_ROCM_DEVICE_ASAN`。
 
 ### 自研GPU（无需XNACK的真正实现路径）
 
@@ -167,4 +167,4 @@ ldd /tmp/s01_gpu_asan   # 检查ASan Host runtime和/asan/下的HIP库
 
 推荐先做B的Global Load/Store和实际GPU报告，再扩展masked/vector/atomic/async、LDS/private的受控软件Bounds；D1解决原对象跨活对象问题，D2解决同VA复用后旧指针，C/E处理无法重新编译的模块。软件B/D在真实GPU可靠运行前，不优先立项F1/F2硬件扩展。
 
-**实现状态：本文全部为自研GPU实施设计/伪代码。此仓库尚无目标自研GPU生产Compiler/UMD/KMD源码与真实设备检测报告；静态CI成功不能代替GPU执行。**
+**实现状态：厂商部分是文档证据，自研部分是实施设计。此仓库尚无目标自研GPU生产Compiler/UMD/KMD实现和真实设备检测报告，状态仍为`GPU_NOT_RUN`；静态CI成功不能代替GPU执行。**

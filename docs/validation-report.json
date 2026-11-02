@@ -1,14 +1,14 @@
 {
-  "version": "2.8",
-  "as_of": "2026-10-23",
+  "version": "2.9",
+  "as_of": "2026-11-02",
   "scope": "repository document and structural evidence only",
   "status": "DOCUMENT_REVIEW; PHYSICAL_GPU_NOT_RUN",
   "target_project_gpu_implementation": "NOT_IMPLEMENTED_OR_INSPECTED",
   "physical_gpu_checker_result": "GPU_NOT_RUN",
   "real_gpu_performance": "NOT_MEASURED",
   "document": "docs/llvm-gpu-sanitizer-research.md",
-  "main_document_blob_sha": "9fb7933097f238164c954945a24e4d29c43c00cd",
-  "main_line_count": 2234,
+  "main_document_blob_sha": "f234b52d6ddf2653e3015cf6cdb26df5f475a132",
+  "main_line_count": 1832,
   "chapter_count": 23,
   "scenarios_count": 28,
   "reference_entries": 39,
@@ -22,11 +22,15 @@
     "N07",
     "N08",
     "N09",
+    "N10",
     "A01",
     "A02",
+    "A03",
+    "A04",
+    "A05",
     "I01",
-    "I03",
     "I02",
+    "I03",
     "M01",
     "M02",
     "L01",
@@ -39,19 +43,15 @@
     "K02",
     "K03",
     "K04",
-    "N10",
-    "A03",
     "C01",
-    "A04",
     "P01",
     "P02",
     "P03",
-    "P04",
-    "P05",
     "P06",
     "P07",
     "P08",
-    "P09"
+    "P09",
+    "P10"
   ],
   "product_routes": [
     "B",
@@ -214,10 +214,11 @@
   "ancillary_route_catalog_removed": true,
   "hardware_guard_experiment_source_removed": true,
   "intel_evidence_review": {
-    "vendor_product": "Intel oneAPI DPC++/C++ 2026.0",
+    "vendor_product": "Intel oneAPI DPC++/C++ 2026.2",
     "official_documents": [
-      "INTEL-DEVICE",
-      "INTEL-LIMITS",
+      "INTEL-DEVICE-2026-2",
+      "INTEL-LIMITS-2026-2",
+      "INTEL-RELEASE-2026",
       "INTEL-UR"
     ],
     "status": "DOCUMENT_VERIFIED_NOT_GPU_EXECUTED",
@@ -236,20 +237,20 @@
     "research_chapter": "docs/llvm-gpu-sanitizer-research.md#detection-scenarios",
     "research_case_headings": 28,
     "stable_case_anchors": 28,
-    "chapter_18_characters": 13907,
+    "chapter_18_characters": 13182,
     "grouped_component_responsibilities": 7,
     "chapter_scope": "summary / links / grouped responsibilities / runner entry, without copied case bodies",
     "validation_script": "scripts/validate_docs.py",
     "hardware_execution": "GPU_NOT_RUN"
   },
   "s01_guide_dedup": {
-    "version": "v2.5",
+    "version": "v2.9",
     "vendor_mechanisms_source": "docs/S01-vendor-implementation-guide.md",
     "implementation_source": "docs/real-gpu-components-implementation.md",
     "case_source": "samples/S01/README.md",
     "vendor_expected_outcomes_source": "samples/manifest.json",
-    "vendor_guide_characters": 16818,
-    "component_guide_characters": 17383,
+    "vendor_guide_characters": 16847,
+    "component_guide_characters": 21591,
     "preserved_modes": [
       "NV-R",
       "AMD-B2",
@@ -258,7 +259,7 @@
       "E",
       "F"
     ],
-    "semantic_claim": "Document-only role consolidation; no algorithm, GPU ISA, C/HIP sample or hardware acceptance changed",
+    "semantic_claim": "Documentation contracts corrected for masks, guards, metadata publication, provenance, lifetime and terminal results; no target implementation or GPU execution claimed",
     "target_gpu_status": "GPU_NOT_RUN"
   },
   "hardware_guide_dedup": {
@@ -282,10 +283,10 @@
     "change_scope": "Documentation, source-of-truth pointers, and CPU static checks only"
   },
   "vendor_evidence_normalization": {
-    "version": "v2.6",
+    "version": "v2.9",
     "source": "docs/research-notes/vendors_sources.json",
     "schema_version": 2,
-    "source_records": 16,
+    "source_records": 24,
     "profiles": 4,
     "profile_ids": [
       "nvidia-compute-sanitizer",
@@ -315,11 +316,11 @@
     "target_gpu_status": "GPU_NOT_RUN"
   },
   "architecture_note_canonicalization": {
-    "version": "v2.7",
+    "version": "v2.9",
     "archive": "docs/research-notes/architecture.md",
     "archive_sections": 12,
     "original_archive_chars": 18999,
-    "canonical_archive_chars": 7067,
+    "canonical_archive_chars": 7102,
     "llvm_source_ids": [
       "R1",
       "R2",
@@ -340,7 +341,7 @@
     "target_gpu": "GPU_NOT_RUN"
   },
   "documentation_integrity": {
-    "version": "v2.8",
+    "version": "v2.9",
     "validator": "scripts/validate_markdown_links.py",
     "integrated_audit": "scripts/validate_docs.py",
     "regression_tests": "tests/test_markdown_links.py",
@@ -353,13 +354,16 @@
       "GitHub Unicode headings",
       "duplicate slugs",
       "explicit HTML ID anchors",
-      "reference definitions"
+      "reference definitions",
+      "defined technical evidence IDs",
+      "six software route integration",
+      "comparison data boundary consistency"
     ],
     "restored_main_fragments": [
       "component-estimates",
       "roadmap"
     ],
-    "snapshot_date": "2026-10-23",
+    "snapshot_date": "2026-11-02",
     "progress_source": "docs/research-progress.md",
     "research_document": "docs/llvm-gpu-sanitizer-research.md",
     "budget_source": "docs/estimates-v1.8.json",
@@ -368,5 +372,49 @@
     "sample_scenarios": 28,
     "target_gpu_execution": "GPU_NOT_RUN",
     "external_web_links_checked": false
+  },
+  "meeting_review": {
+    "version": "v2.9",
+    "as_of": "2026-11-02",
+    "software_routes": [
+      "NV-R",
+      "B1",
+      "B2",
+      "NV-C",
+      "cuCatch",
+      "CuSafe"
+    ],
+    "comparison_source": "docs/core-design-comparison.md",
+    "details_source": "docs/llvm-gpu-sanitizer-research.md#software-route-details",
+    "integration": "existing chapters 10-12; no standalone comparison document",
+    "dimensions": [
+      "principle",
+      "metadata lifecycle",
+      "effects and counterexamples",
+      "constraints",
+      "capability differences",
+      "performance evidence and limits",
+      "component work and budget",
+      "acceptance"
+    ],
+    "research_scope_exclusions": [
+      "Vulkan GPU-AV",
+      "GPUArmor",
+      "CHERI-SIMT"
+    ],
+    "paper_evidence": "docs/research-notes/papers.md",
+    "paper_metrics_caveats": [
+      "cuCatch timing subsets and excluded allocation management",
+      "CuSafe mixed time/throughput metrics and unspecified aggregate denominator",
+      "CuSafe 44/46 sample discrepancy",
+      "CuSafe memory summary discrepancy",
+      "paper-estimated competitor rows are not direct reruns"
+    ],
+    "preserved_numeric_budget_blob": "d46bf5da824c1cbeec3ed16a152af2285f935ba0",
+    "main_before_bytes": 196755,
+    "main_after_bytes": 156790,
+    "main_before_lines": 2234,
+    "main_after_lines": 1832,
+    "target_gpu": "GPU_NOT_RUN"
   }
 }

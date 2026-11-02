@@ -668,22 +668,22 @@ check(report.get("chapter_count") == len(chapters) and
       report.get("scenarios_count") == len(headings),
       "审计报告的章节或场景数量已过期")
 
-# v2.8: historical project progress, evidence classifications and frozen numeric budget.
+# v2.9: integrated route review, current progress and frozen numeric budget.
 progress = read("docs/research-progress.md")
 integrity = report.get("documentation_integrity", {})
-check("2026-10-23" in progress and "文档 v2.8" in progress
+check("2026-11-02" in progress and "文档v2.9" in progress
       and "v2.2" in progress and "v2.7" in progress
       and "GPU_NOT_RUN" in progress,
-      "研究进度必须正确区分v2.8文档整理与尚未实现的真实GPU Checker")
-check("v2.8" in root_readme and "scripts/validate_markdown_links.py" in root_readme
+      "研究进度必须正确区分v2.9文档整理与尚未实现的真实GPU Checker")
+check("v2.9" in root_readme and "scripts/validate_markdown_links.py" in root_readme
       and "8 个自有" in root_readme,
-      "根目录入口应反映8个支持-v的脚本与v2.8文档状态")
-check(report.get("version") == "2.8"
-      and integrity.get("version") == "v2.8"
+      "根目录入口应反映8个支持-v的脚本与v2.9文档状态")
+check(report.get("version") == "2.9"
+      and integrity.get("version") == "v2.9"
       and integrity.get("target_gpu_execution") == "GPU_NOT_RUN"
       and integrity.get("validator") == "scripts/validate_markdown_links.py"
       and integrity.get("budget_numeric_revision") == "1.8 (unchanged)",
-      "审计快照版本、文件锚点校验及预算口径应与v2.8一致")
+      "审计快照版本、文件锚点校验及预算口径应与v2.9一致")
 check(budget.get("version") == "1.8"
       and "estimates-v1.8.json" in progress
       and "估算" in progress,
@@ -696,6 +696,30 @@ check(all(x in docs_index for x in (
     "validate_markdown_links.py", "research-progress.md",
     "estimates-v1.8.json",
 )), "统一导航必须可到达链接校验、进度和预算原始来源")
+
+# Technical evidence labels must resolve after reference consolidation.
+evidence_ids = re.findall(r"^\[([A-Z]\d{2})\]:", main, re.M)
+used_evidence_ids = set(re.findall(r"\[([A-Z]\d{2})\](?!\()", main))
+check(len(evidence_ids) == len(set(evidence_ids))
+      and used_evidence_ids <= set(evidence_ids),
+      "技术证据编号有重复定义或缺少可点击来源")
+check(report.get("reference_ids") == evidence_ids
+      and report.get("reference_entries") == len(evidence_ids),
+      "审计快照的参考来源清单已过期")
+review = report.get("meeting_review", {})
+check(review.get("software_routes") ==
+      ["NV-R", "B1", "B2", "NV-C", "cuCatch", "CuSafe"]
+      and review.get("target_gpu") == "GPU_NOT_RUN",
+      "会议评审范围与未运行目标状态必须完整")
+check(not (ROOT / "docs" / "software-memcheck-alternatives.md").exists(),
+      "本轮要求在原章节整合，不应重新增加独立比较专题")
+# Bind the unchanged numeric-budget promise to the established source blob.
+budget_bytes = (ROOT / "docs/estimates-v1.8.json").read_bytes()
+budget_blob = hashlib.sha1(
+    f"blob {len(budget_bytes)}\0".encode("ascii") + budget_bytes).hexdigest()
+check(budget_blob == "d46bf5da824c1cbeec3ed16a152af2285f935ba0"
+      and review.get("preserved_numeric_budget_blob") == budget_blob,
+      "v2.9文档重构必须保留已批准的v1.8预算原文")
 
 # 所有Markdown相对路径和GitHub式章节fragment必须能导航。
 # 既检查指向其他文件的 #slug，也检查同文件内的 #case-sxx 等旧锚点。

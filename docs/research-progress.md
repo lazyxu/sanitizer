@@ -1,41 +1,41 @@
-# GPU Sanitizer 研究与实施进度（2026-10-23 · 文档 v2.8）
+# GPU Sanitizer研究与实施进度（2026-11-02 · 文档v2.9）
 
-> **状态边界：** 仓库已有研究、厂商一手证据、CUDA/HIP 对照样例与 CPU 静态 CI，但**自研目标 GPU 的 Checker、设备 Runtime 与相应 Compiler/UMD/KMD 产品实现尚未交付**。不能由文档、厂商工具或静态测试推断自研目标已检出错误。真实生产硬件验收按用户决定跳过（未验收），状态保留 `GPU_NOT_RUN`。
+**文档与产品分开记录。** 本轮完成原有文档的会议评审修订；自研LLVM/Device/UMD/KMD Checker未实现、未进行目标硬件验收，GPU_NOT_RUN。仓库样例与厂商论文不能替代产品证据。
 
-## 当前方案分类
+## 当前比较范围
 
-现行唯一依据是 [三种空间检查参考配置](core-design-comparison.md)：**NV-R**（NVIDIA 运行期 Binary 插桩、当前地址有效性）、**AMD-B2**（LLVM GPU Shadow/Poison）、**NV-C**（编译期 Original-Object Bounds，来源可证明时）。其中 NV-R 与 AMD-B2 主要提供当前地址有效性；NV-C 增强原对象保证。B/C/D/E/F 是工程责任包，B1、D2、E 和 F1/F2 不构成第四种已证明的独立基础空间算法。
+[唯一核心分类](core-design-comparison.md)：NV-R、AMD-B2、NV-C三种成熟参考配置，两层基础空间语义。本轮按同一维度详细比较NV-R、B1、B2、NV-C、cuCatch、CuSafe，Intel ASan仅作B2产品对照。D2是时间身份扩展，E是集成，F只保留条件性接口/预算边界。
 
-## 文档整理进度
+## v2.9文档进度
 
-| 文档阶段 | 已完成的工作 | 权威入口 |
-|---|---|---|
-| v2.2 · Intel 与导航 | Intel 2026.0 ASan/MSan/TSan 专题和统一阅读入口 | [Intel 专题](intel-oneapi-device-sanitizers.md)、[导航](README.md) |
-| v2.3 · 28 个案例 | 主稿 §18 仅保留摘要及双向链接，详细规范归 Sxx README | [样例索引](../samples/README.md)、[主研究](llvm-gpu-sanitizer-research.md) |
-| v2.4 · S01 厂商指南 | 厂商机制和通用组件代码分别单源维护 | [S01 指南](S01-vendor-implementation-guide.md)、[组件指南](real-gpu-components-implementation.md) |
-| v2.5 · AMD/XNACK | 官方硬件条件与三种 Shadow 映射取舍归 AMD 专题；Safe Lookup 归设备组件 | [AMD 适配](amd-gpu-asan-hardware-fallback.md) |
-| v2.6 · 厂商证据 | 统一版本、硬件、检测范围、限制和来源 ID；主稿移除重复命令 | [结构化证据](research-notes/vendors_sources.json) |
-| v2.7 · 架构与预算 | 主稿保留架构决策，组件代码/ABI 单源；历史 R1～R9 与 kLOC 表分离 | [组件指南](real-gpu-components-implementation.md)、[预算](estimates-v1.8.json) |
-| v2.8 · 链接与状态 | 恢复第 16、20 章稳定锚点，加入全部 Markdown 本地路径与章节片段校验，更新本进度 | [链接检查器](../scripts/validate_markdown_links.py)、[审计快照](validation-report.json) |
+| 项目 | 当前内容与入口 |
+|---|---|
+| 原文比较补齐 | 主报告既有§10～12写入机制、元数据、效果/反例、约束、性能来源、任务与验收；不另建对比专题 |
+| 结构与去重 | 分组目录；重复预算/验收/命令收敛；历史检索过程删除，来源可点击追溯 |
+| 研究证据 | cuCatch原始索引/Tag路径与CuSafe原型/有限身份；数据分母、计时排除及原文分歧 |
+| 厂商条件 | NVIDIA2026.3/NVCC13.4；AMD7.2.4机制与10.1发行条件分列；Intel推进2026.2 |
+| 组件正确性 | Guard原操作、Unknown分级、活动元素、队列生效Free、可信Sidecar、请求停止与终态、旧身份拒绝 |
+| 会议输出 | §16可执行工作包、§19退出证据、§22平台待决项/责任 |
 
-## 自研目标 GPU 的实际开发状态
+历史v2.2（Intel/导航）、v2.7（架构单源）以及2026-10-23文档v2.8（链接审计）的过程已由[修订记录](revision-history.md)维护，不在本页重复整张历史表。
 
-| 工作项 | 当前状态 | 备注 |
-|---|---|---|
-| LLVM Device Checker、B2 Shadow/Poison、报告/失败闭环 | **未实现** | 第一批产品目标：Global Load/Store 及 S01 |
-| D1 原对象来源与 D2 Allocation ID/Epoch | **未实现** | 不应由当前地址命中冒充对象/时间安全 |
-| C Runtime Binary Rewriter / E Hybrid | **未实现** | 只有无法重编译模块存在真实需求时才立项 |
-| F1/F2 Tag/Bounds 硬件 | **条件性、未验收** | 无目标 ISA/RTL 能力不得标已支持 |
-| 28 组 CUDA/HIP 对照样例 | 源文件齐全 | 用于厂商工具对照；不证明自研 Checker |
-| 厂商工具与自研 GPU 性能/检测率 | **未实测自研目标** | `GPU_NOT_RUN`；生产验收按用户决定跳过（未验收） |
-| CPU 文档与样例结构检查 | 已配置 | 真实是否通过应以对应 Commit 的 Actions 记录为准 |
+## 产品与执行状态
 
-## 工程预算与实施优先级
+| 工作 | 状态 |
+|---|---|
+| B1/B2与P的目标Compiler/设备库/UMD实现 | 未实现 |
+| D1/D2、C/E及论文机制目标移植 | 未实现，依赖各自支持边界 |
+| F1/F2实际芯片能力 | 条件性、未验收 |
+| 28组CUDA/HIP与上游NV-*样例 | 源码已提供，目标设备结果未取得 |
+| 自研检出率、性能、完整生产验收 | 未实测，GPU_NOT_RUN |
+| CPU结构/链接/预算/报告分类 | 由对应Commit的Actions和本地验证记录确认 |
 
-**数字唯一来源仍为 [v1.8 软件预算 JSON](estimates-v1.8.json)**。v2.8 是文档结构版本，**不是新的 kLOC 估算**：公共 P 只能计算一次，C 纯 Runtime 可以不修改生产 Compiler；KMD 缺口和 F1/F2 新硬件不隐含在同一默认成本里。
+## 预算与下一阶段
 
-推荐工程顺序：公共对象、Queue/Fence 与报告底座 → AMD-B2 的真实 GPU S01 Checker → NV-C/D1 原对象 Bounds → 按需 D2 时间身份 → 有明确二进制覆盖需求时的 C/E → 基于真实瓶颈评估 F。
+[estimates-v1.8.json](estimates-v1.8.json)仍是数字唯一来源，版本1.8未变，全部是估算。B1/B2没有独立报价，P+D未拆D1/D2，两篇论文移植也没有独立目标预算；CuSafe原型2,964行不能替代产品工程量。
 
-## CPU 校验与证据边界
+下一阶段按主报告§22收集实际平台事实，核准P+B2首个Global目标，随后D1/按需D2；Binary需求明确才做C/E。硬件依赖、KMD缺口与固件投入按实证另列。
 
-从仓库根目录运行 `python3 scripts/validate_docs.py`、`python3 scripts/validate_layout.py`、`python3 scripts/validate_markdown_links.py`，以及 `python3 -m unittest discover -s tests -v`。Markdown 校验检查本地文件与 GitHub 式章节锚点，**不验证外部 URL 的实时可用性**；上述检查不执行 GPU Kernel，不生成设备检测率、性能或生产验收证据。
+## 验证范围
+
+本地运行结构、Markdown路径/锚点、文档/预算审计以及Python单元测试；这些不启动GPU Kernel，不验证外部URL实时可用性，也不产生设备性能结论。详见[审计快照](validation-report.json)及[CI说明](gpu-actions-ci.md)。

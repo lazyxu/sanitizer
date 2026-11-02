@@ -1,12 +1,12 @@
 {
-  "checked_at": "2026-10-20",
-  "scope": "Primary-source vendor documentation verification",
+  "checked_at": "2026-11-02",
+  "scope": "Version-scoped primary-source vendor verification; checked_at is the latest registry update, not a claim that every historical source was rechecked",
   "sources": [
     {
       "id": "NV-MANUAL",
       "title": "Compute Sanitizer — Compute Sanitizer",
       "url": "https://docs.nvidia.com/compute-sanitizer/ComputeSanitizer/index.html",
-      "version": "Online manual, checked 2026-10-20",
+      "version": "Online manual rechecked 2026-11-02; interpreted with Compute Sanitizer 2026.3 release notes",
       "sections": [
         "Memcheck Tool",
         "Racecheck Tool",
@@ -24,14 +24,19 @@
         "base-and-bounds analysis with fallback",
         "compilation-unit hybrid instrumentation",
         "host/device metadata memory footprint and launch loss risk",
-        "stream-ordered allocation lifespan races"
+        "stream-ordered allocation lifespan races",
+        "NVCC/PTXAS-integrated instrumentation does not publish a transplantable LLVM pass or a complete private metadata ABI"
+      ],
+      "evidence_checked_at": "2026-11-02",
+      "previous_verification_dates": [
+        "2026-10-20"
       ]
     },
     {
       "id": "NV-RELEASE",
       "title": "Release Notes — Compute Sanitizer",
       "url": "https://docs.nvidia.com/compute-sanitizer/ReleaseNotes/index.html",
-      "version": "Top release heading Updates in 2026.3; checked 2026-10-20",
+      "version": "Top release heading Updates in 2026.3; page last updated 2026-09-09; rechecked 2026-11-02",
       "sections": [
         "Updates in 2026.3",
         "Updates in 2025.4",
@@ -45,14 +50,20 @@
         "JIT requires -Xptxas=-sanitize=memcheck",
         "compile-time shared accesses with clusters unsupported",
         "2025.3 removed Maxwell/Pascal/Volta support",
-        "2026.3 added Rubin and Windows-on-ARM support"
+        "2026.3 added Rubin and Windows-on-ARM support",
+        "GPU support table lists SM 7.5 and above",
+        "2026.3 adds static/dynamic shared outer-boundary detection on Hopper and newer, while same-allocation shared-variable overflows remain undetected"
+      ],
+      "evidence_checked_at": "2026-11-02",
+      "previous_verification_dates": [
+        "2026-10-20"
       ]
     },
     {
       "id": "NV-NVCC",
       "title": "NVIDIA CUDA Compiler Driver 13.4 documentation",
-      "url": "https://docs.nvidia.com/cuda/cuda-compiler-driver-nvcc/",
-      "version": "CUDA Toolkit 13.4 online documentation",
+      "url": "https://docs.nvidia.com/cuda/cuda-compiler-driver-nvcc/index.html",
+      "version": "CUDA Toolkit 13.4 online documentation, rechecked 2026-11-02",
       "sections": [
         "4.2.8.29 --fdevice-sanitize (-fdevice-sanitize)",
         "4.2.9.2 --sanitize (-sanitize)"
@@ -61,6 +72,10 @@
         "memcheck only supported value",
         "instrumented binary requires compute-sanitizer with matching tool; unsupported/undefined otherwise",
         "compiler tools and sanitizer same Toolkit version"
+      ],
+      "evidence_checked_at": "2026-11-02",
+      "previous_verification_dates": [
+        "2026-10-20"
       ]
     },
     {
@@ -78,13 +93,14 @@
         "runtime-only improvement claim in some cases, excludes compilation",
         "extra registers/stack/code, lineinfo preferred to -G",
         "dynamic execution coverage and timing changes"
-      ]
+      ],
+      "evidence_checked_at": "2026-11-02"
     },
     {
       "id": "NV-API",
       "title": "Compute Sanitizer API Reference Manual",
       "url": "https://docs.nvidia.com/compute-sanitizer/SanitizerApiGuide/index.html",
-      "version": "Online documentation checked 2026-10-20",
+      "version": "Online documentation rechecked 2026-11-02",
       "sections": [
         "Overview",
         "Callback API",
@@ -98,6 +114,10 @@
         "device patches PC/address/accessSize/flags",
         "callback reentrancy and one-subscriber constraints",
         "no host callback for device-launched graph; dedicated graph data"
+      ],
+      "evidence_checked_at": "2026-11-02",
+      "previous_verification_dates": [
+        "2026-10-20"
       ]
     },
     {
@@ -119,7 +139,7 @@
       "id": "AMD-ASAN-724",
       "title": "Using the AddressSanitizer on a GPU — llvm-project 22.0.0 Documentation",
       "url": "https://rocm.docs.amd.com/projects/llvm-project/en/docs-7.2.4/conceptual/using-gpu-sanitizer.html",
-      "version": "ROCm7.2.4; banner identifies7.13.0 as technology preview and7.2.4 for production",
+      "version": "ROCm 7.2.4 pinned mechanism reference, rechecked 2026-11-02; historical preview banner is not evidence of the latest production release",
       "sections": [
         "Compiling for ASan",
         "ASan instrumented ROCm libraries",
@@ -136,6 +156,11 @@
         "load/store/atomic shadow checks",
         "finite redzone limitations, private/stack uninstrumented, LDS modeled global, NULL shadow not poisoned",
         "GPU report single frame plus lanes/addresses"
+      ],
+      "evidence_checked_at": "2026-11-02",
+      "caution": "Use for the documented 7.2.4 mechanism and limitations. Do not carry its example architectures, library paths or every known issue forward to ROCm 10.1 without version-specific evidence.",
+      "previous_verification_dates": [
+        "2026-10-20"
       ]
     },
     {
@@ -169,7 +194,7 @@
         "large-thread-count ASan launch issues",
         "multi-architecture ASan HIP binary issues"
       ],
-      "caution": "Optional forward-looking note only; do not mix preview-specific defects into stable7.2.4 matrix."
+      "caution": "Historical technology preview evidence only; do not mix preview-specific defects into stable 7.2.4 or 10.1 support matrices."
     },
     {
       "id": "MUSA-USER",
@@ -239,7 +264,7 @@
       "id": "INTEL-DEVICE",
       "title": "Device-Side Compiler Sanitizers",
       "url": "https://www.intel.com/content/www/us/en/docs/dpcpp-cpp-compiler/developer-guide-reference/2026-0/device-side-compiler-sanitizers.html",
-      "version": "C/C++2026.0; document date2026-04-28; Intel references rechecked 2026-10-23",
+      "version": "C/C++ 2026.0 historical baseline; document date 2026-04-28; rechecked 2026-11-02",
       "sections": [
         "Device-Side AddressSanitizer",
         "Device-Side MemorySanitizer",
@@ -252,13 +277,17 @@
         "TSan since2025.2 focusing device USM",
         "ASan metadata/VRAM pressure and configured device coverage restrictions",
         "compiler+Unified Runtime layer flags"
+      ],
+      "evidence_checked_at": "2026-11-02",
+      "previous_verification_dates": [
+        "2026-10-23"
       ]
     },
     {
       "id": "INTEL-LIMITS",
       "title": "Compiler Sanitizers",
       "url": "https://www.intel.com/content/www/us/en/docs/dpcpp-cpp-compiler/developer-guide-reference/2026-0/compiler-sanitizers.html",
-      "version": "C/C++2026.0; Intel references rechecked 2026-10-23",
+      "version": "C/C++ 2026.0 historical baseline; rechecked 2026-11-02",
       "sections": [
         "System Requirements",
         "Limitations"
@@ -269,13 +298,17 @@
         "private-memory overhead may reduce workgroup maximum",
         "large workgroup counts may cause local/private ASan/MSan checks to be skipped",
         "OpenMP C/C++ GPU-only execution"
+      ],
+      "evidence_checked_at": "2026-11-02",
+      "previous_verification_dates": [
+        "2026-10-23"
       ]
     },
     {
       "id": "INTEL-UR",
       "title": "Unified Runtime Specification — Introduction / Sanitizers",
       "url": "https://oneapi-src.github.io/unified-runtime/core/INTRO.html#sanitizers",
-      "version": "Live UR specification, checked 2026-10-23; independent of Intel DPC++/C++ 2026.0",
+      "version": "Live UR specification, checked 2026-11-02; independent of Intel DPC++/C++ 2026.2 product guide",
       "sections": [
         "Sanitizers",
         "Objective",
@@ -284,32 +317,172 @@
       "verified_claims": [
         "Unified Runtime provides device sanitizer runtime integration, including an ASan layer",
         "ASan support for adapters depends on UR virtual memory support and device shadow mapping",
-        "Some MSan/TSan layers are labelled planned in this specification while Intel versioned compiler documentation supplies product-specific commands"
+        "Some MSan/TSan layers are labelled planned in this specification while Intel versioned compiler documentation supplies product-specific commands",
+        "Specification says the language runtime enables sanitizer layers, whereas Intel 2026.2 OpenMP examples explicitly set UR_ENABLE_LAYERS; preserve versioned usage separately"
       ],
-      "caution": "Do not infer identical device/adapter support from the UR specification and the Intel 2026.0 compiler guide."
+      "caution": "Do not infer identical device/adapter support or layer-enabling instructions from the UR specification and Intel 2026.2 product guide.",
+      "evidence_checked_at": "2026-11-02",
+      "previous_verification_dates": [
+        "2026-10-23"
+      ]
+    },
+    {
+      "id": "AMD-RELEASE-1010",
+      "title": "ROCm release history — AMD ROCm 10.1.0",
+      "url": "https://rocm.docs.amd.com/en/docs-10.1.0/release/versions.html",
+      "version": "ROCm 10.1.0; checked 2026-11-02",
+      "evidence_checked_at": "2026-11-02",
+      "sections": [
+        "ROCm release history"
+      ],
+      "verified_claims": [
+        "ROCm 10.1.0 release date is 2026-10-05",
+        "ROCm 7.14.1 release date is 2026-09-02; 7.2.4 is an older pinned mechanism reference"
+      ]
+    },
+    {
+      "id": "AMD-ASAN-1010",
+      "title": "Install AMD ROCm with ASAN — AMD ROCm 10.1.0",
+      "url": "https://rocm.docs.amd.com/en/docs-10.1.0/install/asan.html",
+      "version": "ROCm 10.1.0 installation documentation; checked 2026-11-02",
+      "evidence_checked_at": "2026-11-02",
+      "sections": [
+        "Install AMD ROCm with ASAN",
+        "Set up the environment",
+        "Next steps"
+      ],
+      "verified_claims": [
+        "Prebuilt ASAN packages are available only for gfx942 and gfx950, plus an all build containing both",
+        "ASAN packages install separately under /opt/rocm/core-asan-10.1",
+        "Next steps still require Linux HMM, HSA_XNACK=1, sanitizer compilation and instrumented runtimes"
+      ],
+      "caution": "This is package and setup evidence, not proof that all 7.2.4 mechanism limitations are unchanged or that gfx90a example commands apply to the 10.1 package set."
+    },
+    {
+      "id": "AMD-HIP-XNACK",
+      "title": "Unified memory management — HIP documentation",
+      "url": "https://rocm.docs.amd.com/projects/HIP/en/docs-10.0.0/how-to/hip_runtime_api/memory_management/unified_memory.html",
+      "version": "ROCm 10.0.0 documentation snapshot; checked 2026-11-02",
+      "evidence_checked_at": "2026-11-02",
+      "sections": [
+        "Managed Memory Support by GPU Architecture",
+        "Memory allocation approaches in unified memory"
+      ],
+      "verified_claims": [
+        "HSA_XNACK=1 and HMM enable access-driven managed-memory migration",
+        "System allocations on documented targets can cause recoverable first-access GPU faults",
+        "CDNA2 XNACK is unavailable in SR-IOV configurations"
+      ],
+      "caution": "Managed-memory capability documentation is not by itself a GPU ASan support matrix."
+    },
+    {
+      "id": "AMD-LLVM-XNACK",
+      "title": "User Guide for AMDGPU Backend — Target features",
+      "url": "https://rocm.docs.amd.com/projects/llvm-project/en/latest/LLVM/llvm/html/AMDGPUUsage.html#target-features",
+      "version": "Live ROCm LLVM documentation; checked 2026-11-02",
+      "evidence_checked_at": "2026-11-02",
+      "sections": [
+        "Target Features"
+      ],
+      "verified_claims": [
+        "XNACK replay supports demand paging and page migration",
+        "Code-object XNACK feature settings must match the documented execution configuration"
+      ],
+      "caution": "XNACK replay does not itself define valid ASan Poison metadata for an arbitrary address."
+    },
+    {
+      "id": "LINUX-HMM",
+      "title": "Heterogeneous Memory Management (HMM) — Linux kernel documentation",
+      "url": "https://docs.kernel.org/mm/hmm.html",
+      "version": "Live kernel documentation; checked 2026-11-02",
+      "evidence_checked_at": "2026-11-02",
+      "sections": [
+        "Shared address space and migration",
+        "Address space mirroring implementation and API",
+        "Migration to and from device memory"
+      ],
+      "verified_claims": [
+        "HMM supplies device-memory integration, page-table mirroring and migration helpers",
+        "HMM is not a GPU hardware replay capability or an ASan Shadow allocator"
+      ]
+    },
+    {
+      "id": "INTEL-RELEASE-2026",
+      "title": "Intel oneAPI DPC++/C++ Compiler Release Notes 2026",
+      "url": "https://www.intel.com/content/www/us/en/developer/articles/release-notes/oneapi-dpcpp/2026.html",
+      "version": "Updated 2026-10-22; checked 2026-11-02",
+      "evidence_checked_at": "2026-11-02",
+      "sections": [
+        "Release History"
+      ],
+      "verified_claims": [
+        "Intel DPC++/C++ 2026.2.0 release date is 2026-10-22"
+      ],
+      "caution": "A newer release number does not by itself remove the versioned sanitizer support restrictions."
+    },
+    {
+      "id": "INTEL-DEVICE-2026-2",
+      "title": "Device-Side Compiler Sanitizers",
+      "url": "https://www.intel.com/content/www/us/en/docs/dpcpp-cpp-compiler/developer-guide-reference/2026-2/device-side-compiler-sanitizers.html",
+      "version": "C/C++ 2026.2; document date 2026-10-15; checked 2026-11-02",
+      "sections": [
+        "Device-Side AddressSanitizer",
+        "Device-Side MemorySanitizer",
+        "Device-Side ThreadSanitizer"
+      ],
+      "verified_claims": [
+        "ASan OpenMP/SYCL capability table",
+        "SYCL-specific bad-context/bad-free/double-free/buffer",
+        "MSan since2025.1,local/private since2025.2",
+        "TSan since2025.2 focusing device USM",
+        "ASan metadata/VRAM pressure and configured device coverage restrictions",
+        "compiler+Unified Runtime layer flags",
+        "OpenMP examples explicitly enable matching UR layers; SYCL and OpenMP selectors are distinct"
+      ],
+      "evidence_checked_at": "2026-11-02"
+    },
+    {
+      "id": "INTEL-LIMITS-2026-2",
+      "title": "Compiler Sanitizers",
+      "url": "https://www.intel.com/content/www/us/en/docs/dpcpp-cpp-compiler/developer-guide-reference/2026-2/compiler-sanitizers.html",
+      "version": "C/C++ 2026.2; document date 2026-10-15; checked 2026-11-02",
+      "sections": [
+        "System Requirements",
+        "Limitations"
+      ],
+      "verified_claims": [
+        "Linux/Ponte Vecchio,one-card configuration",
+        "ASan forces sequential kernels",
+        "private-memory overhead may reduce workgroup maximum",
+        "large workgroup counts may cause local/private ASan/MSan checks to be skipped",
+        "OpenMP C/C++ GPU-only execution"
+      ],
+      "evidence_checked_at": "2026-11-02"
     }
   ],
-  "archive_note": "Per-source raw evidence remains historical; vendor_profiles provide the canonical version-scoped vendor evidence fields. Detailed product mechanisms and implementation designs belong to linked specialized docs. No vendor capability row is a test result for the target self-developed GPU.",
-  "intel_rechecked_at": "2026-10-23",
+  "archive_note": "Per-source evidence_checked_at and vendor_profiles define what was rechecked. Historical LLNL, MUSA, preview and research records retain their prior dates unless explicitly revisited. Product mechanism evidence, package support and target-GPU execution are separate; the self-developed target remains GPU_NOT_RUN.",
+  "intel_rechecked_at": "2026-11-02",
   "schema_version": 2,
   "vendor_profiles": [
     {
       "profile_id": "nvidia-compute-sanitizer",
       "vendor": "NVIDIA",
       "product": "Compute Sanitizer (memcheck / initcheck / racecheck / synccheck)",
-      "version_baseline": "Compute Sanitizer release notes 2026.3; NVCC online documentation CUDA Toolkit 13.4; compiler memcheck introduced with CUDA 13.1",
-      "evidence_checked_at": "2026-10-20",
+      "version_baseline": "Compute Sanitizer release notes 2026.3 (updated 2026-09-09); CUDA Toolkit 13.4 NVCC manual; compiler memcheck introduced with CUDA 13.1",
+      "evidence_checked_at": "2026-11-02",
       "hardware_requirements": [
-        "Compatible NVIDIA CUDA device and matching CUDA Toolkit / Compute Sanitizer versions",
-        "Instruction and architecture coverage depends on device capabilities and exact tool release; do not assume all older SMs are supported"
+        "Compute Sanitizer 2026.3 lists CUDA GPUs with SM 7.5 and above, with compatible driver/toolkit",
+        "Instruction-specific and compile-time shared-memory coverage still depends on architecture and release"
       ],
       "instrumentation": [
-        "Default memcheck uses runtime binary instrumentation",
-        "Compile-time memcheck optionally performs original-object base-and-bounds analysis; unknown provenance falls back to current-allocation bounds"
+        "Default memcheck uses runtime binary instrumentation and current-address/allocation checks",
+        "NVCC/PTXAS compile-time memcheck performs original-object base-and-bounds analysis when it succeeds; fallback checks do not preserve a proven original-object guarantee",
+        "Public material does not expose the complete private compiler pass or metadata ABI; a self-developed LLVM D1 implementation is a project design choice"
       ],
       "runtime_requirements": [
-        "Use the corresponding Compute Sanitizer memcheck runtime for compiler-instrumented modules",
-        "Device modules/JIT/hybrid coverage and launch/resource bookkeeping must be checked against the selected toolkit version"
+        "Compiler tools including standalone PTX compiler libraries and Compute Sanitizer must come from the same Toolkit version",
+        "Compiler-instrumented binaries must run under compute-sanitizer --tool memcheck; running directly or under another checker is unsupported",
+        "JIT compile-time patching uses the release-note-specific -Xptxas=-sanitize=memcheck path"
       ],
       "detector_scope": [
         "memcheck global/local/shared device memory and supported allocation diagnostics",
@@ -317,10 +490,12 @@
         "racecheck shared-memory data hazards, and synccheck supported synchronization misuse"
       ],
       "known_limitations": [
-        "Only memcheck is documented for compile-time instrumentation; other checker types are separate",
-        "Same-module function-level hybrid coverage cannot be assumed; supported granularity must be verified",
-        "Runtime-mode/current-address checks do not guarantee detection when an A-derived pointer lands in a distinct live B",
-        "No comprehensive device global/cross-kernel race checker is implied by racecheck"
+        "Only memcheck supports compile-time instrumentation; racecheck/initcheck/synccheck remain separate runtime checks",
+        "Function-level hybrid inside one module is unsupported; uninstrumented functions in such a module will not be binary instrumented",
+        "NV-C HMM is unsupported and can produce false positives; compile-time shared accesses with clusters are also restricted",
+        "2026.3 adds shared outer-boundary checks on Hopper and newer but still lists missed overflows between shared variables in the same allocation",
+        "Runtime/current-address checks do not guarantee A-derived accesses landing inside live B are detected",
+        "Extra register/stack and tracking memory can prevent launches; no detected error is not evidence that every launch was checked"
       ],
       "reference_configurations": [
         "NV-R",
@@ -340,35 +515,42 @@
       "profile_id": "amd-rocm-gpu-asan",
       "vendor": "AMD",
       "product": "ROCm GPU AddressSanitizer",
-      "version_baseline": "ROCm LLVM GPU ASan documentation docs-7.2.4; LLNL 7.0.0 examples and 7.13.0 preview are separate evidence, not equivalent baselines",
-      "evidence_checked_at": "2026-10-20",
+      "version_baseline": "ROCm 7.2.4 pinned GPU ASan mechanism/limitations; ROCm 10.1.0 release 2026-10-05 and versioned ASAN package/setup requirements; LLNL 7.0.0 and 7.13.0 preview remain separate historical evidence",
+      "evidence_checked_at": "2026-11-02",
       "hardware_requirements": [
-        "Official documented GPU ASan deployment requires supported xnack+ GPU configuration and Linux HMM",
-        "Illustrative gfx90a:xnack+ offload architecture is not a universal target GPU setting"
+        "Official GPU ASan requires a supported xnack+ configuration and Linux HMM; HSA_XNACK=1 cannot create missing hardware or virtualization support",
+        "ROCm 10.1 prebuilt ASAN packages are limited to gfx942, gfx950 and an all build containing both",
+        "The older gfx90a:xnack+ example is not a supported-architecture claim for the 10.1 package set"
       ],
       "instrumentation": [
         "LLVM/Clang device memory instrumentation with GPU-visible Shadow/Poison/Redzone metadata",
         "Software Shadow checks use GPU instructions; absence of a special Shadow ISA instruction does not invalidate an independently implemented checker"
       ],
       "runtime_requirements": [
-        "-fsanitize=address -shared-libsan with version-matched ASan-enabled HIP/HSA runtime libraries",
-        "HSA_XNACK=1 applies only where hardware and kernel support retryable faults; validate real device reports"
+        "7.2.4 mechanism guide uses -fsanitize=address -shared-libsan with ASan-enabled HIP/HSA libraries and the ASan host runtime",
+        "10.1 packages install separately in /opt/rocm/core-asan-10.1 and retain HMM, HSA_XNACK=1 and instrumented-runtime setup requirements",
+        "A self-developed no-XNACK B2 must premap, initialize, publish and retain readable Shadow metadata; it is not the official ROCm supported configuration"
       ],
       "detector_scope": [
         "Supported GPU device addressability and memory-error reports for instrumented accesses",
         "Lifetime/poison checks within published Shadow state and officially supported memory spaces"
       ],
       "known_limitations": [
-        "xnack- offload targets may produce runnable but uninstrumented device code",
-        "Private/stack accesses are not generally instrumented in the cited implementation; LDS may be modeled as global",
-        "Finite Redzones and missing/uninitialized Shadow mapping can create missed detections or tool faults",
-        "XNACK fault retry does not automatically allocate valid Poison metadata for arbitrary wild pointers"
+        "The 7.2.4 mechanism guide warns unsupported offload targets can generate runnable but uninstrumented device code",
+        "The 7.2.4 guide lists uninstrumented Private/Stack, LDS modeled as Global, finite Redzone escapes and faults on wild-pointer Shadow reads",
+        "Do not infer all older Known Issues are unchanged in 10.1 from package installation documentation alone",
+        "XNACK retries recoverable faults but does not automatically supply correct Poison state for arbitrary addresses"
       ],
       "reference_configurations": [
         "AMD-B2"
       ],
       "source_ids": [
         "AMD-ASAN-724",
+        "AMD-RELEASE-1010",
+        "AMD-ASAN-1010",
+        "AMD-HIP-XNACK",
+        "AMD-LLVM-XNACK",
+        "LINUX-HMM",
         "AMD-LLNL",
         "AMD-PREVIEW-713"
       ],
@@ -379,35 +561,40 @@
       "profile_id": "intel-oneapi-device-sanitizers",
       "vendor": "Intel",
       "product": "oneAPI DPC++/C++ Device-Side Compiler Sanitizers",
-      "version_baseline": "Intel DPC++/C++ compiler 2026.0 documentation; independent Unified Runtime specification not assumed to share identical implementation status",
-      "evidence_checked_at": "2026-10-23",
+      "version_baseline": "Intel DPC++/C++ 2026.2 guide dated 2026-10-15; compiler 2026.2.0 released 2026-10-22; 2026.0 records retained as history; UR specification is independently maintained",
+      "evidence_checked_at": "2026-11-02",
       "hardware_requirements": [
-        "Official 2026.0 GPU configuration documents Linux with one Intel Ponte Vecchio GPU card",
-        "Level Zero GPU device selection and SYCL versus OpenMP runtime setup must follow their distinct instructions"
+        "The official 2026.2 guide documents Linux with one Intel Ponte Vecchio GPU card",
+        "Level Zero GPU selection and SYCL versus OpenMP runtime setup use distinct documented instructions"
       ],
       "instrumentation": [
-        "-Xarch_device -fsanitize=address|memory|thread with compiler-side device instrumentation",
-        "Unified Runtime / device backend collaborates on allocations and diagnostic metadata"
+        "Compiler-side device instrumentation with -Xarch_device -fsanitize=address|memory|thread",
+        "ASan combines compiler instrumentation and UR/libdevice Shadow mapping, making it a B2-type product reference rather than an additional spatial reference configuration",
+        "The public support table does not establish D1 original-object or D2 generation guarantees"
       ],
       "runtime_requirements": [
-        "SYCL Level Zero device selection or OpenMP unified_runtime plugin plus appropriate UR_ENABLE_LAYERS",
-        "Compatible Intel compiler / Unified Runtime / driver / GPU configuration"
+        "SYCL uses its documented Level Zero selector; Intel 2026.2 OpenMP examples use the unified_runtime plugin and explicit matching UR_ENABLE_LAYERS",
+        "Generic UR guidance delegates layer enabling to the language runtime; do not merge it with product commands into a universal adapter recipe",
+        "Compatible compiler, language runtime, Unified Runtime, driver and GPU configuration"
       ],
       "detector_scope": [
         "ASan supports documented global/USM/local/private memory errors and SYCL-specific buffer/context/free checks",
         "MSan device uninitialized-use checks; TSan documented device USM race detection"
       ],
       "known_limitations": [
-        "Device ASan forces kernel execution into sequential mode, changing concurrency semantics",
-        "Large workgroup counts may lead to skipped ASan local/private and MSan local/private checks",
-        "Device private-memory overhead may reduce permitted workgroup size",
-        "Generic UR specification status for MSan/TSan cannot be treated as universal backend support"
+        "Device ASan forces kernels into sequential execution, changing concurrency semantics",
+        "Large workgroup counts may skip ASan Local/Private OOB or MSan Local/Private uninitialized-use checks",
+        "Device private-memory overhead can reduce permitted workgroup size",
+        "UR specification planned labels and auto-enable guidance do not imply uniform MSan/TSan support or identical setup across adapters"
       ],
       "reference_configurations": [],
       "source_ids": [
+        "INTEL-DEVICE-2026-2",
+        "INTEL-LIMITS-2026-2",
+        "INTEL-RELEASE-2026",
+        "INTEL-UR",
         "INTEL-DEVICE",
-        "INTEL-LIMITS",
-        "INTEL-UR"
+        "INTEL-LIMITS"
       ],
       "canonical_detail": "docs/intel-oneapi-device-sanitizers.md",
       "verification_status": "VENDOR_DOCS_VERIFIED; USER_TARGET_GPU_NOT_RUN"
