@@ -1,12 +1,12 @@
 # S01 GPU Sanitizer厂商参考与目标组件实施：NV-R / AMD-B2 / NV-C
 
-**版本 2.5 · 2026-10-23 · 适用对象：目标实体GPU、LLVM Compiler/Device Runtime、UMD、KMD，以及实际需要的Firmware/RTL。**
+**版本 2.6 · 2026-11-02 · 适用对象：目标实体GPU、LLVM Compiler/Device Runtime、UMD、KMD，以及实际需要的Firmware/RTL。**
 
-> 本文是面向研发落地的**厂商方案优先**设计说明，不是某个闭源 GPU Sanitizer 的反编译说明。凡“厂商官方确认”的机制都给出来源与限长英文原文；凡没有公开具体实现的数据结构、ISA 注入方法或内核接口，均明确写作**本项目建议实现**，不冒充 NVIDIA/AMD 的私有实现。
+> 本文把**厂商公开机制**与**自研GPU实施建议**分开：公开机制附官方来源；私有数据结构、具体插桩Pass和驱动接口未披露时，不推定存在可直接移植的实现。通用设备ABI、Compiler/UMD/KMD职责以[组件实施指南](real-gpu-components-implementation.md)为准。
 >
 > 所有产品级访存判断必须由实体GPU执行的设备Checker指令或真实存在的Tag/Bounds硬件完成；CPU侧API错误不是设备侧检查。
 
-> **统一计数**：主要参考厂商**2家**（NVIDIA/AMD），基础空间检查参考配置**3种**（①NV-R运行时二进制＋当前地址有效性、②AMD-B2 LLVM Shadow/Redzone、③NV-C LLVM Original-Object Bounds）。这**不是3种完全不同的空间谓词**：①②均主要判断当前地址是否有效，③加入原指针对象来源。B/C/D/E/F保留为工程交付标签，不等于5套独立算法。完整来源/能力对照只维护在[核心设计唯一分类表](core-design-comparison.md)。
+> **统一计数**：主要参考厂商**2家**（NVIDIA/AMD），基础空间检查参考配置**3种**（①NV-R运行时二进制＋当前地址有效性、②AMD-B2 LLVM Shadow/Redzone、③NV-C由NVCC/PTXAS集成的Original-Object Bounds），对应**2层空间语义**：①②检查当前地址可访问性，③在来源分析成功时保留原对象边界。自研D1可用LLVM实现，不代表NVIDIA公开了同名LLVM Pass。B/C/D/E/F保留为工程交付标签。完整来源/能力对照见[核心设计唯一分类表](core-design-comparison.md)。
 >
 > **命名约束**：NV-C是NVIDIA编译期Reference；仓库的路线C是Runtime Binary Rewriter，不可互相替代。B1（原I）是当前Live Allocation查询的编译期实现；F1/F2必须具备真正的Tag/Bounds硬件；E是集成策略。
 >
@@ -30,45 +30,19 @@
 
 ### 1.1 官方确认的事实与未经披露的细节
 
-NVIDIA 官方 [Compute Sanitizer User Manual — Compile-time patching](https://docs.nvidia.com/compute-sanitizer/ComputeSanitizer/index.html#compile-time-patching) 原文：
-
-> Compute Sanitizer memcheck supports compile-time instrumentation as an alternative to the default runtime binary instrumentation.
-
-**含义：** NVIDIA 默认 Memcheck 是**运行时二进制插桩**；编译期插桩是另一条路径，只有 Memcheck 当前支持该模式。Racecheck、Initcheck、Synccheck 仍有自己的运行时机制，不能把它们归为同一个 Bounds 算法。
+NVIDIA [官方手册的 Compile-time patching 章节](https://docs.nvidia.com/compute-sanitizer/ComputeSanitizer/index.html#compile-time-patching)明确区分默认的**运行时二进制插桩**与NVCC/PTXAS集成的**编译期插桩**。当前只有Memcheck支持后者；Racecheck、Initcheck、Synccheck仍使用运行时二进制插桩，分别检查竞争、初始化和同步问题，不能并入同一空间Bounds谓词。
 
 NVIDIA 2025-12-10 [官方开发者技术文章](https://developer.nvidia.com/blog/better-bug-detection-how-compile-time-instrumentation-for-compute-sanitizer-enhances-memory-safety/)解释运行时检测是访问点附近的二进制插桩，按**当前有效分配地址范围**检查，可能漏掉 A 越界进入同样有效的 B。**不能据此推断 NVIDIA 内部使用 LLVM ASan 的1:8 Shadow布局或某种特定对象查找树**——默认 Memcheck 的完整私有实现并未公开。
 
 ### 1.2 路径 NVIDIA-R：运行时二进制插桩（不要求特殊编译）
 
-**真实执行链：**
+**公开机制所支持的执行链：** 普通CUDA二进制进入Compute Sanitizer后，工具在受支持访存点加入设备检查，运行时维护分配与释放状态，并将设备位置、地址和访问宽度关联到诊断。错误后的继续、Kernel终止或Context终止服从[官方错误处理策略](https://docs.nvidia.com/compute-sanitizer/ComputeSanitizer/index.html#error-actions)；这不等于自研GPU已经具备同样的失败协议。
 
-~~~text
-用户 CUDA Kernel（普通 nvcc 编译）→ CUDA CUBIN/FATBIN
-    ↓
-Compute Sanitizer在模块装载/执行期间识别待检测的GPU访存点
-    ↓
-在真正生效的GPU load/store/atomic之前执行插入的检查逻辑
-    ↓
-工具Runtime关联当下CUDA allocation/释放/流与模块、PC等信息
-    ↓
-合法：原GPU访存生效；非法：诊断并按工具错误策略处理
-    ↓
-Host报告（kernel、PC、block/thread、GPUVA、字节宽度、allocation）
-~~~
-
-**能够确认的公开接口：** [Compute Sanitizer API Reference Manual — Patching API](https://docs.nvidia.com/compute-sanitizer/SanitizerApiGuide/index.html#patching-api)。官方原文：
-
-> The Compute Sanitizer Patching API allows you to load patch functions and insert them into user code.
-
-NVIDIA 公开的 Patching API 示例使用 `sanitizerPatchInstructions`、`sanitizerPatchModule`、`sanitizerSetCallbackData`，其设备访问回调携带 `pc`、`ptr`、`accessSize`、`flags` 等。**这些是可公开使用的 NVIDIA工具API，不代表自研 GPU现成拥有该API；也不是 NVIDIA 内部完整重写器源码。**
+[Patching API](https://docs.nvidia.com/compute-sanitizer/SanitizerApiGuide/index.html#patching-api)进一步公开了工具开发入口：`sanitizerPatchInstructions`选择插桩事件，`sanitizerPatchModule`修改模块，`sanitizerSetCallbackData`关联回调数据；设备访存回调接收`pc`、`ptr`、`accessSize`和`flags`。这些接口证明可以为现有用户模块植入设备回调，**不能据此还原默认Memcheck的私有地址索引，也不是自研GPU现成可调用的接口**。
 
 #### 1.2.1 “不要求特殊编译”到底意味着什么？
 
-**【官方事实】** [NVIDIA Compute Sanitizer 用户手册 — Compilation Options](https://docs.nvidia.com/compute-sanitizer/ComputeSanitizer/index.html#compilation-options)：
-
-> The Compute Sanitizer tools do not need any special compilation flags to function.
-
-准确含义是**用户程序按原有编译器生成二进制**；运行时工具在二进制已生成以后做插桩。对自研 GPU，**并非必须修改生产编译器、LLVM Pass、CodeGen、MC 后端或重新编译应用**。上版把“可选复用已有 Compiler/MC 解码库”误写成“Compiler/MC 必须交付新功能”，这是错误的必需依赖，已修正。
+**【官方事实】** [Compilation Options](https://docs.nvidia.com/compute-sanitizer/ComputeSanitizer/index.html#compilation-options)说明默认工具不要求特殊编译选项；`-lineinfo`用于改善源位置归因。这里说的是**原应用无需为Sanitizer重编译**。自研NV-R式实现可以保持生产Compiler不变，由独立重写器处理已有设备二进制；能否做到取决于ISA解码、重定位、寄存器和合法装载能力。
 
 需要区分四种动作：
 
@@ -100,31 +74,13 @@ compute-sanitizer --tool memcheck ./s01 --bad
 compute-sanitizer --tool memcheck ./s01 --bad --head
 ~~~
 
-**预期：** good无设备非法访存；bad在实际访问尾后4B时报告；head变体需记录是否真的有头部无效区和真实GPU错误输出，不能凭源码推断必定报错。
+**验收解释：** good用于排除误报；bad/head只有实际访问落入当时无效区，才由当前地址检查给出越界报告。若越界地址仍属另一个Live对象，NV-R可以漏检，原因见[官方相邻Allocation示例](https://developer.nvidia.com/blog/better-bug-detection-how-compile-time-instrumentation-for-compute-sanitizer-enhances-memory-safety/)。每次运行须保存真实布局、原始设备报告和工具版本，不能把预期写成已执行结果。
 
 ### 1.3 路径 NVIDIA-C：CUDA 13.1+ 的编译期 Base-and-Bounds
 
-NVIDIA 官方技术文章说明编译器尝试使用带指针、Base和Bounds的 **fat pointer**。其短摘录：
+[NVIDIA技术文章](https://developer.nvidia.com/blog/better-bug-detection-how-compile-time-instrumentation-for-compute-sanitizer-enhances-memory-safety/)将其解释为fat pointer：在指针之外保留Base/Bounds，指针算术不随之改变原始边界。因此A派生的地址即使进入有效B，也可能按A的边界检出。**这是动态执行时检查，编译期分析并不证明未执行路径无错。**
 
-> Pointer arithmetic on fat pointers only modifies the pointer component, leaving the base and bounds intact.
-
-**含义：** 例如 `a[16]` 计算出B的地址，预期对象仍是A，因此可以在当前地址有效的情况下报告原对象越界。编译期分析若失败，官方手册说明会降级为常规分配范围检查；**不能对未知来源仍声称达到D1保证**。
-
-**真实执行链：**
-
-~~~text
-CUDA源 + nvcc -fdevice-sanitize=memcheck
-    ↓
-编译器进行指针来源/原对象Base-Bounds分析
-    ↓
-GEP、算术、phi/select/call等已支持路径传播expected object
-    ↓
-PTXAS生成带设备检查/元数据的GPU Kernel
-    ↓
-Compute Sanitizer memcheck运行时提供分配/报告/元数据服务
-    ↓
-每次实际Global访问按原对象Bounds判断，来源未知时按声明降级
-~~~
+[官方Base-and-bounds说明](https://docs.nvidia.com/compute-sanitizer/ComputeSanitizer/index.html#base-and-bounds-analysis)指出分析失败时退回常规Allocation Bounds检查。实际链路是NVCC/PTXAS生成设备插桩，再由匹配版本的Compute Sanitizer运行。公开材料没有给出完整私有IR Pass、fat-pointer ABI或所有传播路径；下文的LLVM SSA、Sidecar和unknown状态是**本项目设计**。
 
 #### 若模仿 NVIDIA-C，自研 GPU 各组件要改什么？
 
@@ -140,7 +96,7 @@ nvcc -lineinfo -fdevice-sanitize=memcheck -o s01_ct samples/S01/cuda.cu
 compute-sanitizer --tool memcheck ./s01_ct --bad
 ~~~
 
-编译期插桩对现有工具和编译器绑定更深、需额外寄存器/stack，也可能让程序因资源超限无法发射；测试时不应仅追求少报错。参见 [Compute Sanitizer 编译期要求](https://docs.nvidia.com/compute-sanitizer/ComputeSanitizer/index.html#compile-time-patching-requirements)。
+**运行约束：** 插桩产物必须由`compute-sanitizer --tool memcheck`运行；直接执行、换用其他Checker或混用Toolkit版本，均不属于NVCC支持的用法。PTX编译器与Sanitizer必须同版本，包括独立PTX编译库。[NVCC选项定义](https://docs.nvidia.com/cuda/cuda-compiler-driver-nvcc/index.html)、[编译期要求](https://docs.nvidia.com/compute-sanitizer/ComputeSanitizer/index.html#compile-time-patching-requirements)。寄存器/Stack/代码增长及Launch失败应单独记录，不能把未执行Kernel算作无错误；厂商报告的加速也不能替代本项目同条件实测。
 
 ### 1.4 NVIDIA 两种路径的工程选择
 
@@ -155,7 +111,7 @@ compute-sanitizer --tool memcheck ./s01_ct --bad
 
 若想兼顾预编译库与可重编译自研模块，NVIDIA官方手册也有 **Hybrid Instrumentation**：对已编译期插桩的编译单元使用该机制，对没有插桩的单元使用运行时二进制检查。针对本项目需要自行设计module manifest与能力降级，**不能**声称混用后任意未插桩函数自然获得相同D1保证。
 
-**版本限制**：[NVIDIA Compute Sanitizer 2026.3 Release Notes](https://docs.nvidia.com/compute-sanitizer/ReleaseNotes/index.html)指出，同一模块内同时存在编译插桩和未插桩函数时，未插桩函数不保证再获得Runtime Binary插桩。因而E应以实际模块/函数覆盖证据为准，不能承诺厂商Hybrid自动完成任意粒度补洞。
+**2026.3版本限制直接影响选型：** 同模块函数级Hybrid不受支持，未插桩函数不会自动由Binary模式补齐；NV-C不支持HMM，可能产生误报；JIT路径须按版本说明使用`-Xptxas=-sanitize=memcheck`。该版新增Hopper及更新架构的Static/Dynamic Shared外边界检查，但仍列明同一Allocation内Shared变量间越界漏检，以及Cluster Shared访问限制。[Release Notes：更新、限制与已知问题](https://docs.nvidia.com/compute-sanitizer/ReleaseNotes/index.html)。因此不能把NV-C写成全部对象/地址空间的无条件D1保证。
 
 ---
 
@@ -165,33 +121,16 @@ compute-sanitizer --tool memcheck ./s01_ct --bad
 
 ### 2.1 官方确认的组成，不是“只有LLVM Pass”
 
-AMD [官方 Using the AddressSanitizer on a GPU](https://rocmdocs.amd.com/projects/llvm-project/en/latest/conceptual/using-gpu-sanitizer.html)明确：
+AMD [ROCm 7.2.4 GPU ASan机制说明](https://rocm.docs.amd.com/projects/llvm-project/en/docs-7.2.4/conceptual/using-gpu-sanitizer.html#runtime-overhead)描述了Load/Store/Atomic前的Shadow读取与Poison判定。LLVM插桩、Redzone/Poison维护、设备可访问元数据和Host/设备报告必须共同存在；只启用Host ASan不能形成设备检测。
 
-> ASan detection works by checking each address at runtime before the address is actually accessed
-
-AMD文档说明真实GPU Load/Store/Atomic前有Shadow读取与Poison判定；编译器负责插入检查，Runtime负责堆/变量Redzone与Shadow Poison、GPU可用的元数据、Host↔GPU报告。AMD公开源码可供借鉴，但不能只打开CPU ASan开关就认为设备自动覆盖。
-
-**真正的GPU链路：**
-
-~~~text
-HIP/C++ → Clang AMDGPU目标 + -fsanitize=address
-           ↓
-LLVM ASan Instrumentation：识别Global访存并插检查
-           ↓
-GPU ISA：先读Shadow并判断Poison → 再执行原Load/Store/Atomic
-           ↑
-Runtime/UMD：逻辑allocation、Redzone、GPU可见Shadow、poison/unpoison顺序
-           ↓
-Runtime/Reporter：设备错误PC/workgroup/lane、错误对象与源位置
-           ↓
-目标真实GPU执行上述检查器设备ISA
-~~~
+**版本口径：** 本节用7.2.4固定机制依据，不把它称为最新ROCm。2026-11-02复核的[官方发布历史](https://rocm.docs.amd.com/en/docs-10.1.0/release/versions.html)已列10.1.0；其[ASAN安装指南](https://rocm.docs.amd.com/en/docs-10.1.0/install/asan.html)另行限定发行包架构和路径。安装范围与7.2.4机制/已知问题分列于[AMD专题](amd-gpu-asan-hardware-fallback.md)，不能拼成一个跨版本支持矩阵。
 
 公开源码：
+
 - [LLVM AddressSanitizer.cpp](https://llvm.org/doxygen/AddressSanitizer_8cpp_source.html)：ShadowMapping、AMDGPU target判断、访存采集与插桩；
 - [LLVM AMDGPUSwLowerLDS.cpp](https://github.com/llvm/llvm-project/blob/main/llvm/lib/Target/AMDGPU/AMDGPUSwLowerLDS.cpp)：某些LDS路径降低为Global后可按ASan机制插桩，说明并非全部地址空间天然统一；
 - [LLVM compiler-rt ASan](https://github.com/llvm/llvm-project/tree/main/compiler-rt/lib/asan)：分配拦截、Redzone、Poison、诊断运行库基础；GPU移植仍需设备/Host路径；
-- [ROCm GPU ASan官方文档](https://rocmdocs.amd.com/projects/llvm-project/en/latest/conceptual/using-gpu-sanitizer.html) 和 [ROCm LLVM项目](https://github.com/ROCm/llvm-project)。
+- [ROCm GPU ASan 7.2.4机制文档](https://rocm.docs.amd.com/projects/llvm-project/en/docs-7.2.4/conceptual/using-gpu-sanitizer.html) 和 [ROCm LLVM项目](https://github.com/ROCm/llvm-project)。上游源码的当前分支不等于所选ROCm发行版的完整实现。
 
 ### 2.2 1:8 Shadow 如何检查64 B对象？
 
@@ -213,13 +152,13 @@ Runtime/Reporter：设备错误PC/workgroup/lane、错误对象与源位置
 
 ### 2.4 无 XNACK 时，AMD 式 GPU ASan 还能实现吗？
 
-**官方 AMD ROCm 7.2.4 GPU ASan：** 公布的运行路径要求受支持的 xnack+、Linux HMM 与适配的插桩 HIP/HSA Runtime。xnack- 目标可能警告并跳过设备插桩；只设置 HSA_XNACK=1 不能给不支持的硬件增加可恢复缺页能力。
+**官方AMD路径：** [7.2.4机制文档](https://rocm.docs.amd.com/projects/llvm-project/en/docs-7.2.4/conceptual/using-gpu-sanitizer.html#compiling-for-asan)要求受支持的`xnack+`、Linux HMM与匹配的插桩Runtime；不支持的目标可能仅警告并生成无设备插桩代码。[10.1安装指南](https://rocm.docs.amd.com/en/docs-10.1.0/install/asan.html#next-steps)仍要求HMM、`HSA_XNACK=1`与插桩Runtime，不能因安装了新包就取消这些条件。
 
 **自研 GPU 借鉴 AMD/LLVM Shadow 算法：可以不依赖 XNACK/HMM。** 但必须在设备访存前映射、初始化并发布全部需要读取的 Shadow/Report。XNACK 负责可恢复 GPU Page Fault 后重试访存，**不负责**为任意野指针生成 Poison。
 
 无 XNACK 的三种核心取舍——全量物理预分配、随 gpuMalloc 分配且直接寻址、按需物理 Shadow 加安全索引——及虚拟 GPUVA/物理显存区别，仅在 [AMD 无硬件依赖专题 §2.1～2.2](amd-gpu-asan-hardware-fallback.md) 维护，此处不复制比较表。
 
-当 GPU 设备元数据预映射且 Poison 已发布时使用 B2_SHADOW；若 Shadow 不可用但能够安全查询 Live 区间表，可以考虑 B1_CURRENT_LIVE_INTERVAL；来源已知时可增加 D1_ORIGINAL_OBJECT_BOUNDS。统一模式协商、元数据 Ready Fence、TOOL_FAILURE、UNSUPPORTED 与部分覆盖的通用 ABI 见 [组件指南](real-gpu-components-implementation.md)。不能把 Host 模拟检查或仅有 CPU ASan 的成功当成设备 Sanitizer 结果。
+当GPU设备元数据预映射且Poison已发布时使用B2_SHADOW；若无法部署Shadow，可**另行实现和验收**B1_CURRENT_LIVE_INTERVAL；来源已知时可增加D1_ORIGINAL_OBJECT_BOUNDS。B1不是B2失败后静默放行的开关。模式协商、Ready Fence及TOOL_FAILURE/UNSUPPORTED统一见[组件指南](real-gpu-components-implementation.md)。仅有CPU ASan结果不能证明设备Checker运行。
 
 ### 2.5 AMD 官方GPU ASan验证命令与条件
 
@@ -285,7 +224,7 @@ E是混合交付策略：已经由 B/D 编译期插桩且检查 ABI 兼容的模
 | NVIDIA Compute Sanitizer User Manual | [memcheck编译期/默认运行时与Hybrid](https://docs.nvidia.com/compute-sanitizer/ComputeSanitizer/index.html) | 两种插桩入口、编译期bounds、运行命令与限制 | NVIDIA默认运行时内部元数据一定是1:8 Shadow |
 | NVIDIA技术文章（2025-12-10） | [Better Bug Detection](https://developer.nvidia.com/blog/better-bug-detection-how-compile-time-instrumentation-for-compute-sanitizer-enhances-memory-safety/) | 当前地址有效性漏掉邻接对象、fat pointer思路、resource开销与HMM限制 | 其私有编译器Pass与完整ABI源码可复制 |
 | NVIDIA Sanitizer API Guide | [Patching/Callback/Memory API](https://docs.nvidia.com/compute-sanitizer/SanitizerApiGuide/index.html) | 用户工具如何装载patch、访存回调参数与可打补丁的指令ID | 这是目标自研GPU也现成拥有的API |
-| AMD ROCm GPU ASan | [ROCm GPU AddressSanitizer](https://rocmdocs.amd.com/projects/llvm-project/en/latest/conceptual/using-gpu-sanitizer.html) | LLVM插桩、Shadow/Redzone、XNACK/设备库/运行报告、已知限制 | 把CPU compiler-rt直接链接就能检查任意自研GPU |
+| AMD ROCm GPU ASan | [7.2.4机制](https://rocm.docs.amd.com/projects/llvm-project/en/docs-7.2.4/conceptual/using-gpu-sanitizer.html) / [10.1安装范围](https://rocm.docs.amd.com/en/docs-10.1.0/install/asan.html) | 各自版本的LLVM/Shadow机制与发行包要求 | 跨版本照搬GPU列表、路径或所有已知问题 |
 | LLVM实现 | [AddressSanitizer.cpp](https://llvm.org/doxygen/AddressSanitizer_8cpp_source.html) / [AMDGPU SwLowerLDS](https://github.com/llvm/llvm-project/blob/main/llvm/lib/Target/AMDGPU/AMDGPUSwLowerLDS.cpp) | LLVM现有Pass和AMDGPU降级源码的复用位置 | 目标地址空间/ISA与AMDGPU必然一致 |
 | Google ASan原始算法 | [AddressSanitizerAlgorithm](https://github.com/google/sanitizers/wiki/AddressSanitizerAlgorithm) | 1:8 Shadow、Redzone和Poison的基本数学关系 | 经典编码能表达同granule内任意非连续子对象 |
 

@@ -1,14 +1,14 @@
 # GPU Sanitizer 厂商证据：版本化对照与历史核验记录
 
-> **标准化证据字段的唯一机器可读来源：** [vendors_sources.json](vendors_sources.json) 的 `vendor_profiles` 与各 `sources[].id`。本页仅是简短中文索引及历史修正记录，不再并行维护第二张完整版能力矩阵。技术路线仍按[三种空间参考配置](../core-design-comparison.md)分类，不因 Intel/MUSA 有不同工具功能就增加基础空间算法。检查日期依每条 Profile 的 `evidence_checked_at`；旧笔记的 2026-10-20 不等于所有官方页面今天再次发布。
+> **标准化证据字段的唯一机器可读来源：** [vendors_sources.json](vendors_sources.json)的`vendor_profiles`与`sources[].id`。本页是导航及修正记录；基础空间分类仍为2家主要厂商、3种参考配置、2层语义。2026-11-02复核NVIDIA、AMD和Intel；MUSA保留此前核验日期。**文档核验日期、文档版本和产品发布日期分别登记**，不因重读网页就更新产品发布日期。
 
 ## 1. 版本基线及纠正点
 
 | 成熟产品 / 角色 | 已核验的版本化来源 | 关键平台条件 | 需要特别保留的限制 | 证据和详细实现 |
 |---|---|---|---|---|
 | NVIDIA Compute Sanitizer / 核心参考 NV-R、NV-C | 2026.3 Release Notes、CUDA 13.4 NVCC、CUDA 13.1+ 编译期能力 | 受支持 CUDA GPU + 同版本工具链 | 仅 memcheck 有编译期模式；同模块函数级 Hybrid 不能假设补齐 | `NV-MANUAL` / `NV-RELEASE` / `NV-NVCC`；[S01 厂商指南](../S01-vendor-implementation-guide.md) |
-| AMD ROCm GPU ASan / 核心参考 AMD-B2 | 版本固定 ROCm 7.2.4；LLNL 7.0.0 与预览 7.13.0 分开 | 官方部署要求支持的 `xnack+` / Linux HMM / 适配 Runtime | 未支持地址空间、有限 Redzone、Private/Stack 缺口；不可套用预览缺陷 | `AMD-ASAN-724`；[AMD 硬件适配](../amd-gpu-asan-hardware-fallback.md) |
-| Intel oneAPI Device Sanitizers / 辅助体系参考 | DPC++/C++ 2026.0；UR 独立规范 | Linux + 官方列举的 Ponte Vecchio 单卡 | ASan Kernel 串行；大 Workgroup 数可能跳过部分 Local/Private 检查 | `INTEL-DEVICE` / `INTEL-LIMITS` / `INTEL-UR`；[Intel 专题](../intel-oneapi-device-sanitizers.md) |
+| AMD ROCm GPU ASan / 核心参考 AMD-B2 | 7.2.4固定机制；10.1.0发行/安装要求 | 官方要求`xnack+`/HMM/匹配Runtime；10.1预构建包仅`gfx942/gfx950`及二者组合 | 7.2.4的Private/Stack、有限Redzone等缺口不自动等于10.1全部已知问题 | `AMD-ASAN-724` / `AMD-ASAN-1010`；[AMD专题](../amd-gpu-asan-hardware-fallback.md) |
+| Intel oneAPI Device Sanitizers / B2类产品参考 | DPC++/C++ 2026.2；2026.0历史证据保留 | Linux + 官方列举的Ponte Vecchio单卡 | ASan强制串行；大Workgroup数可能跳过Local/Private检查 | `INTEL-DEVICE-2026-2` / `INTEL-LIMITS-2026-2`；[Intel专题](../intel-oneapi-device-sanitizers.md) |
 | 摩尔线程 MUSA Compute Sanitizer / 公开行为参考 | v1.1.1 说明与现有指南（日期不完整） | 按其具体 Runtime/Driver/设备支持表 | 内部 Shadow/二进制插桩机制未披露；特殊访存覆盖不应猜测 | `MUSA-USER` / `MUSA-111`；[官方来源登记](vendors_sources.json) |
 
 上表是简短导航，**不是第二份厂商详细支持声明**。对任一限制的精确表述，以 Profile 所列版本、对应官方来源 ID 和专题为准。资料引用不能把厂商已发布的功能、项目自行设计的方案与实际 GPU 检出记录混淆。
@@ -21,7 +21,7 @@
 
 ### 3.1 编译期功能与对象边界
 
-**历史关键修正：** 编译期 Memcheck 的 Original-Object Base-and-Bounds 与默认 NV-R 当前地址有效性并非同等级保证；来源推导失败必须降级。`nvcc` 版本与 Compute Sanitizer 配套，论文 cuCatch 的性能数字不属于商业产品性能证明。具体算法、Hybrid/JIT 限制与命令仅由 [S01 技术指南](../S01-vendor-implementation-guide.md) 和 `NV-*` 官方来源维护。
+**历史关键修正：** NV-C是NVCC/PTXAS集成的Base-and-Bounds，不能写成公开可移植的LLVM Pass；自研LLVM D1是实施选择。NV-C来源推导失败退回常规范围检查，NV-R仍主要检查当前地址。论文cuCatch的性能数字不属于商业产品保证。完整Hybrid/JIT/HMM及Shared限制见[S01指南](../S01-vendor-implementation-guide.md)和`NV-*`来源。
 
 ### 3.2 内存与性能边界
 
@@ -37,7 +37,7 @@ Runtime 跟踪与设备插桩可能增加 Host/GPU 元数据及寄存器资源�
 
 ## 4. AMD 与 LLNL：要把编译、运行库、系统能力一起说清
 
-**历史关键修正：** AMD 官方 GPU ASan 的 `xnack+`/HMM 环境要求与自研软件 Shadow 的硬件前提不能混为一谈；LLNL 的 `rocmcc/7.0.0` 现场 Known Issues 不能代表 ROCm 7.2.4 所有系统。完整 XNACK、HMM、Shadow 三种映射取舍只维护在 [AMD 硬件适配专题](../amd-gpu-asan-hardware-fallback.md)，版本来源为 `AMD-ASAN-724`、`AMD-LLNL`。
+**版本修正：** [10.1.0发布历史](https://rocm.docs.amd.com/en/docs-10.1.0/release/versions.html)已列2026-10-05发布；7.2.4页面中的旧Preview横幅不能继续用来判断“当前生产版”。[10.1 ASAN安装页](https://rocm.docs.amd.com/en/docs-10.1.0/install/asan.html)是新增发行包证据，7.2.4保留作机制基线。LLNL 7.0.0现场问题和7.13预览缺陷分别存档，不跨版本外推。XNACK/HMM与无XNACK三种Shadow映射取舍仍仅在[AMD专题](../amd-gpu-asan-hardware-fallback.md)维护。
 
 ## 5. MUSA：公开样本的价值与边界
 
@@ -45,7 +45,7 @@ Runtime 跟踪与设备插桩可能增加 Host/GPU 元数据及寄存器资源�
 
 ## 6. Intel：覆盖丰富，但配置与检查退化必须一起列
 
-**历史关键修正：** Intel 2026.0 的设备 ASan/MSan/TSan 是成熟 Compiler + Unified Runtime 体系，但 GPU 平台、SYCL/OpenMP Runtime、并发串行及可跳过检查的范围均需附带版本条件。完整能力与命令仅维护在 [Intel 技术专题](../intel-oneapi-device-sanitizers.md)，不能从独立 UR 规范的 *planned* 表述倒推出所有产品版本均不可使用。
+**2026.2复核：** [官方发布说明](https://www.intel.com/content/www/us/en/developer/articles/release-notes/oneapi-dpcpp/2026.html)确认2026.2.0于2026-10-22发布，设备指南仍保留平台、串行化和跳过检查的限制。完整命令仅在[Intel专题](../intel-oneapi-device-sanitizers.md)维护。UR规范的*planned*及Runtime自动启层说明，与Intel产品示例的显式OpenMP层配置分别引用，不合成通用后端承诺。
 
 ## 7. 对最终文稿的证据使用建议
 
