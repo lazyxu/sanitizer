@@ -7,6 +7,7 @@
 | 想解决的问题 | 首选文档 | 文档责任 |
 |---|---|---|
 | 现在究竟有几种大方案？如何选择？ | [核心分类表](core-design-comparison.md) | **唯一分类依据**；NV-R / AMD-B2 / NV-C 以及 B/C/D/E/F 的正确关系 |
+| 六条软件路线的原理、检测效果、部署约束、性能、代码量与各组件修改是否可直接横向比较？ | [完整六方案比较](software-memcheck-alternatives.md) | **研究级横向专题**；NV-R、B1、B2、NV-C/D1、cuCatch、CuSafe；Intel ASan 属 B2 产品对照，不另立算法分类 |
 | S01 的 NVIDIA/AMD 成熟检测机制如何比较？ | [S01 厂商实施指南](S01-vendor-implementation-guide.md) | 仅维护 NV-R/NV-C/AMD-B2 机制、版本前提及选型，不重复通用组件 ABI |
 | 没有 XNACK/HMM 的 Shadow 怎么部署？ | [AMD-B2 硬件适配指南](amd-gpu-asan-hardware-fallback.md) | **唯一硬件说明**：XNACK/HMM、三种物理 Shadow 取舍、Sparse GPUVA、官方与自研限制 |
 | Intel 的 GPU Sanitizers 有哪些成熟实现？ | [Intel oneAPI 设备端 Sanitizers](intel-oneapi-device-sanitizers.md) | **Intel 版本化能力与限制的专题来源**，不创建第四种空间算法 |
