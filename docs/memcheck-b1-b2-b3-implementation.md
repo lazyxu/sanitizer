@@ -323,3 +323,91 @@ B3 与 B1 的分界必须保持清晰：B3 的检查力来自“指针还记着�
 B3 传播必须区分指针数值与其来源描述符。对 phi/select，只有所有输入来源可合并为同一可证明范围时才保留精确来源；对参数与返回值，ABI 需传递或侧带描述符；对指针加载/存储，内存表示必须能保存对应来源，若目标 ABI 未提供安全载体则标 Unknown；整数转换仅在可逆且受控的变换中保留来源。对任意整数运算、外部函数、未插桩代码、inline asm 和不透明内存写入，不推断来源。[自研设计，GPU_NOT_RUN]
 
 **释放边界：** B3 的 Base/Size 自身不足以判定释放后访问，必须组合 B1 的退役状态或 B2 的 Poison。分析失败降级只保住“地址是否 allocated”，抓不到“属于哪个对象”，这是固有边界，不是实现 bug。
+
+### 4.6 条件项 C：运行时注入（参照 NV-R）
+
+C 只在确有闭源/不可重编模块缺口时展开；必须搭配 B1/B2/B3 之一。裸地址 fallback 不冒充原对象检查；同模块未插桩函数不自动获得检查力。
+
+| 层 | 增量 | 接口契约 | 量级/证据 |
+|---|---|---|---|
+| Compiler | 无增量（0 kLOC）；生产编译器不参与运行时 Patch | 不新增生产编译 ABI | 0 kLOC |
+| UMD | ISA Decoder/Encoder、机器码访存识别、插桩、CFG/relocation 修复、寄存器/控制流/谓词保持、PC map、资源复核、Patch cache | 缓存键含原模块 hash、ISA、checker ABI、配置与 rewriter 版本；不支持的指令拒绝或报告覆盖缺口 | 沿用 v1.8 C 家族区间；GPU_NOT_RUN |
+| KMD | 无增量（0 kLOC） | 复用已有可执行代码提交与完成契约 | 0 kLOC |
+
+C 的每个插桩点必须执行选定的 B 谓词。若来源信息不存在，C 不能把原始地址升级成 B3；若模块仅部分函数被插桩，manifest 必须逐函数列出覆盖。运行时重写不能热修改在途代码对象；使用新代码副本并保留原 PC 到 patch PC 映射。[推断，待核]
+
+### 4.7 条件式选型表
+
+| 约束组合 | 更匹配 | 关键理由 | 依赖/前置 |
+|---|---|---|---|
+| 释放后抓 + 对象内局部失效（§1 释放后访问） | B2 | 字节级 Poison；参照 AMD 方案的 Shadow 机制 | [A] 预驻留；[B] 另立项 |
+| 跨对象宽访问是主痛（§1 那个例子） | B1 | NV-R/AMD/B2 在该例都漏，B1 的对象包含谓词可区分 | 子对象需另登记 |
+| 派生指针落进另一 Live 对象是主痛（§1 变体） | B3 | 只有指针带来源才抓，B1/B2 都漏 | Unknown 派生率待实测 |
+| Shadow 驻留成本高 + 对象数可控 | B1 | 对象级元数据不需要逐字节 Shadow | 局部失效需子对象 |
+| 闭源模块不可重编 | C + B1/B2/B3 之一 | 仅覆盖 ISA 内机器码；谓词仍由所选 B 配置决定 | 不冒充原对象检查 |
+| [B] 不立项 | B2 无硬件兜底 | 只能采用安全预驻留策略；不具备缺页 retry | 对比 B1/B3 的元数据成本 |
+
+### 4.8 验收与退出证据
+
+首轮交付包覆盖第 1 章两个反例及其合法对照。跨对象宽访问：B1/B3 应报，B2/NV-R/AMD 方案按其表达边界允许漏；换对象变体：B3 在来源保留时应报，B1/B2/NV-R/AMD 方案允许漏。释放后访问：在对象仍处于退役/Poison 且未复用时，B1/B2 应报；B3 必须组合释放判定。每个允许漏报的情况都要写明是谓词表达边界，而不是测试未覆盖造成的假阴性。[自研设计，GPU_NOT_RUN]
+
+退出条件 = 目标保证、可用条件、首交包、反例实测结果。目标保证必须按地址可访问性与原对象边界分别描述；可用条件必须列出 GPU/驱动/编译器/ABI/地址空间与可恢复故障依赖；首交包包括源码、编译产物、ISA 覆盖、对象事件、报告 ABI、合法对照和原始日志。GPU 未运行时标 GPU_NOT_RUN，不得写“验收通过”。
+
+### 4.9 附录：各配置参考排期
+
+以下均为示例排期，非既定路线；具体先后取决于目标 GPU、人员配置、现有 Compiler/UMD/KMD 缺口和设备可用窗口。
+
+| 配置 | 工作序列 | 可评审里程碑 |
+|---|---|---|
+| B1 | P 的最小 ABI → Global 访存插桩 → 对象索引/版本快照 → 分配/Free 发布 → 两个反例与合法对照 | 同对象宽访问跨界能拒绝；换对象变体按边界允许漏 |
+| B2 | P 的最小 ABI → Safe Shadow Lookup → Allocator/Redzone/Poison → GPUVA 预驻留 → 发布/退休 → 两个反例与对象内局部失效 | 释放后 Poison 报告；跨对象宽访问允许漏；无可恢复缺页时不盲读 |
+| B3 | P 的最小 ABI → SSA 来源分析 → GEP/phi/参数传播 → 指针加载/整数转换 Unknown 处理 → ABI sidecar → 原对象反例 | 来源保留时换对象访问报；Unknown 率与降级报告可核 |
+| C | 确认闭源模块清单 → ISA 覆盖审计 → Decoder/Encoder 原型 → Guarded Patch → PC map/资源复核 → 选定 B 谓词联测 | 仅对已验证机器码声明覆盖；未插桩函数列为缺口 |
+
+### 4.10 待团队确认清单
+
+- [ ] flat 还是分段地址空间？这决定 Shadow 映射与地址空间分类方式。
+- [ ] B3 的 Base/Size 是否占用 kernel 参数 ABI 槽位，还是采用 sidecar？Unknown 派生率允许上限是多少？
+- [ ] 是否要求检查未插桩路径的越界？若要求，需要明确其机器码覆盖与设备 fault 处理路径，不能把普通地址 fault 当作完整对象检查。
+- [ ] 归因深度是 lane + PC，还是还需 Host launch-site backtrace？
+- [ ] CI 允许的开销上限与峰值显存（Shadow + Redzone）预算是多少？
+- [ ] 哪些二进制模块闭源且不可重编？是否有真实模块样本用于 C 的 ISA 覆盖审计？
+- [ ] B1 与 B2 的目标负载对象数分布是什么？Shadow 驻留是否可接受？
+- [ ] 第 1 章“跨对象宽访问”是否为真实负载痛点？若是，评估 B1；若痛点是地址完整落入另一个 Live 对象，评估 B3。
+- [ ] [B] 可恢复缺页项目是否单独立项？目前已确认目标 KMD 不具备为 Sanitizer 引入的 retry 能力，需另定窗口与人月。
+
+## 5. 参考与证据索引
+
+以下仅列 NVIDIA、AMD 官方来源与仓库内部依据。产品版本、平台条件与来源 ID 应随目标版本更新；未能由官方文字直接支撑的内部实现细节继续标注推断。
+
+### NVIDIA 官方
+
+| 标题 | 版本/平台条件 | 来源 ID / 链接 | 本文使用 | 证据标签 |
+|---|---|---|---|---|
+| Compute Sanitizer User Manual：Memcheck、compile-time instrumentation、base-and-bounds | 对应 CUDA/Compute Sanitizer 发行版本与受支持 GPU | NV-MANUAL；https://docs.nvidia.com/compute-sanitizer/ComputeSanitizer/index.html | §2.1、§2.2、§3 | [厂商公开] |
+| Sanitizer API Guide：Patching API | 对应 Compute Sanitizer API 版本 | NV-API；https://docs.nvidia.com/compute-sanitizer/SanitizerApiGuide/index.html | §2.1 | [厂商公开] |
+| Compute Sanitizer Release Notes | 按实际发布版本核对限制与修复 | NV-RELEASE；https://docs.nvidia.com/compute-sanitizer/ReleaseNotes/index.html | §2.1、§2.2 | [厂商公开] |
+
+### AMD 官方（本文所称 AMD 方案）
+
+| 标题 | 版本/平台条件 | 来源 ID / 链接 | 本文使用 | 证据标签 |
+|---|---|---|---|---|
+| AMD GPU AddressSanitizer 使用说明 | ROCm LLVM 7.2.4 对应机制文档；平台限制不得跨版本外推 | AMD-ASAN-724；https://rocm.docs.amd.com/projects/llvm-project/en/docs-7.2.4/conceptual/using-gpu-sanitizer.html | §2.3、§3、§4.4 | [厂商公开] |
+| AMD GPU ASan 安装与部署说明 | ROCm 10.1.0 对应发行包与支持设备 | AMD-ASAN-1010；https://rocm.docs.amd.com/en/docs-10.1.0/install/asan.html | §2.3 | [厂商公开] |
+| LLVM AddressSanitizer 文档 | LLVM 上游公开实现；不等于所有 GPU 地址空间均受支持 | LLVM-ASAN；https://clang.llvm.org/docs/AddressSanitizer.html | §2.3、§4.4 | [厂商公开] |
+| LLVM AMDGPU 后端文档 | 对应 LLVM/ROCm 分支与目标架构 | LLVM-AMDGPU；https://llvm.org/docs/AMDGPUUsage.html | §2.3、§4.4 | [厂商公开] |
+
+### 仓库内部依据
+
+| 标题 | 版本/平台条件 | 来源 ID / 路径 | 本文使用 | 证据标签 |
+|---|---|---|---|---|
+| 核心设计分类与能力对照 | 仓库 v2.9，2026-11-02 | INTERNAL-CORE；docs/core-design-comparison.md | B1/B2/B3 语义边界与反例判据 | [自研设计，GPU_NOT_RUN] |
+| 主研究报告 §10.1 / §10.2 / §10.5 / §10.6 | 仓库 v2.9 | INTERNAL-RESEARCH-B；docs/llvm-gpu-sanitizer-research.md | B1/B2 语义、边界与预算口径 | [自研设计，GPU_NOT_RUN] |
+| 主研究报告 §11 | 仓库 v2.9 | INTERNAL-RESEARCH-C；docs/llvm-gpu-sanitizer-research.md | NV-R 与 C 注入 | [自研设计，GPU_NOT_RUN] |
+| 主研究报告 §12.1 | 仓库 v2.9 | INTERNAL-RESEARCH-B3；docs/llvm-gpu-sanitizer-research.md | 原对象 Bounds 设计 | [自研设计，GPU_NOT_RUN] |
+| 真实 GPU 组件实现文档 | 仓库 v2.8/v2.9 ABI 口径 | INTERNAL-ABI；docs/real-gpu-components-implementation.md | 报告 ABI、Mask、Free 发布、Guard、终态 | [自研设计，GPU_NOT_RUN] |
+| estimates-v1.8.json | 2026-10-21 历史估算；未拆项 | INTERNAL-BUDGET；docs/estimates-v1.8.json | P + B/C 家族区间及 KMD 条件项 | [工程估算，v1.8] |
+| AMD 无 XNACK 硬件适配专题 | 仓库 v2.9 | INTERNAL-AMD-DEPLOY；docs/amd-gpu-asan-hardware-fallback.md | 无 XNACK 安全部署路径 | [自研设计，GPU_NOT_RUN] |
+| 架构笔记与厂商来源登记 | 2026-11-02 复核快照 | INTERNAL-NOTES；docs/research-notes/architecture.md、docs/research-notes/vendors_sources.json | 语义历史与版本化证据线索 | [推断，待核] |
+
+**证据使用规则。** [厂商公开] 只表示对应版本官方材料直接支持；[自研设计，GPU_NOT_RUN] 表示目标 GPU 尚无实测；[工程估算，v1.8] 表示沿用历史区间而非拆项报价；[推断，待核] 表示依据公开行为反推但公开材料不足以确认内部实现。性能相关结论必须明确 GPU_NOT_RUN，直到有目标设备、版本、输入、覆盖清单和原始日志可复核。
