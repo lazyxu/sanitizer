@@ -104,6 +104,8 @@ jobs:
               if not encoded or encoded.get("encoding") != "base64":
                   return None
               return json.loads(base64.b64decode(encoded["content"]).decode("utf-8"))
+          def version_tuple(value):
+              return tuple(int(part) for part in str(value).split("."))
           for name, expected_sha, merged_pr_number, expected_parent_sha in stale_post_merge_branches:
               if name in open_heads or name == "master":
                   print("SKIP active branch:", name)
@@ -126,7 +128,7 @@ jobs:
                       or not commit or parents != [expected_parent_sha]
                       or changed_files != ["docs/validation-report.json"]
                       or not old_report or not current_report
-                      or int(current_report["version"]) <= int(old_report["version"])):
+                      or version_tuple(current_report["version"]) <= version_tuple(old_report["version"])):
                   print("SKIP stale snapshot guard did not match:", name)
                   continue
               request("/git/refs/heads/" + urllib.parse.quote(name, safe="/"), "DELETE")
