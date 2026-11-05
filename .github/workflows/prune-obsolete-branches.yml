@@ -82,12 +82,17 @@ jobs:
                   continue
               old_pr = request("/pulls/" + str(old_pr_number))
               replacement_pr = request("/pulls/" + str(replacement_pr_number))
-              evidence = (old_pr.get("body") or "") + (replacement_pr.get("body") or "") if old_pr and replacement_pr else ""
+              supersession_evidence = (
+                  old_pr and replacement_pr and (
+                      f"#{replacement_pr_number}" in (old_pr.get("body") or "")
+                      or f"#{old_pr_number}" in (replacement_pr.get("body") or "")
+                  )
+              )
               if (not old_pr or old_pr["state"] != "closed" or old_pr["merged_at"] is not None
                       or old_pr["head"]["ref"] != name or old_pr["head"]["sha"] != expected_sha
                       or not replacement_pr or replacement_pr["state"] != "closed" or not replacement_pr["merged_at"]
                       or replacement_pr["base"]["ref"] != "master"
-                      or f"#{old_pr_number}" not in evidence):
+                      or not supersession_evidence):
                   print("SKIP without merged superseding PR evidence:", name)
                   continue
               request("/git/refs/heads/" + urllib.parse.quote(name, safe="/"), "DELETE")
