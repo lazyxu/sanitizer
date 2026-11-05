@@ -39,9 +39,11 @@ jobs:
           source = Path('.github/workflows/prune-obsolete-branches.yml').read_text()
           script = source.split("          python3 - <<'PY'\n", 1)[1].split("          PY\n", 1)[0]
           tree = ast.parse(textwrap.dedent(script))
-          candidates = next(node.value for node in tree.body if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == 'targets' for target in node.targets))
-          assert len(ast.literal_eval(candidates)) == 14
-          print('BRANCH_PRUNE_SCRIPT_PASS: Python syntax and 14 candidate tuples')
+          assignments = {target.id: node.value for node in tree.body if isinstance(node, ast.Assign) for target in node.targets if isinstance(target, ast.Name)}
+          assert len(ast.literal_eval(assignments['targets'])) == 14
+          assert len(ast.literal_eval(assignments['retired_closed_pr_branches'])) == 2
+          assert len(ast.literal_eval(assignments['stale_post_merge_branches'])) == 1
+          print('BRANCH_PRUNE_SCRIPT_PASS: Python syntax, 14 merged candidates, 2 superseded closed PRs, 1 stale post-merge snapshot')
           PY
       - name: Compile Python scripts (syntax only)
         run: python3 -m py_compile scripts/run_samples.py scripts/run_upstream_nvidia.py scripts/validate_layout.py scripts/validate_docs.py scripts/validate_markdown_links.py tests/test_gpu_runner.py tests/test_upstream_nvidia.py tests/test_markdown_links.py
