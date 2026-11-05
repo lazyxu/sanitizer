@@ -43,7 +43,10 @@ jobs:
           assert len(ast.literal_eval(assignments['targets'])) == 14
           assert len(ast.literal_eval(assignments['retired_closed_pr_branches'])) == 2
           assert len(ast.literal_eval(assignments['stale_post_merge_branches'])) == 1
-          print('BRANCH_PRUNE_SCRIPT_PASS: Python syntax, 14 merged candidates, 2 superseded closed PRs, 1 stale post-merge snapshot')
+          assert 'f"#{replacement_pr_number}" in (old_pr.get("body") or "")' in script
+          assert 'f"#{old_pr_number}" in (replacement_pr.get("body") or "")' in script
+          assert 'or not supersession_evidence' in script
+          print('BRANCH_PRUNE_SCRIPT_PASS: Python syntax, 14 merged candidates, 2 superseded closed PRs, 1 stale post-merge snapshot, replacement evidence guards')
           PY
       - name: Compile Python scripts (syntax only)
         run: python3 -m py_compile scripts/run_samples.py scripts/run_upstream_nvidia.py scripts/validate_layout.py scripts/validate_docs.py scripts/validate_markdown_links.py tests/test_gpu_runner.py tests/test_upstream_nvidia.py tests/test_markdown_links.py
