@@ -64,13 +64,25 @@ jobs:
                       continue
               request("/git/refs/heads/" + urllib.parse.quote(name, safe="/"), "DELETE")
               print("DELETED:", name)
-          # This temporary cleanup PR branch is also unnecessary after its PR merges.
-          cleanup_name = "chore/prune-obsolete-branches-20261105"
-          if cleanup_name not in open_heads:
-              recent = request("/pulls?state=closed&per_page=100")
-              match = next((p for p in recent if p["head"]["ref"] == cleanup_name and p["merged_at"]), None)
-              branch = request("/branches/" + urllib.parse.quote(cleanup_name, safe="/"))
-              if match and branch and not branch["protected"] and branch["commit"]["sha"] == match["head"]["sha"]:
-                  request("/git/refs/heads/" + urllib.parse.quote(cleanup_name, safe="/"), "DELETE")
-                  print("DELETED temporary cleanup branch:", cleanup_name)
+          # Clean up our merged maintenance PR branches only if their refs never moved.
+          # Retain branches that contain unique work not included in their closed PRs.
+          preserved = {
+              "docs/architecture-single-source-v27",
+              "docs/software-memcheck-alternatives-matrix-20261102",
+              "docs/intel-sanitizers-navigation-20261023",
+          }
+          recent = request("/pulls?state=closed&per_page=100")
+          if len(recent) == 100:
+              raise RuntimeError("Closed PR list may be truncated: fail closed")
+          for pr in recent:
+              name = pr["head"]["ref"]
+              if (name in preserved or name in open_heads or name == "master"
+                      or not pr["merged_at"] or not pr["head"].get("repo")
+                      or pr["head"]["repo"]["full_name"] != repo):
+                  continue
+              branch = request("/branches/" + urllib.parse.quote(name, safe="/"))
+              if not branch or branch["protected"] or branch["commit"]["sha"] != pr["head"]["sha"]:
+                  continue
+              request("/git/refs/heads/" + urllib.parse.quote(name, safe="/"), "DELETE")
+              print("DELETED merged PR branch:", name)
           PY
