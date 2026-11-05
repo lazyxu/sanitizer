@@ -17,7 +17,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           python3 - <<'PY'
-          import json, os, urllib.error, urllib.parse, urllib.request
+          import base64, json, os, urllib.error, urllib.parse, urllib.request
           repo = os.environ["GITHUB_REPOSITORY"]
           api = "https://api.github.com/repos/" + repo
           token = os.environ["GH_TOKEN"]
@@ -64,19 +64,83 @@ jobs:
                       continue
               request("/git/refs/heads/" + urllib.parse.quote(name, safe="/"), "DELETE")
               print("DELETED:", name)
-          # Clean up our merged maintenance PR branches only if their refs never moved.
-          # Retain branches that contain unique work not included in their closed PRs.
-          preserved = {
-              "docs/architecture-single-source-v27",
-              "docs/software-memcheck-alternatives-matrix-20261102",
-              "docs/intel-sanitizers-navigation-20261023",
-          }
+          # Explicitly retired closed PR branches, with a merged replacement PR.
+          retired_closed_pr_branches = [
+              ["docs/architecture-single-source-v27", "0e64cb564e67e05a6173d2762453bf1bd89c71c9", 18, 17],
+              ["docs/software-memcheck-alternatives-matrix-20261102", "4696170c074ff9b1514d4758b05620031d1f890a", 20, 21],
+          ]
+          for name, expected_sha, old_pr_number, replacement_pr_number in retired_closed_pr_branches:
+              if name in open_heads or name == "master":
+                  print("SKIP active branch:", name)
+                  continue
+              branch = request("/branches/" + urllib.parse.quote(name, safe="/"))
+              if not branch:
+                  print("ALREADY DELETED:", name)
+                  continue
+              if branch["protected"] or branch["commit"]["sha"] != expected_sha:
+                  print("SKIP protected or advanced branch:", name)
+                  continue
+              old_pr = request("/pulls/" + str(old_pr_number))
+              replacement_pr = request("/pulls/" + str(replacement_pr_number))
+              evidence = (old_pr.get("body") or "") + (replacement_pr.get("body") or "") if old_pr and replacement_pr else ""
+              if (not old_pr or old_pr["state"] != "closed" or old_pr["merged_at"] is not None
+                      or old_pr["head"]["ref"] != name or old_pr["head"]["sha"] != expected_sha
+                      or not replacement_pr or replacement_pr["state"] != "closed" or not replacement_pr["merged_at"]
+                      or replacement_pr["base"]["ref"] != "master"
+                      or f"#{old_pr_number}" not in evidence):
+                  print("SKIP without merged superseding PR evidence:", name)
+                  continue
+              request("/git/refs/heads/" + urllib.parse.quote(name, safe="/"), "DELETE")
+              print("DELETED superseded closed PR branch:", name)
+
+          # This post-merge branch contains only an obsolete v2.2 audit snapshot.
+          # Delete only if its exact one-commit delta is still based on merged PR #11
+          # and master now carries a strictly newer validation-report version.
+          stale_post_merge_branches = [
+              ["docs/intel-sanitizers-navigation-20261023", "5e40225e51028c482716a26ec60d3032e95bb0a0", 11, "a5f87e8cb5f2de2da19401063646ff9cb7a6e98f"],
+          ]
+          def read_validation_report(ref):
+              encoded = request("/contents/docs/validation-report.json?ref=" + urllib.parse.quote(ref, safe=""))
+              if not encoded or encoded.get("encoding") != "base64":
+                  return None
+              return json.loads(base64.b64decode(encoded["content"]).decode("utf-8"))
+          def version_tuple(value):
+              return tuple(int(part) for part in str(value).split("."))
+          for name, expected_sha, merged_pr_number, expected_parent_sha in stale_post_merge_branches:
+              if name in open_heads or name == "master":
+                  print("SKIP active branch:", name)
+                  continue
+              branch = request("/branches/" + urllib.parse.quote(name, safe="/"))
+              if not branch:
+                  print("ALREADY DELETED:", name)
+                  continue
+              if branch["protected"] or branch["commit"]["sha"] != expected_sha:
+                  print("SKIP protected or advanced branch:", name)
+                  continue
+              merged_pr = request("/pulls/" + str(merged_pr_number))
+              commit = request("/commits/" + expected_sha)
+              changed_files = [item["filename"] for item in (commit or {}).get("files", [])]
+              parents = [item["sha"] for item in (commit or {}).get("parents", [])]
+              old_report = read_validation_report(name)
+              current_report = read_validation_report("master")
+              if (not merged_pr or merged_pr["state"] != "closed" or not merged_pr["merged_at"]
+                      or merged_pr["head"]["ref"] != name or merged_pr["head"]["sha"] != expected_parent_sha
+                      or not commit or parents != [expected_parent_sha]
+                      or changed_files != ["docs/validation-report.json"]
+                      or not old_report or not current_report
+                      or version_tuple(current_report["version"]) <= version_tuple(old_report["version"])):
+                  print("SKIP stale snapshot guard did not match:", name)
+                  continue
+              request("/git/refs/heads/" + urllib.parse.quote(name, safe="/"), "DELETE")
+              print("DELETED obsolete post-merge snapshot branch:", name)
+
+          # Clean up merged PR branches only if their refs never moved.
           recent = request("/pulls?state=closed&per_page=100")
           if len(recent) == 100:
               raise RuntimeError("Closed PR list may be truncated: fail closed")
           for pr in recent:
               name = pr["head"]["ref"]
-              if (name in preserved or name in open_heads or name == "master"
+              if (name in open_heads or name == "master"
                       or not pr["merged_at"] or not pr["head"].get("repo")
                       or pr["head"]["repo"]["full_name"] != repo):
                   continue
