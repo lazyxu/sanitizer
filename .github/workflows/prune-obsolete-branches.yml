@@ -1,0 +1,76 @@
+name: Prune verified obsolete branches
+on:
+  push:
+    branches: [master]
+    paths:
+      - '.github/workflows/prune-obsolete-branches.yml'
+permissions:
+  contents: write
+  pull-requests: read
+jobs:
+  prune:
+    if: github.repository == 'lazyxu/sanitizer'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete only verified inactive branches
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 - <<'PY'
+          import json, os, urllib.error, urllib.parse, urllib.request
+          repo = os.environ["GITHUB_REPOSITORY"]
+          api = "https://api.github.com/repos/" + repo
+          token = os.environ["GH_TOKEN"]
+          targets = [["fix/memcheck-doc-audit-20261105","72cc3262314c429d472e921643321dc391a53d57",23],["docs/memcheck-b1-b2-b3-implementation","f0bd658e629276c756b0474d8d6178d5fe8e7324",22],["docs/meeting-review-rewrite-20261102","d59c7113f65cb8221bdd0b366114162696cb6134",21],["docs/final-links-status-audit-v28-20261023","f04b47bc7884babf97b39dcb692760b0adddfead",19],["docs/architecture-canonicalization-v27","e7426e6f6b8d0bae48af7b216676d680505127e8",17],["docs/vendor-evidence-normalization-v26","d810636fc90f30e4729b1c4d8a5a0130df5f0014",16],["docs/amd-xnack-component-dedup-v25","79db7af6d18f74263064337f2b7619dc4d5ff96d",15],["docs/s01-implementation-dedup-v24","593e9ffa7d6a6f774e36dd4fea7cb31338b1a913",14],["docs/scenario-ch18-single-source-20261023","891ab65d691fda4098369e2b47f8348947d095d9",13],["docs/intel-audit-v22-20261023","7d1ad88e84176a3e464a6a657cadb39eaccc6cf5",12],["docs/xnack-shadow-mapping-tradeoffs","f8e9cbe344b9748eebab92602724103e527215b9",10],["feat/verbose-all-scripts","b9462a3936af0c88d70bec39b40ea613a20749d8",9],["feat/nvidia-upstream-regression","f79813eda732f0743bb367f0121d939b52d8bffb",8],["docs/slim-research-ch18-case-single-source","7a15648d4fdc4eaa676b09a3cd846efdf59a9ba2",null]]
+          def request(path, method="GET"):
+              req = urllib.request.Request(api + path, method=method, headers={
+                  "Authorization": "Bearer " + token,
+                  "Accept": "application/vnd.github+json",
+                  "X-GitHub-Api-Version": "2022-11-28",
+              })
+              try:
+                  with urllib.request.urlopen(req, timeout=20) as r:
+                      data = r.read()
+                      return json.loads(data) if data else None
+              except urllib.error.HTTPError as exc:
+                  if method == "GET" and exc.code == 404:
+                      return None
+                  raise
+          open_prs = request("/pulls?state=open&per_page=100")
+          if len(open_prs) == 100:
+              raise RuntimeError("Open PR list may be truncated: fail closed")
+          open_heads = {p["head"]["ref"] for p in open_prs if p["head"]["repo"] and p["head"]["repo"]["full_name"] == repo}
+          for name, expected_sha, pr_number in targets:
+              if name in open_heads or name == "master":
+                  print("SKIP active/protected:", name)
+                  continue
+              path = "/branches/" + urllib.parse.quote(name, safe="/")
+              branch = request(path)
+              if branch is None:
+                  print("ALREADY DELETED:", name)
+                  continue
+              if branch["protected"] or branch["commit"]["sha"] != expected_sha:
+                  print("SKIP protected or advanced branch:", name)
+                  continue
+              if pr_number is not None:
+                  pr = request("/pulls/" + str(pr_number))
+                  if not pr or not pr["merged_at"] or pr["state"] != "closed" or pr["head"]["ref"] != name:
+                      print("SKIP PR not merged:", name)
+                      continue
+              else:
+                  comparison = request("/compare/master..." + urllib.parse.quote(name, safe=""))
+                  if not comparison or comparison["ahead_by"] != 0:
+                      print("SKIP branch with unique commits:", name)
+                      continue
+              request("/git/refs/heads/" + urllib.parse.quote(name, safe="/"), "DELETE")
+              print("DELETED:", name)
+          # This temporary cleanup PR branch is also unnecessary after its PR merges.
+          cleanup_name = "chore/prune-obsolete-branches-20261105"
+          if cleanup_name not in open_heads:
+              recent = request("/pulls?state=closed&per_page=100")
+              match = next((p for p in recent if p["head"]["ref"] == cleanup_name and p["merged_at"]), None)
+              branch = request("/branches/" + urllib.parse.quote(cleanup_name, safe="/"))
+              if match and branch and not branch["protected"] and branch["commit"]["sha"] == match["head"]["sha"]:
+                  request("/git/refs/heads/" + urllib.parse.quote(cleanup_name, safe="/"), "DELETE")
+                  print("DELETED temporary cleanup branch:", cleanup_name)
+          PY
